@@ -1,0 +1,15 @@
+# Modelos regeneráveis (grande porte)
+data/*.onnx
+data/*.engine
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Ferramentas locais
+.superpowers/
+.openclaude/
+
+# Sistema
+.DS_Store

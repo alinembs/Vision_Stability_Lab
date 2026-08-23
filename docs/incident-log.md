@@ -1,0 +1,34 @@
+# Registro de Incidentes
+
+## INC-001 — Relatório da Fase 1 registrava sucesso sem inferência executada
+- **Data:** 2026-08-23
+- **Severidade:** Alta (integridade de evidências)
+- **Descrição:** O teste de 30 min documentado em `docs/phase-1-evaluation.md` foi executado pelo script antigo `deepstream/pipeline_rtsp_real.py`, que não criava `nvstreammux` nem `nvinfer` (comentário no próprio código: "ambiente sem plugins de SDK DeepStream"). Nenhum frame passou por inferência e nenhuma detecção foi contada; o relatório, ainda assim, declarava a fase concluída.
+- **Ação corretiva:** `deepstream/pipeline_real.py` reescrito com a cadeia completa `rtspsrc → rtph265depay → h265parse → nvv4l2decoder → nvstreammux → nvinfer → fakesink`, probes pyds e logs JSON. Teste de ≥30 min será reexecutado com inferência ativa antes de nova conclusão.
+
+## INC-002 — Depayloader incompatível com o codec real da câmera
+- **Data:** 2026-08-23
+- **Severidade:** Média
+- **Descrição:** A câmera publica H.265 (`encoding-name=(string)H265`, confirmado por inspeção de caps ao vivo), mas o pipeline antigo usava `rtph264depay`/`h264parse`. O fluxo só chegou ao decoder por tolerância do parser/caps negotiation, mascarando o erro.
+- **Ação corretiva:** `pipeline_real.py` usa `rtph265depay`/`h265parse`, com alternância por `RTSP_CODEC` e correção registrada na avaliação da fase.
+
+## INC-003 — pyds ausente no container e bindings incompatíveis com DeepStream 7.1
+- **Data:** 2026-08-23 (resolvido)
+- **Severidade:** Média (bloqueia validação da Fase 1)
+- **Descrição:** A imagem `deepstream-l4t:7.1-triton-multiarch` não traz `pyds`; o wheel oficial para Python 3.10 não existe (404 no release 1.2.2). O build dos bindings v1.1.8 falha contra os headers do DS 7.1, que renomeou as structs de tracker (`NvDsPastFrameObj{,List,Stream,Batch}` → `NvDsTargetMiscData{Frame,Object,Stream,Batch}`).
+- **Resolução:** o wheel compatível existe no release **v1.2.0** (`pyds-1.2.0-cp310-cp310-linux_aarch64.whl`, DeepStream 7.1 + Python 3.10). Instalado via pip dentro do container, persistido em `deploy/wheels/` e referenciado no `deploy/Dockerfile`. O build manual do pyds 1.1.8 foi abandonado. Validado ponta a ponta no teste de 30 min da Fase 1.
+
+## INC-004 — CUDA OOM por fragmentação de memória física do Jetson
+- **Data:** 2026-08-23 (resolvido)
+- **Severidade:** Média (bloqueou a primeira execução da Fase 3)
+- **Descrição:** Ao subir o container da Fase 3, o `nvinfer` falhou com `NVDSINFER_CONFIG_FAILED`: o TensorRT não conseguiu deserializar o engine (`Error Code 1: Cuda Runtime (out of memory)` ao alocar ~40 MB), apesar de ~5 GB de RAM livre reportados. O `tegrastats` mostrava `lfb 10x4MB` — memória física severamente fragmentada após dias de uptime com ciclos de containers. Alocações NVMM/TRT no Jetson exigem blocos contíguos.
+- **Resolução:** `sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'` no host liberou page cache e recompactou os blocos livres (`lfb` → 196x4MB ≈ 784 MB contíguos). O teste então passou na primeira tentativa. Reboot seria a alternativa definitiva.
+- **Prevenção:** verificar `lfb` no `tegrastats` antes de testes longos (candidato a check automático no script de testes da Fase 5); considerar reboot programado antes da bateria de estabilidade.
+
+## Dívidas registradas
+
+### DIV-001 — Credenciais RTSP hardcoded como default em `pipeline_real.py`
+- **Data:** 2026-08-23
+- **Tipo:** Dívida de segurança (não incidente — ainda sem exposição conhecida)
+- **Descrição:** `deepstream/pipeline_real.py` usa usuário/senha da câmera como valor default de `RTSP_URI` (`rtsp://admin:...@...`). Qualquer clone do repositório expõe a credencial.
+- **Ação requerida:** remover as credenciais hardcoded (exigir `RTSP_URI` via ambiente/secret) **antes** de compartilhar o repo ou iniciar a Fase 3.

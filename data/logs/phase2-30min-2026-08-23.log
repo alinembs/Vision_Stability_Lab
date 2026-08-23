@@ -1,0 +1,261 @@
+{"ts": "2026-08-23T13:44:41.335+00:00", "event": "startup", "gst_version": "GStreamer 1.20.3", "pyds_version": "1.2.0"}
+Baseline RSS após warm-up: 44.10 MB
+/bin/bash: line 1: lsmod: command not found
+/bin/bash: line 1: modprobe: command not found
+/app/deepstream/pipeline_real.py:120: DeprecationWarning: Gst.Element.get_request_pad is deprecated
+  mux_sink_pad = self.mux.get_request_pad("sink_0")
+{"ts": "2026-08-23T13:44:41.496+00:00", "event": "test_started", "duration_s": 1800, "codec": "h265", "uri": "192.168.59.108:5543/live/channel0"}
+Opening in BLOCKING MODE 
+gstnvtracker: Loading low-level lib at /opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_nvmultiobjecttracker.so
+[NvMultiObjectTracker] Initialized
+Setting min object dimensions as 16x16 instead of 1x1 to support VIC compute mode.
+0:00:00.404109289 [36m 4967[00m 0xaaaaff8aa8b0 [36mINFO   [00m [00m             nvinfer gstnvinfer.cpp:684:gst_nvinfer_logger:<nvinfer0>[00m NvDsInferContext[UID 1]: Info from NvDsInferContextImpl::deserializeEngineAndBackend() <nvdsinfer_context_impl.cpp:2092> [UID = 1]: deserialized trt engine from :/app/data/model_b1_gpu0_fp16.engine
+0:00:00.404193771 [36m 4967[00m 0xaaaaff8aa8b0 [36mINFO   [00m [00m             nvinfer gstnvinfer.cpp:684:gst_nvinfer_logger:<nvinfer0>[00m NvDsInferContext[UID 1]: Info from NvDsInferContextImpl::generateBackendContext() <nvdsinfer_context_impl.cpp:2195> [UID = 1]: Use deserialized engine model: /app/data/model_b1_gpu0_fp16.engine
+0:00:00.410714603 [36m 4967[00m 0xaaaaff8aa8b0 [36mINFO   [00m [00m             nvinfer gstnvinfer_impl.cpp:343:notifyLoadModelStatus:<nvinfer0>[00m [UID 1]: Load new model:/app/deepstream/config/infer.txt sucessfully
+{"ts": "2026-08-23T13:44:41.736+00:00", "event": "pipeline_playing", "codec": "h265"}
+{"ts": "2026-08-23T13:44:41.998+00:00", "event": "rtsp_video_pad", "pad": "recv_rtp_src_0_2232712676_100"}
+NvMMLiteOpen : Block : BlockType = 279 
+NvMMLiteBlockCreate : Block : BlockType = 279 
+{"ts": "2026-08-23T13:45:11.661+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 18.8, "fps_processed": 18.8, "frames_total_in": 570, "frames_total_processed": 570, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 0, "total_entries": 0, "total_exits": 0, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.0, "memory_growth_mb": 678.9, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T13:45:41.669+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.99, "fps_processed": 19.96, "frames_total_in": 1170, "frames_total_processed": 1169, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 0, "total_entries": 0, "total_exits": 0, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.19, "memory_growth_mb": 679.09, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T13:46:11.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.95, "fps_processed": 19.95, "frames_total_in": 1769, "frames_total_processed": 1768, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 0, "total_entries": 0, "total_exits": 0, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.57, "memory_growth_mb": 679.47, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T13:46:41.665+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 20.02, "fps_processed": 20.02, "frames_total_in": 2369, "frames_total_processed": 2368, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 0, "total_entries": 0, "total_exits": 0, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.39, "memory_growth_mb": 679.3, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T13:47:11.685+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.85, "fps_processed": 19.85, "frames_total_in": 2965, "frames_total_processed": 2964, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 0, "total_entries": 0, "total_exits": 0, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.52, "memory_growth_mb": 679.42, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T13:47:33.391+00:00", "event": "track_entered", "track_id": "0"}
+{"ts": "2026-08-23T13:47:33.392+00:00", "event": "track_entered", "track_id": "1"}
+{"ts": "2026-08-23T13:47:33.392+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 2, "frame_num": 3397}
+{"ts": "2026-08-23T13:47:40.807+00:00", "event": "track_entered", "track_id": "2"}
+{"ts": "2026-08-23T13:47:41.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.96, "fps_processed": 19.96, "frames_total_in": 3564, "frames_total_processed": 3563, "persons_detected": 27, "persons_max_concurrent": 2, "entries_interval": 3, "exits_interval": 0, "avg_dwell_s": 5.82, "events_buffered": 4, "total_entries": 3, "total_exits": 0, "active_tracks": 3, "area_state": "OCCUPIED", "rss_mb": 723.39, "memory_growth_mb": 679.29, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T13:47:43.431+00:00", "event": "track_exited", "track_id": "0", "dwell_seconds": 0.027}
+{"ts": "2026-08-23T13:47:45.894+00:00", "event": "track_exited", "track_id": "1", "dwell_seconds": 2.465}
+{"ts": "2026-08-23T13:47:57.122+00:00", "event": "track_exited", "track_id": "2", "dwell_seconds": 6.278}
+{"ts": "2026-08-23T13:47:57.122+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 3872}
+{"ts": "2026-08-23T13:48:11.688+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.97, "fps_processed": 20.0, "frames_total_in": 4163, "frames_total_processed": 4163, "persons_detected": 5, "persons_max_concurrent": 1, "entries_interval": 0, "exits_interval": 3, "avg_dwell_s": 0.0, "events_buffered": 8, "total_entries": 3, "total_exits": 3, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T13:48:12.900+00:00", "event": "track_entered", "track_id": "3"}
+{"ts": "2026-08-23T13:48:12.900+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 4186}
+{"ts": "2026-08-23T13:48:21.237+00:00", "event": "track_entered", "track_id": "4"}
+{"ts": "2026-08-23T13:48:23.603+00:00", "event": "track_exited", "track_id": "3", "dwell_seconds": 0.608}
+{"ts": "2026-08-23T13:48:26.330+00:00", "event": "track_entered", "track_id": "5"}
+{"ts": "2026-08-23T13:48:33.684+00:00", "event": "track_exited", "track_id": "4", "dwell_seconds": 2.432}
+{"ts": "2026-08-23T13:48:38.004+00:00", "event": "track_exited", "track_id": "5", "dwell_seconds": 1.626}
+{"ts": "2026-08-23T13:48:38.005+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 4686}
+{"ts": "2026-08-23T13:48:41.674+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.94, "fps_processed": 19.91, "frames_total_in": 4761, "frames_total_processed": 4760, "persons_detected": 29, "persons_max_concurrent": 1, "entries_interval": 3, "exits_interval": 3, "avg_dwell_s": 0.0, "events_buffered": 16, "total_entries": 6, "total_exits": 6, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.41, "memory_growth_mb": 679.31, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T13:49:11.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.96, "fps_processed": 19.99, "frames_total_in": 5360, "frames_total_processed": 5360, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 16, "total_entries": 6, "total_exits": 6, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.57, "memory_growth_mb": 679.47, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T13:49:22.322+00:00", "event": "track_entered", "track_id": "6"}
+{"ts": "2026-08-23T13:49:22.322+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 5572}
+{"ts": "2026-08-23T13:49:24.228+00:00", "event": "track_entered", "track_id": "7"}
+{"ts": "2026-08-23T13:49:35.544+00:00", "event": "track_exited", "track_id": "6", "dwell_seconds": 3.175}
+{"ts": "2026-08-23T13:49:41.685+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 20.0, "fps_processed": 19.97, "frames_total_in": 5960, "frames_total_processed": 5959, "persons_detected": 82, "persons_max_concurrent": 2, "entries_interval": 2, "exits_interval": 1, "avg_dwell_s": 17.46, "events_buffered": 20, "total_entries": 8, "total_exits": 7, "active_tracks": 1, "area_state": "OCCUPIED", "rss_mb": 723.52, "memory_growth_mb": 679.42, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T13:49:43.978+00:00", "event": "track_entered", "track_id": "8"}
+{"ts": "2026-08-23T13:49:46.085+00:00", "event": "track_exited", "track_id": "7", "dwell_seconds": 11.851}
+{"ts": "2026-08-23T13:49:54.318+00:00", "event": "track_exited", "track_id": "8", "dwell_seconds": 0.322}
+{"ts": "2026-08-23T13:49:54.319+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 6211}
+{"ts": "2026-08-23T13:50:11.669+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.88, "fps_processed": 19.88, "frames_total_in": 6556, "frames_total_processed": 6555, "persons_detected": 7, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 2, "avg_dwell_s": 0.0, "events_buffered": 24, "total_entries": 9, "total_exits": 9, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.52, "memory_growth_mb": 679.42, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T13:50:21.250+00:00", "event": "track_entered", "track_id": "9"}
+{"ts": "2026-08-23T13:50:21.251+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 6746}
+{"ts": "2026-08-23T13:50:31.105+00:00", "event": "track_entered", "track_id": "10"}
+{"ts": "2026-08-23T13:50:41.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 20.02, "fps_processed": 20.02, "frames_total_in": 7157, "frames_total_processed": 7156, "persons_detected": 131, "persons_max_concurrent": 2, "entries_interval": 2, "exits_interval": 0, "avg_dwell_s": 15.51, "events_buffered": 27, "total_entries": 11, "total_exits": 9, "active_tracks": 2, "area_state": "OCCUPIED", "rss_mb": 723.52, "memory_growth_mb": 679.42, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T13:50:43.747+00:00", "event": "track_exited", "track_id": "10", "dwell_seconds": 2.64}
+{"ts": "2026-08-23T13:51:03.718+00:00", "event": "track_entered", "track_id": "11"}
+{"ts": "2026-08-23T13:51:06.900+00:00", "event": "track_exited", "track_id": "9", "dwell_seconds": 35.631}
+{"ts": "2026-08-23T13:51:11.664+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.88, "fps_processed": 19.92, "frames_total_in": 7753, "frames_total_processed": 7753, "persons_detected": 195, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 2, "avg_dwell_s": 7.95, "events_buffered": 30, "total_entries": 12, "total_exits": 11, "active_tracks": 1, "area_state": "OCCUPIED", "rss_mb": 723.52, "memory_growth_mb": 679.42, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T13:51:19.287+00:00", "event": "track_exited", "track_id": "11", "dwell_seconds": 5.488}
+{"ts": "2026-08-23T13:51:19.288+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 7904}
+{"ts": "2026-08-23T13:51:25.735+00:00", "event": "track_entered", "track_id": "12"}
+{"ts": "2026-08-23T13:51:25.736+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 8033}
+{"ts": "2026-08-23T13:51:37.996+00:00", "event": "track_exited", "track_id": "12", "dwell_seconds": 2.255}
+{"ts": "2026-08-23T13:51:37.996+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 8278}
+{"ts": "2026-08-23T13:51:41.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.98, "fps_processed": 19.98, "frames_total_in": 8353, "frames_total_processed": 8353, "persons_detected": 10, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 2, "avg_dwell_s": 0.0, "events_buffered": 36, "total_entries": 13, "total_exits": 13, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.52, "memory_growth_mb": 679.42, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T13:51:43.558+00:00", "event": "track_entered", "track_id": "13"}
+{"ts": "2026-08-23T13:51:43.559+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 8390}
+{"ts": "2026-08-23T13:51:46.349+00:00", "event": "track_entered", "track_id": "14"}
+{"ts": "2026-08-23T13:51:53.905+00:00", "event": "track_exited", "track_id": "13", "dwell_seconds": 0.329}
+{"ts": "2026-08-23T13:51:59.241+00:00", "event": "track_exited", "track_id": "14", "dwell_seconds": 2.859}
+{"ts": "2026-08-23T13:51:59.241+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 8703}
+{"ts": "2026-08-23T13:52:00.128+00:00", "event": "track_entered", "track_id": "15"}
+{"ts": "2026-08-23T13:52:00.128+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 8721}
+{"ts": "2026-08-23T13:52:06.397+00:00", "event": "track_entered", "track_id": "16"}
+{"ts": "2026-08-23T13:52:10.424+00:00", "event": "track_exited", "track_id": "15", "dwell_seconds": 0.267}
+{"ts": "2026-08-23T13:52:11.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 20.0, "fps_processed": 19.97, "frames_total_in": 8953, "frames_total_processed": 8952, "persons_detected": 33, "persons_max_concurrent": 1, "entries_interval": 4, "exits_interval": 3, "avg_dwell_s": 5.29, "events_buffered": 46, "total_entries": 17, "total_exits": 16, "active_tracks": 1, "area_state": "OCCUPIED", "rss_mb": 723.52, "memory_growth_mb": 679.42, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T13:52:20.920+00:00", "event": "track_entered", "track_id": "17"}
+{"ts": "2026-08-23T13:52:32.200+00:00", "event": "track_exited", "track_id": "17", "dwell_seconds": 1.247}
+{"ts": "2026-08-23T13:52:41.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 20.0, "fps_processed": 20.0, "frames_total_in": 9553, "frames_total_processed": 9552, "persons_detected": 446, "persons_max_concurrent": 2, "entries_interval": 1, "exits_interval": 1, "avg_dwell_s": 35.29, "events_buffered": 48, "total_entries": 18, "total_exits": 17, "active_tracks": 1, "area_state": "OCCUPIED", "rss_mb": 723.52, "memory_growth_mb": 679.42, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T13:52:48.470+00:00", "event": "track_exited", "track_id": "16", "dwell_seconds": 32.04}
+{"ts": "2026-08-23T13:52:48.471+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 9687}
+{"ts": "2026-08-23T13:52:58.246+00:00", "event": "track_entered", "track_id": "18"}
+{"ts": "2026-08-23T13:52:58.246+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 9883}
+{"ts": "2026-08-23T13:53:08.440+00:00", "event": "track_exited", "track_id": "18", "dwell_seconds": 0.176}
+{"ts": "2026-08-23T13:53:08.441+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 10085}
+{"ts": "2026-08-23T13:53:11.681+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.97, "fps_processed": 19.97, "frames_total_in": 10152, "frames_total_processed": 10151, "persons_detected": 3, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 2, "avg_dwell_s": 0.0, "events_buffered": 54, "total_entries": 19, "total_exits": 19, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.52, "memory_growth_mb": 679.42, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T13:53:41.669+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.87, "fps_processed": 19.87, "frames_total_in": 10748, "frames_total_processed": 10747, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 54, "total_entries": 19, "total_exits": 19, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.52, "memory_growth_mb": 679.42, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T13:54:11.688+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.79, "fps_processed": 19.82, "frames_total_in": 11342, "frames_total_processed": 11342, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 54, "total_entries": 19, "total_exits": 19, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.52, "memory_growth_mb": 679.42, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T13:54:27.905+00:00", "event": "track_entered", "track_id": "19"}
+{"ts": "2026-08-23T13:54:27.905+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 11665}
+{"ts": "2026-08-23T13:54:38.267+00:00", "event": "track_exited", "track_id": "19", "dwell_seconds": 0.325}
+{"ts": "2026-08-23T13:54:38.267+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 11872}
+{"ts": "2026-08-23T13:54:41.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.93, "fps_processed": 19.93, "frames_total_in": 11940, "frames_total_processed": 11940, "persons_detected": 5, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 1, "avg_dwell_s": 0.0, "events_buffered": 58, "total_entries": 20, "total_exits": 20, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T13:55:11.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.97, "fps_processed": 19.93, "frames_total_in": 12539, "frames_total_processed": 12538, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 58, "total_entries": 20, "total_exits": 20, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T13:55:41.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.93, "fps_processed": 19.93, "frames_total_in": 13137, "frames_total_processed": 13136, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 58, "total_entries": 20, "total_exits": 20, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T13:56:11.675+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.88, "fps_processed": 19.88, "frames_total_in": 13733, "frames_total_processed": 13732, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 58, "total_entries": 20, "total_exits": 20, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T13:56:41.670+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.84, "fps_processed": 19.87, "frames_total_in": 14328, "frames_total_processed": 14328, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 58, "total_entries": 20, "total_exits": 20, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T13:57:11.253+00:00", "event": "track_entered", "track_id": "20"}
+{"ts": "2026-08-23T13:57:11.253+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 14919}
+{"ts": "2026-08-23T13:57:11.688+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 20.02, "fps_processed": 19.99, "frames_total_in": 14929, "frames_total_processed": 14928, "persons_detected": 4, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 0, "avg_dwell_s": 0.43, "events_buffered": 60, "total_entries": 21, "total_exits": 20, "active_tracks": 1, "area_state": "OCCUPIED", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T13:57:21.616+00:00", "event": "track_exited", "track_id": "20", "dwell_seconds": 0.363}
+{"ts": "2026-08-23T13:57:21.616+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 15126}
+{"ts": "2026-08-23T13:57:27.783+00:00", "event": "track_entered", "track_id": "21"}
+{"ts": "2026-08-23T13:57:27.783+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 15249}
+{"ts": "2026-08-23T13:57:41.688+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 20.0, "fps_processed": 20.0, "frames_total_in": 15529, "frames_total_processed": 15528, "persons_detected": 40, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 1, "avg_dwell_s": 13.9, "events_buffered": 64, "total_entries": 22, "total_exits": 21, "active_tracks": 1, "area_state": "OCCUPIED", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T13:57:48.087+00:00", "event": "track_exited", "track_id": "21", "dwell_seconds": 10.303}
+{"ts": "2026-08-23T13:57:48.087+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 15655}
+{"ts": "2026-08-23T13:57:53.316+00:00", "event": "track_entered", "track_id": "22"}
+{"ts": "2026-08-23T13:57:53.317+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 15759}
+{"ts": "2026-08-23T13:58:05.161+00:00", "event": "track_exited", "track_id": "22", "dwell_seconds": 1.844}
+{"ts": "2026-08-23T13:58:05.161+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 15994}
+{"ts": "2026-08-23T13:58:11.690+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.9, "fps_processed": 19.9, "frames_total_in": 16126, "frames_total_processed": 16125, "persons_detected": 21, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 2, "avg_dwell_s": 0.0, "events_buffered": 70, "total_entries": 23, "total_exits": 23, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T13:58:38.266+00:00", "event": "track_entered", "track_id": "23"}
+{"ts": "2026-08-23T13:58:38.267+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 16652}
+{"ts": "2026-08-23T13:58:41.679+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.84, "fps_processed": 19.84, "frames_total_in": 16721, "frames_total_processed": 16720, "persons_detected": 2, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 0, "avg_dwell_s": 3.41, "events_buffered": 72, "total_entries": 24, "total_exits": 23, "active_tracks": 1, "area_state": "OCCUPIED", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T13:58:48.336+00:00", "event": "track_exited", "track_id": "23", "dwell_seconds": 0.029}
+{"ts": "2026-08-23T13:58:48.336+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 16853}
+{"ts": "2026-08-23T13:58:59.176+00:00", "event": "track_entered", "track_id": "24"}
+{"ts": "2026-08-23T13:58:59.176+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 17070}
+{"ts": "2026-08-23T13:59:09.593+00:00", "event": "track_exited", "track_id": "24", "dwell_seconds": 0.356}
+{"ts": "2026-08-23T13:59:09.594+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 17278}
+{"ts": "2026-08-23T13:59:11.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.99, "fps_processed": 19.99, "frames_total_in": 17321, "frames_total_processed": 17320, "persons_detected": 3, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 2, "avg_dwell_s": 0.0, "events_buffered": 78, "total_entries": 25, "total_exits": 25, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T13:59:19.479+00:00", "event": "track_entered", "track_id": "25"}
+{"ts": "2026-08-23T13:59:19.480+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 17475}
+{"ts": "2026-08-23T13:59:24.583+00:00", "event": "track_entered", "track_id": "26"}
+{"ts": "2026-08-23T13:59:32.241+00:00", "event": "track_exited", "track_id": "25", "dwell_seconds": 2.698}
+{"ts": "2026-08-23T13:59:39.512+00:00", "event": "track_exited", "track_id": "26", "dwell_seconds": 4.901}
+{"ts": "2026-08-23T13:59:39.512+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 17873}
+{"ts": "2026-08-23T13:59:41.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.87, "fps_processed": 19.9, "frames_total_in": 17917, "frames_total_processed": 17917, "persons_detected": 73, "persons_max_concurrent": 1, "entries_interval": 2, "exits_interval": 2, "avg_dwell_s": 0.0, "events_buffered": 84, "total_entries": 27, "total_exits": 27, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T13:59:43.683+00:00", "event": "track_entered", "track_id": "27"}
+{"ts": "2026-08-23T13:59:43.683+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 17956}
+{"ts": "2026-08-23T13:59:51.050+00:00", "event": "track_entered", "track_id": "28"}
+{"ts": "2026-08-23T13:59:53.974+00:00", "event": "track_entered", "track_id": "29"}
+{"ts": "2026-08-23T13:59:57.036+00:00", "event": "track_exited", "track_id": "27", "dwell_seconds": 3.352}
+{"ts": "2026-08-23T13:59:58.350+00:00", "event": "track_entered", "track_id": "30"}
+{"ts": "2026-08-23T14:00:01.119+00:00", "event": "track_exited", "track_id": "28", "dwell_seconds": 0.041}
+{"ts": "2026-08-23T14:00:05.339+00:00", "event": "track_exited", "track_id": "29", "dwell_seconds": 1.355}
+{"ts": "2026-08-23T14:00:11.186+00:00", "event": "track_entered", "track_id": "31"}
+{"ts": "2026-08-23T14:00:11.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.9, "fps_processed": 19.87, "frames_total_in": 18514, "frames_total_processed": 18513, "persons_detected": 80, "persons_max_concurrent": 1, "entries_interval": 5, "exits_interval": 3, "avg_dwell_s": 6.92, "events_buffered": 93, "total_entries": 32, "total_exits": 30, "active_tracks": 2, "area_state": "OCCUPIED", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T14:00:16.503+00:00", "event": "track_exited", "track_id": "30", "dwell_seconds": 8.126}
+{"ts": "2026-08-23T14:00:17.265+00:00", "event": "track_entered", "track_id": "32"}
+{"ts": "2026-08-23T14:00:21.797+00:00", "event": "track_exited", "track_id": "31", "dwell_seconds": 0.607}
+{"ts": "2026-08-23T14:00:28.673+00:00", "event": "track_exited", "track_id": "32", "dwell_seconds": 1.384}
+{"ts": "2026-08-23T14:00:28.673+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 18848}
+{"ts": "2026-08-23T14:00:41.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.7, "fps_processed": 19.73, "frames_total_in": 19105, "frames_total_processed": 19105, "persons_detected": 4, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 3, "avg_dwell_s": 0.0, "events_buffered": 98, "total_entries": 33, "total_exits": 33, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T14:00:58.072+00:00", "event": "track_entered", "track_id": "33"}
+{"ts": "2026-08-23T14:00:58.073+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 19431}
+{"ts": "2026-08-23T14:01:08.235+00:00", "event": "track_exited", "track_id": "33", "dwell_seconds": 0.147}
+{"ts": "2026-08-23T14:01:08.235+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 19634}
+{"ts": "2026-08-23T14:01:11.684+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.94, "fps_processed": 19.9, "frames_total_in": 19703, "frames_total_processed": 19702, "persons_detected": 4, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 1, "avg_dwell_s": 0.0, "events_buffered": 102, "total_entries": 34, "total_exits": 34, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T14:01:19.863+00:00", "event": "track_entered", "track_id": "34"}
+{"ts": "2026-08-23T14:01:19.863+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 19865}
+{"ts": "2026-08-23T14:01:30.435+00:00", "event": "track_exited", "track_id": "34", "dwell_seconds": 0.564}
+{"ts": "2026-08-23T14:01:30.436+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 20076}
+{"ts": "2026-08-23T14:01:31.318+00:00", "event": "track_entered", "track_id": "35"}
+{"ts": "2026-08-23T14:01:31.319+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 20094}
+{"ts": "2026-08-23T14:01:41.688+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.96, "fps_processed": 19.96, "frames_total_in": 20302, "frames_total_processed": 20301, "persons_detected": 52, "persons_max_concurrent": 1, "entries_interval": 2, "exits_interval": 1, "avg_dwell_s": 10.37, "events_buffered": 108, "total_entries": 36, "total_exits": 35, "active_tracks": 1, "area_state": "OCCUPIED", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T14:01:51.684+00:00", "event": "track_exited", "track_id": "35", "dwell_seconds": 10.302}
+{"ts": "2026-08-23T14:01:51.684+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 20500}
+{"ts": "2026-08-23T14:01:59.593+00:00", "event": "track_entered", "track_id": "36"}
+{"ts": "2026-08-23T14:01:59.593+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 20659}
+{"ts": "2026-08-23T14:02:11.690+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.97, "fps_processed": 19.97, "frames_total_in": 20901, "frames_total_processed": 20900, "persons_detected": 72, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 1, "avg_dwell_s": 12.1, "events_buffered": 112, "total_entries": 37, "total_exits": 36, "active_tracks": 1, "area_state": "OCCUPIED", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T14:02:19.075+00:00", "event": "track_entered", "track_id": "37"}
+{"ts": "2026-08-23T14:02:22.966+00:00", "event": "track_exited", "track_id": "36", "dwell_seconds": 13.372}
+{"ts": "2026-08-23T14:02:31.326+00:00", "event": "track_entered", "track_id": "38"}
+{"ts": "2026-08-23T14:02:34.907+00:00", "event": "track_exited", "track_id": "37", "dwell_seconds": 5.721}
+{"ts": "2026-08-23T14:02:41.175+00:00", "event": "track_entered", "track_id": "39"}
+{"ts": "2026-08-23T14:02:41.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.9, "fps_processed": 19.9, "frames_total_in": 21498, "frames_total_processed": 21497, "persons_detected": 105, "persons_max_concurrent": 1, "entries_interval": 3, "exits_interval": 2, "avg_dwell_s": 5.44, "events_buffered": 117, "total_entries": 40, "total_exits": 38, "active_tracks": 2, "area_state": "OCCUPIED", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T14:02:47.301+00:00", "event": "track_exited", "track_id": "38", "dwell_seconds": 5.969}
+{"ts": "2026-08-23T14:02:54.490+00:00", "event": "track_entered", "track_id": "40"}
+{"ts": "2026-08-23T14:02:57.324+00:00", "event": "track_exited", "track_id": "39", "dwell_seconds": 6.126}
+{"ts": "2026-08-23T14:03:04.998+00:00", "event": "track_exited", "track_id": "40", "dwell_seconds": 0.506}
+{"ts": "2026-08-23T14:03:04.998+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 21960}
+{"ts": "2026-08-23T14:03:10.333+00:00", "event": "track_entered", "track_id": "41"}
+{"ts": "2026-08-23T14:03:10.333+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 22067}
+{"ts": "2026-08-23T14:03:11.688+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.93, "fps_processed": 19.93, "frames_total_in": 22096, "frames_total_processed": 22095, "persons_detected": 37, "persons_max_concurrent": 1, "entries_interval": 2, "exits_interval": 3, "avg_dwell_s": 1.35, "events_buffered": 124, "total_entries": 42, "total_exits": 41, "active_tracks": 1, "area_state": "OCCUPIED", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T14:03:17.807+00:00", "event": "track_entered", "track_id": "42"}
+{"ts": "2026-08-23T14:03:20.426+00:00", "event": "track_exited", "track_id": "41", "dwell_seconds": 0.057}
+{"ts": "2026-08-23T14:03:24.684+00:00", "event": "track_entered", "track_id": "43"}
+{"ts": "2026-08-23T14:03:32.105+00:00", "event": "track_exited", "track_id": "42", "dwell_seconds": 4.29}
+{"ts": "2026-08-23T14:03:34.105+00:00", "event": "track_entered", "track_id": "44"}
+{"ts": "2026-08-23T14:03:37.054+00:00", "event": "track_exited", "track_id": "43", "dwell_seconds": 2.365}
+{"ts": "2026-08-23T14:03:38.416+00:00", "event": "track_entered", "track_id": "45"}
+{"ts": "2026-08-23T14:03:41.688+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.83, "fps_processed": 19.87, "frames_total_in": 22691, "frames_total_processed": 22691, "persons_detected": 36, "persons_max_concurrent": 1, "entries_interval": 4, "exits_interval": 3, "avg_dwell_s": 5.43, "events_buffered": 131, "total_entries": 46, "total_exits": 44, "active_tracks": 2, "area_state": "OCCUPIED", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T14:03:44.177+00:00", "event": "track_exited", "track_id": "44", "dwell_seconds": 0.04}
+{"ts": "2026-08-23T14:03:48.463+00:00", "event": "track_exited", "track_id": "45", "dwell_seconds": 0.041}
+{"ts": "2026-08-23T14:03:48.464+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 22825}
+{"ts": "2026-08-23T14:03:51.818+00:00", "event": "track_entered", "track_id": "46"}
+{"ts": "2026-08-23T14:03:51.819+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 22891}
+{"ts": "2026-08-23T14:04:01.836+00:00", "event": "track_exited", "track_id": "46", "dwell_seconds": 0.0}
+{"ts": "2026-08-23T14:04:01.836+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 23092}
+{"ts": "2026-08-23T14:04:11.688+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.93, "fps_processed": 19.9, "frames_total_in": 23289, "frames_total_processed": 23288, "persons_detected": 1, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 3, "avg_dwell_s": 0.0, "events_buffered": 138, "total_entries": 47, "total_exits": 47, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T14:04:41.676+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.91, "fps_processed": 19.91, "frames_total_in": 23886, "frames_total_processed": 23885, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 138, "total_entries": 47, "total_exits": 47, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T14:05:11.688+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.99, "fps_processed": 19.99, "frames_total_in": 24486, "frames_total_processed": 24485, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 138, "total_entries": 47, "total_exits": 47, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T14:05:41.688+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.9, "fps_processed": 19.9, "frames_total_in": 25083, "frames_total_processed": 25082, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 138, "total_entries": 47, "total_exits": 47, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T14:06:04.366+00:00", "event": "track_entered", "track_id": "47"}
+{"ts": "2026-08-23T14:06:04.367+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 25535}
+{"ts": "2026-08-23T14:06:09.146+00:00", "event": "track_entered", "track_id": "48"}
+{"ts": "2026-08-23T14:06:11.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.93, "fps_processed": 19.93, "frames_total_in": 25681, "frames_total_processed": 25680, "persons_detected": 17, "persons_max_concurrent": 1, "entries_interval": 2, "exits_interval": 0, "avg_dwell_s": 4.93, "events_buffered": 141, "total_entries": 49, "total_exits": 47, "active_tracks": 2, "area_state": "OCCUPIED", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T14:06:14.378+00:00", "event": "track_exited", "track_id": "47", "dwell_seconds": 0.0}
+{"ts": "2026-08-23T14:06:20.635+00:00", "event": "track_exited", "track_id": "48", "dwell_seconds": 1.414}
+{"ts": "2026-08-23T14:06:20.635+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 25859}
+{"ts": "2026-08-23T14:06:41.664+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.98, "fps_processed": 20.02, "frames_total_in": 26280, "frames_total_processed": 26280, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 2, "avg_dwell_s": 0.0, "events_buffered": 144, "total_entries": 49, "total_exits": 49, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T14:07:11.688+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.92, "fps_processed": 19.92, "frames_total_in": 26878, "frames_total_processed": 26878, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 144, "total_entries": 49, "total_exits": 49, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T14:07:41.688+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.97, "fps_processed": 19.93, "frames_total_in": 27477, "frames_total_processed": 27476, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 144, "total_entries": 49, "total_exits": 49, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T14:07:41.948+00:00", "event": "track_entered", "track_id": "49"}
+{"ts": "2026-08-23T14:07:41.948+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 27480}
+{"ts": "2026-08-23T14:07:52.219+00:00", "event": "track_exited", "track_id": "49", "dwell_seconds": 0.234}
+{"ts": "2026-08-23T14:07:52.219+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 27686}
+{"ts": "2026-08-23T14:08:11.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 20.0, "fps_processed": 20.0, "frames_total_in": 28077, "frames_total_processed": 28076, "persons_detected": 3, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 1, "avg_dwell_s": 0.0, "events_buffered": 148, "total_entries": 50, "total_exits": 50, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T14:08:41.688+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.93, "fps_processed": 19.93, "frames_total_in": 28675, "frames_total_processed": 28674, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 148, "total_entries": 50, "total_exits": 50, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T14:08:44.679+00:00", "event": "track_entered", "track_id": "50"}
+{"ts": "2026-08-23T14:08:44.679+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 28734}
+{"ts": "2026-08-23T14:08:50.257+00:00", "event": "track_entered", "track_id": "51"}
+{"ts": "2026-08-23T14:08:56.044+00:00", "event": "track_exited", "track_id": "50", "dwell_seconds": 1.341}
+{"ts": "2026-08-23T14:09:01.525+00:00", "event": "track_exited", "track_id": "51", "dwell_seconds": 1.268}
+{"ts": "2026-08-23T14:09:01.525+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 29069}
+{"ts": "2026-08-23T14:09:11.688+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.9, "fps_processed": 19.93, "frames_total_in": 29272, "frames_total_processed": 29272, "persons_detected": 26, "persons_max_concurrent": 1, "entries_interval": 2, "exits_interval": 2, "avg_dwell_s": 0.0, "events_buffered": 154, "total_entries": 52, "total_exits": 52, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T14:09:41.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.9, "fps_processed": 19.9, "frames_total_in": 29869, "frames_total_processed": 29869, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 154, "total_entries": 52, "total_exits": 52, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T14:09:51.306+00:00", "event": "track_entered", "track_id": "52"}
+{"ts": "2026-08-23T14:09:51.306+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 30061}
+{"ts": "2026-08-23T14:10:01.469+00:00", "event": "track_exited", "track_id": "52", "dwell_seconds": 0.125}
+{"ts": "2026-08-23T14:10:01.470+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 30264}
+{"ts": "2026-08-23T14:10:11.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 20.03, "fps_processed": 20.0, "frames_total_in": 30470, "frames_total_processed": 30469, "persons_detected": 4, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 1, "avg_dwell_s": 0.0, "events_buffered": 158, "total_entries": 53, "total_exits": 53, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T14:10:31.177+00:00", "event": "track_entered", "track_id": "53"}
+{"ts": "2026-08-23T14:10:31.178+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 30855}
+{"ts": "2026-08-23T14:10:38.253+00:00", "event": "track_entered", "track_id": "54"}
+{"ts": "2026-08-23T14:10:41.226+00:00", "event": "track_exited", "track_id": "53", "dwell_seconds": 0.041}
+{"ts": "2026-08-23T14:10:41.684+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.87, "fps_processed": 19.87, "frames_total_in": 31066, "frames_total_processed": 31065, "persons_detected": 11, "persons_max_concurrent": 1, "entries_interval": 2, "exits_interval": 1, "avg_dwell_s": 3.43, "events_buffered": 162, "total_entries": 55, "total_exits": 54, "active_tracks": 1, "area_state": "OCCUPIED", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T14:10:55.934+00:00", "event": "track_exited", "track_id": "54", "dwell_seconds": 7.655}
+{"ts": "2026-08-23T14:10:55.934+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 31348}
+{"ts": "2026-08-23T14:11:11.688+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.8, "fps_processed": 19.8, "frames_total_in": 31660, "frames_total_processed": 31659, "persons_detected": 10, "persons_max_concurrent": 1, "entries_interval": 0, "exits_interval": 1, "avg_dwell_s": 0.0, "events_buffered": 164, "total_entries": 55, "total_exits": 55, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T14:11:41.688+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.87, "fps_processed": 19.87, "frames_total_in": 32256, "frames_total_processed": 32255, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 164, "total_entries": 55, "total_exits": 55, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T14:11:55.810+00:00", "event": "track_entered", "track_id": "55"}
+{"ts": "2026-08-23T14:11:55.810+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 32535}
+{"ts": "2026-08-23T14:12:07.275+00:00", "event": "track_exited", "track_id": "55", "dwell_seconds": 1.321}
+{"ts": "2026-08-23T14:12:07.276+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 32760}
+{"ts": "2026-08-23T14:12:11.688+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.83, "fps_processed": 19.83, "frames_total_in": 32851, "frames_total_processed": 32850, "persons_detected": 3, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 1, "avg_dwell_s": 0.0, "events_buffered": 168, "total_entries": 56, "total_exits": 56, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T14:12:41.660+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.85, "fps_processed": 19.89, "frames_total_in": 33446, "frames_total_processed": 33446, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 168, "total_entries": 56, "total_exits": 56, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T14:13:11.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.85, "fps_processed": 19.85, "frames_total_in": 34042, "frames_total_processed": 34042, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 168, "total_entries": 56, "total_exits": 56, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T14:13:18.589+00:00", "event": "track_entered", "track_id": "56"}
+{"ts": "2026-08-23T14:13:18.589+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 34179}
+{"ts": "2026-08-23T14:13:29.806+00:00", "event": "track_exited", "track_id": "56", "dwell_seconds": 1.21}
+{"ts": "2026-08-23T14:13:29.806+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 34401}
+{"ts": "2026-08-23T14:13:41.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.87, "fps_processed": 19.83, "frames_total_in": 34638, "frames_total_processed": 34637, "persons_detected": 5, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 1, "avg_dwell_s": 0.0, "events_buffered": 172, "total_entries": 57, "total_exits": 57, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 90}
+{"ts": "2026-08-23T14:14:08.406+00:00", "event": "track_entered", "track_id": "57"}
+{"ts": "2026-08-23T14:14:08.407+00:00", "event": "area_transition", "transition": "AREA_OCCUPIED", "active_tracks": 1, "frame_num": 35167}
+{"ts": "2026-08-23T14:14:11.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.87, "fps_processed": 19.87, "frames_total_in": 35234, "frames_total_processed": 35233, "persons_detected": 9, "persons_max_concurrent": 1, "entries_interval": 1, "exits_interval": 0, "avg_dwell_s": 3.28, "events_buffered": 174, "total_entries": 58, "total_exits": 57, "active_tracks": 1, "area_state": "OCCUPIED", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T14:14:18.814+00:00", "event": "track_exited", "track_id": "57", "dwell_seconds": 0.367}
+{"ts": "2026-08-23T14:14:18.814+00:00", "event": "area_transition", "transition": "AREA_EMPTY", "active_tracks": 0, "frame_num": 35374}
+{"ts": "2026-08-23T14:14:41.687+00:00", "event": "test_duration_reached"}
+{"ts": "2026-08-23T14:14:41.689+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 19.97, "fps_processed": 19.97, "frames_total_in": 35833, "frames_total_processed": 35832, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 1, "avg_dwell_s": 0.0, "events_buffered": 176, "total_entries": 58, "total_exits": 58, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 91}
+{"ts": "2026-08-23T14:14:41.690+00:00", "event": "interval_metrics", "interval_s": 30, "fps_in": 0.0, "fps_processed": 0.0, "frames_total_in": 35833, "frames_total_processed": 35832, "persons_detected": 0, "persons_max_concurrent": 0, "entries_interval": 0, "exits_interval": 0, "avg_dwell_s": 0.0, "events_buffered": 176, "total_entries": 58, "total_exits": 58, "active_tracks": 0, "area_state": "EMPTY", "rss_mb": 723.51, "memory_growth_mb": 679.41, "threads": 26, "open_fds": 89}
+{"ts": "2026-08-23T14:14:41.848+00:00", "event": "pipeline_stopped"}
+WARNING: [TRT]: Using an engine plan file across different models of devices is not recommended and is likely to affect performance or even cause errors.
+Implicit layer support has been deprecated
+INFO: [Implicit Engine Info]: layers num: 0
+

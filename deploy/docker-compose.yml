@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: vision-mediamtx
+    restart: unless-stopped
+    ports:
+      - "8554:8554"
+      - "1935:1935"
+      - "8888:8888"
+      - "8889:8889"
+    volumes:
+      - ../mediamtx/mediamtx.yml:/mediamtx.yml
+
+  vision-app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: vision-stability-app
+    restart: unless-stopped
+    privileged: true
+    runtime: nvidia
+    environment:
+      - RTSP_URI=rtsp://admin:cameraepi1@192.168.59.108:5543/live/channel0
+      - LOG_LEVEL=INFO
+      - PREVIEW_ENABLED=${PREVIEW_ENABLED:-1}
+      - PREVIEW_HOST=${PREVIEW_HOST:-127.0.0.1}
+      - PREVIEW_PORT=${PREVIEW_PORT:-5600}
+      - PREVIEW_BITRATE=${PREVIEW_BITRATE:-4000000}
+      - PREVIEW_IDR_GOP=${PREVIEW_IDR_GOP:-30}
+    volumes:
+      - ../deepstream:/app/deepstream
+      - ../data:/app/data
+      - ../scripts:/app/scripts
+    depends_on:
+      - mediamtx
+    command: python3 deepstream/app.py

@@ -1,0 +1,14 @@
+# OSD configuration
+enable=1
+gpu-id=0
+border-width=3
+text-size=12
+text-color=1;1;1;1;
+text-bg-color=0.3;0.3;0.3;0.7
+font=Serif
+show-clock=0
+clock-text-fmt=%d/%m/%Y %H:%M:%S
+clock-x=800
+clock-y=20
+clock-text-size=12
+clock-color=1;1;1;1

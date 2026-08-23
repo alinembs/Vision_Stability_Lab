@@ -1,0 +1,15 @@
+# Source configuration
+[source0]
+enable=1
+# Tipo de fonte: 1=RTSP, 2=File, 3=Camera USB
+type=1
+uri=rtsp://localhost:8554/live
+num-sources=1
+gpu-id=0
+camera-id=0
+camera-name=lab-camera-01
+latency=200
+drop-frame-interval=0
+file-loop=0
+smart-record=0
+smart-record-dir=../../data/

@@ -1,0 +1,16 @@
+%YAML 1.2
+---
+# Configuration file for nvtracker (NvDCF)
+BaseConfig:
+  tracker-width: 640
+  tracker-height: 384
+  gpu-id: 0
+  lld-window-size: 20
+  lost-age: 40
+  min-detector-confidence: 0.3
+  trajectory-smooth-length: 6
+  search-region-scale: 3
+  visualize-tracker-output: 0
+  enable-batch-process: 1
+  enable-past-frame: 1
+  user-meta-pool-size: 1024
