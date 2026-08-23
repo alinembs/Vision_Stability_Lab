@@ -55,6 +55,9 @@ const player = {
     setVideoStatus("negociando webrtc…");
     try {
       this.pc = new RTCPeerConnection();
+      // sem transceiver, createOffer() gera SDP sem m=video e o MediaMTX
+      // rejeita o offer ("no ice-ufrag") — o vídeo nunca conecta
+      this.pc.addTransceiver("video", { direction: "recvonly" });
       this.pc.ontrack = (e) => {
         if (video.srcObject !== e.streams[0]) {
           video.srcObject = e.streams[0];

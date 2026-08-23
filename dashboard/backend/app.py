@@ -49,16 +49,23 @@ class DashboardState:
         self.pipeline_started_at = None
         self.preview_transport = None
         self.subscribers = set()
+        # execução do pipeline: cada 'startup' abre uma nova; registros da
+        # partida anterior ficam com run menor (o replay pode carregar histórico)
+        self.current_run = 0
+        self._runs_seen = 0
 
     def apply(self, record):
         """Aplica um registro JSONL vindo do pipeline."""
         event = record.get("event")
+        if event == "startup":
+            self.pipeline_started_at = record.get("ts")
+            self._runs_seen += 1
+            self.current_run = self._runs_seen
+        record["run"] = self.current_run
         if event == "interval_metrics":
             record["recv_at"] = time.time()
             self.metrics_history.append(record)
             self.last_metric_ts = record.get("ts")
-        elif event == "startup":
-            self.pipeline_started_at = record.get("ts")
         elif event == "preview_branch_ready":
             self.preview_transport = record.get("transport")
             self._push_event(record)
@@ -92,8 +99,10 @@ class DashboardState:
 
     def snapshot(self):
         last = self.metrics_history[-1] if self.metrics_history else None
+        # erros contam apenas a execução atual do pipeline (campo 'run')
         errors = [e for e in self.events
-                  if e.get("event") == "pipeline_error"]
+                  if e.get("event") == "pipeline_error"
+                  and e.get("run") == self.current_run]
         return {
             "server_time": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
             "health": self.health(),
@@ -102,7 +111,9 @@ class DashboardState:
             "preview_transport": self.preview_transport,
             "error_count": len(errors),
             "last_error": errors[-1] if errors else None,
-            "events_recent": list(self.events)[-50:],
+            # lista de eventos também restrita à execução atual
+            "events_recent": [e for e in self.events
+                              if e.get("run") == self.current_run][-50:],
         }
 
 
