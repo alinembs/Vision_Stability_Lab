@@ -4,6 +4,10 @@ rtmpAddress: :1935
 hlsAddress: :8888
 webrtcAddress: :8889
 
+# Porto único de mídia ICE (UDP mux): publicado no compose como 8189/udp —
+# sem ele, navegadores fora do host não fecham o ICE (tela preta).
+webrtcICEUDPMuxAddress: :8189
+
 # Necessário para o navegador no PC fechar o ICE com o WebRTC do MediaMTX:
 # anuncia o IP LAN do Jetson como candidato além do que ele detecta sozinho.
 webrtcAdditionalHosts: [192.168.59.150]
