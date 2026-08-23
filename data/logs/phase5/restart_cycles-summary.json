@@ -1,0 +1,20 @@
+{
+  "test": "restart_cycles",
+  "started_at": "2026-08-23T16:02:17-03:00",
+  "ended_at": "2026-08-23T16:08:05-03:00",
+  "cycles": [
+    {
+      "cycle": 1,
+      "recovery_s": 16.0
+    },
+    {
+      "cycle": 2,
+      "recovery_s": 46.1
+    },
+    {
+      "cycle": 3,
+      "recovery_s": 46.1
+    }
+  ],
+  "recoveries_ok": true
+}
