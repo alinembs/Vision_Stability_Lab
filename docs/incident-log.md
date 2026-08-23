@@ -25,6 +25,13 @@
 - **Resolução:** `sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'` no host liberou page cache e recompactou os blocos livres (`lfb` → 196x4MB ≈ 784 MB contíguos). O teste então passou na primeira tentativa. Reboot seria a alternativa definitiva.
 - **Prevenção:** verificar `lfb` no `tegrastats` antes de testes longos (candidato a check automático no script de testes da Fase 5); considerar reboot programado antes da bateria de estabilidade.
 
+## INC-005 — Queda de energia interrompeu sessão de implementação da Fase 4
+- **Data:** 2026-08-23 (resolvido)
+- **Severidade:** Baixa (sem perda de dados)
+- **Descrição:** Falha de energia derrubou o host às ~13:56 (horário local), no meio da aplicação de correções de review e da documentação da Fase 4. A última mensagem da sessão ficou truncada, mas todos os arquivos editados até então foram gravados em disco íntegros.
+- **Resolução:** após o retorno da energia, os containers subiram automaticamente (`restart: unless-stopped`): pipeline republicou o preview via RTSP no MediaMTX e o dashboard reconectou. Revisão pós-queda encontrou e corrigiu: race no tailer do backend entre o replay do histórico e o `seek(END)` (linhas novas podiam ser perdidas), lâmpada de memória com baseline `null`, reconexão WHEP que nunca disparava na primeira falha, duplicação de eventos a cada reconexão do WebSocket e problemas menores de acessibilidade/contraste.
+- **Prevenção:** considerar UPS para o Jetson; a auto-recuperação do compose provou-se eficaz como camada única de resiliência.
+
 ## Dívidas registradas
 
 ### DIV-001 — Credenciais RTSP hardcoded como default em `pipeline_real.py`

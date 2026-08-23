@@ -41,10 +41,18 @@ TRACK_TTL_SECONDS = float(os.environ.get("TRACK_TTL_S", "10"))
 MAX_EVENTS_BUFFERED = int(os.environ.get("MAX_EVENTS", "200"))
 TEST_DURATION_SECONDS = int(os.environ.get("TEST_DURATION_S", "0"))  # 0 = até interromper
 PREVIEW_ENABLED = os.environ.get("PREVIEW_ENABLED", "1") == "1"
+# Fase 4: rtsp = publica no MediaMTX (rtspclientsink); udp = RTP direto (Fase 3)
+PREVIEW_TRANSPORT = os.environ.get("PREVIEW_TRANSPORT", "rtsp").lower()
+PREVIEW_MTX_URI = os.environ.get("PREVIEW_MTX_URI", "rtsp://mediamtx:8554/live")
 PREVIEW_HOST = os.environ.get("PREVIEW_HOST", "127.0.0.1")
 PREVIEW_PORT = int(os.environ.get("PREVIEW_PORT", "5600"))
 PREVIEW_BITRATE = int(os.environ.get("PREVIEW_BITRATE", "4000000"))  # bps
 PREVIEW_IDR_INTERVAL = int(os.environ.get("PREVIEW_IDR_GOP", "30"))
+# Telemetria: além do stdout, grava JSONL estável consumido pelo dashboard
+TELEMETRY_FILE = os.environ.get(
+    "TELEMETRY_FILE",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                 "data", "logs", "live.jsonl"))
 
 
 def log_event(event, **fields):
@@ -54,7 +62,13 @@ def log_event(event, **fields):
         "event": event,
         **fields,
     }
-    logger.info(json.dumps(record, ensure_ascii=False))
+    line = json.dumps(record, ensure_ascii=False)
+    logger.info(line)
+    try:
+        with open(TELEMETRY_FILE, "a") as fh:
+            fh.write(line + "\n")
+    except OSError:
+        pass  # telemetria em arquivo é best-effort; stdout é a fonte primária
 
 
 class FpsCounter:
@@ -152,20 +166,30 @@ class VisionPipeline:
                 "nvv4l2h264enc", bitrate=PREVIEW_BITRATE,
                 idrinterval=PREVIEW_IDR_INTERVAL, insert_sps_pps=True)
             self.h264parse = self._make("h264parse")
-            self.payloader = self._make(
-                "rtph264pay", pt=96, **{"config-interval": -1})
-            self.udp_sink = self._make(
-                "udpsink", host=PREVIEW_HOST, port=PREVIEW_PORT,
-                sync=False, **{"async": False}, qos=False)
+            if PREVIEW_TRANSPORT == "rtsp":
+                # Fase 4 — publica no MediaMTX via RTSP RECORD
+                self.rtsp_client = self._make(
+                    "rtspclientsink", location=PREVIEW_MTX_URI,
+                    protocols=4)  # 4 = TCP
+            else:
+                # Fase 3 — RTP/UDP direto (testes de viewer lento)
+                self.payloader = self._make(
+                    "rtph264pay", pt=96, **{"config-interval": -1})
+                self.udp_sink = self._make(
+                    "udpsink", host=PREVIEW_HOST, port=PREVIEW_PORT,
+                    sync=False, **{"async": False}, qos=False)
 
         for element in (self.depay, self.parser, self.decoder, self.mux,
                         self.infer, self.tracker, self.osd, self.tee,
                         self.queue_analyze, self.sink):
             self.pipeline.add(element)
         if PREVIEW_ENABLED:
+            if PREVIEW_TRANSPORT == "rtsp":
+                preview_tail = (self.rtsp_client,)
+            else:
+                preview_tail = (self.payloader, self.udp_sink)
             for element in (self.queue_preview, self.videoconv, self.enc_caps,
-                            self.encoder, self.h264parse, self.payloader,
-                            self.udp_sink):
+                            self.encoder, self.h264parse) + preview_tail:
                 self.pipeline.add(element)
         self.pipeline.add(self.rtspsrc)
 
@@ -199,15 +223,19 @@ class VisionPipeline:
                     != Gst.PadLinkReturn.OK:
                 raise RuntimeError("Falha ao linkar tee -> queue preview")
             chain = (self.queue_preview, self.videoconv, self.enc_caps,
-                     self.encoder, self.h264parse, self.payloader,
-                     self.udp_sink)
+                     self.encoder, self.h264parse) + \
+                    ((self.rtsp_client,) if PREVIEW_TRANSPORT == "rtsp"
+                     else (self.payloader, self.udp_sink))
             for src, dst in zip(chain, chain[1:]):
                 if not src.link(dst):
                     raise RuntimeError(
                         "Falha ao linkar ramo de preview: "
                         f"{src.get_name()} -> {dst.get_name()}")
-            log_event("preview_branch_ready", host=PREVIEW_HOST,
-                      port=PREVIEW_PORT, bitrate_bps=PREVIEW_BITRATE,
+            log_event("preview_branch_ready",
+                      transport=PREVIEW_TRANSPORT,
+                      target=PREVIEW_MTX_URI if PREVIEW_TRANSPORT == "rtsp"
+                      else f"{PREVIEW_HOST}:{PREVIEW_PORT}",
+                      bitrate_bps=PREVIEW_BITRATE,
                       idr_interval=PREVIEW_IDR_INTERVAL)
 
         self.rtspsrc.connect("pad-added", self._on_rtspsrc_pad_added,

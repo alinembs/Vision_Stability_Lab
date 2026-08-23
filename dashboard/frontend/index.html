@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#14161a">
+<title>Vision Stability Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Barlow+Condensed:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <div>
+      <h1>VISION STABILITY LAB</h1>
+      <span class="brand-sub">jetson-orin · occupancy-v1</span>
+    </div>
+  </div>
+  <div class="lamps" id="lamps">
+    <div class="lamp"><span class="bulb" id="lamp-pipeline"></span><span class="tag">pipeline</span></div>
+    <div class="lamp"><span class="bulb" id="lamp-video"></span><span class="tag">vídeo</span></div>
+    <div class="lamp"><span class="bulb" id="lamp-mem"></span><span class="tag">memória</span></div>
+    <div class="lamp"><span class="bulb" id="lamp-ws"></span><span class="tag">telemetria</span></div>
+  </div>
+  <div class="clock">
+    <span id="uptime">--:--:--</span>
+    <span class="tag">uptime</span>
+  </div>
+</header>
+
+<main class="grid">
+
+  <section class="panel video-panel">
+    <div class="panel-head">
+      <span class="eyebrow">vídeo anotado · rtsp → mediamtx → webrtc</span>
+      <button id="btn-play" class="btn">Conectar</button>
+    </div>
+    <div class="video-frame">
+      <video id="video" autoplay muted playsinline></video>
+      <div class="video-overlay hidden" id="video-status">
+        <p id="video-status-text">stream não conectado</p>
+      </div>
+    </div>
+    <div class="video-strip">
+      <div class="readout"><output id="r-fps-proc">0.0</output><span class="tag">fps proc.</span></div>
+      <div class="readout"><output id="r-fps-prev">0.0</output><span class="tag">fps preview</span></div>
+      <div class="readout"><output id="r-drop">0.00</output><span class="tag">fps drop</span></div>
+      <div class="readout"><output id="r-people">0</output><span class="tag">pessoas agora</span></div>
+    </div>
+  </section>
+
+  <aside class="panel state-panel">
+    <div class="panel-head"><span class="eyebrow">estado da área</span></div>
+    <div class="area-state" id="area-state">
+      <span class="area-word" id="area-word">—</span>
+      <span class="area-since" id="area-since"></span>
+    </div>
+    <div class="state-rows">
+      <div class="row"><span>tracks ativos</span><output id="s-tracks">0</output></div>
+      <div class="row"><span>entradas (total)</span><output id="s-entries">0</output></div>
+      <div class="row"><span>saídas (total)</span><output id="s-exits">0</output></div>
+      <div class="row"><span>dwell médio</span><output id="s-dwell">0.0 s</output></div>
+      <div class="row"><span>pico simultâneo</span><output id="s-peak">0</output></div>
+    </div>
+  </aside>
+
+  <section class="panel chart-panel">
+    <div class="panel-head"><span class="eyebrow">fps · últimos 30 min</span><span class="chart-max" id="fps-max"></span></div>
+    <canvas id="chart-fps" role="img" aria-label="Gráfico de FPS processado nos últimos 30 minutos"></canvas>
+  </section>
+
+  <section class="panel chart-panel">
+    <div class="panel-head"><span class="eyebrow">rss mb · últimos 30 min</span><span class="chart-max" id="rss-max"></span></div>
+    <canvas id="chart-rss" role="img" aria-label="Gráfico de memória RSS em megabytes nos últimos 30 minutos"></canvas>
+  </section>
+
+  <section class="panel health-panel">
+    <div class="panel-head"><span class="eyebrow">saúde do sistema</span></div>
+    <div class="state-rows">
+      <div class="row"><span>status geral</span><output id="h-status">—</output></div>
+      <div class="row"><span>rss atual</span><output id="h-rss">— mb</output></div>
+      <div class="row"><span>crescimento rss*</span><output id="h-growth">— mb</output></div>
+      <div class="row"><span>threads / fds</span><output id="h-proc">—</output></div>
+      <div class="row"><span>frames processados</span><output id="h-frames">0</output></div>
+      <div class="row"><span>última telemetria</span><output id="h-age">—</output></div>
+      <div class="row"><span>erros de pipeline</span><output id="h-errors">0</output></div>
+    </div>
+    <p class="footnote">*vs. baseline pós warm-up desta execução</p>
+  </section>
+
+  <section class="panel events-panel">
+    <div class="panel-head">
+      <span class="eyebrow">log de eventos</span>
+      <span class="event-filter">
+          <button class="chip active" data-filter="all" aria-pressed="true">tudo</button>
+        <button class="chip" data-filter="tracks" aria-pressed="false">tracks</button>
+        <button class="chip" data-filter="errors" aria-pressed="false">erros</button>
+      </span>
+    </div>
+    <ol class="events" id="events"></ol>
+  </section>
+
+</main>
+
+<footer class="footbar">
+  <span>fase 4 · mediamtx + dashboard</span>
+  <span id="conn-note" aria-live="polite">conectando…</span>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -26,4 +26,4 @@ RUN pip3 install --no-cache-dir /tmp/pyds-1.2.0-cp310-cp310-linux_aarch64.whl \
 
 COPY . /app
 
-CMD ["python3", "deepstream/app.py"]
+CMD ["python3", "deepstream/pipeline_real.py"]

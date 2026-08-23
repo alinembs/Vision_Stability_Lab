@@ -13,3 +13,6 @@ __pycache__/
 
 # Sistema
 .DS_Store
+
+# Telemetria em runtime (não versionar)
+data/logs/live.jsonl

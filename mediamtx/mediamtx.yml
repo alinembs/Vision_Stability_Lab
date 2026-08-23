@@ -4,8 +4,11 @@ rtmpAddress: :1935
 hlsAddress: :8888
 webrtcAddress: :8889
 
+# Necessário para o navegador no PC fechar o ICE com o WebRTC do MediaMTX:
+# anuncia o IP LAN do Jetson como candidato além do que ele detecta sozinho.
+webrtcAdditionalHosts: [192.168.59.150]
+
+api: no
+
 paths:
   live:
-    runOnInit:
-    runOnInitRestart: false
-

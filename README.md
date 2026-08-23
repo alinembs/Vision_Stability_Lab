@@ -11,8 +11,9 @@ O sistema receberá uma câmera RTSP, detectará pessoas com um modelo TensorRT 
 | 0 — Preparação | Ambiente Jetson + DeepStream 7.1 (container L4T), modelo YOLO11m `.engine` gerado | Concluída |
 | 1 — RTSP & inferência | Ingestão H.265 + decode HW + `nvinfer`, probes pyds, logs JSON | Concluída |
 | 2 — Tracker & regra temporal | `nvtracker` IOU + TTL + estado EMPTY/OCCUPIED, 30 min validados | Concluída (`docs/phase-2-evaluation.md`) |
-| 3 — OSD & vídeo H.264 | `nvdsosd` + tee + ramo de preview descartável (`nvv4l2h264enc` → RTP/UDP), 30 min validados com player externo | Concluída (`docs/phase-3-evaluation.md`) |
-| 4+ — MediaMTX/dashboard, estabilidade | — | Não iniciadas |
+| 3 — OSD & vídeo H.264 | `nvdsosd` + tee + ramo de preview descartável (`nvv4l2h264enc`), 30 min validados com player externo | Concluída (`docs/phase-3-evaluation.md`) |
+| 4 — MediaMTX & dashboard | Preview publicado via RTSP no MediaMTX; dashboard (FastAPI + vanilla JS) com WebRTC/WHEP, API/WebSocket de métricas, cards, gráficos e eventos | Concluída — validação E2E ≥30 min em 2026-08-23 (vídeo, métricas, eventos); revisão UI aplicada |
+| 5+ — Estabilidade, watchdog, testes longos | — | Não iniciadas |
 
 Evidências e pendências: `docs/phase-1-evaluation.md` · Incidentes: `docs/incident-log.md`
 

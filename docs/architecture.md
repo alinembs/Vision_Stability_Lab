@@ -1,9 +1,9 @@
 # Documentação de Arquitetura do Vision Stability Lab
 
 ## Visão Geral
-O **Vision Stability Lab** é um sistema embarcado para monitoramento contínuo de ocupação em Jetson, combinando ingestão RTSP, aceleração por hardware (NVDEC/NVENC), inferência com TensorRT (`nvinfer`), tracking (`nvtracker`), regras temporais de permanência, OSD e streaming H.264 para MediaMTX.
+O **Vision Stability Lab** é um sistema embarcado para monitoramento contínuo de ocupação em Jetson, combinando ingestão RTSP, aceleração por hardware (NVDEC/NVENC), inferência com TensorRT (`nvinfer`), tracking (`nvtracker`), regras temporais de permanência, OSD, streaming H.264 via MediaMTX (WebRTC/HLS) e dashboard web com métricas e eventos em tempo real.
 
-## Estado atual (2026-08-23 — Fase 3)
+## Estado atual (2026-08-23 — Fase 4 concluída)
 
 ### Pipeline ativo (`deepstream/pipeline_real.py`)
 ```text
@@ -13,35 +13,48 @@ rtspsrc (latency=200, drop-on-latency, protocols=tcp+udp)
   → nvstreammux (batch=1, 1280x720, live-source)
   → nvinfer (config/infer.txt — YOLO11m fp16, classe única "person")
   → nvtracker (IOU, config_tracker_IOU.yml)
-  → nvdsosd (bbox + labels; DS 7.1 expõe apenas display-bbox/display-text/process-mode)
+  → nvdsosd (display-bbox + display-text, process-mode=1/GPU)
   → tee
       ├── queue → fakesink                          [ramo análise — probes]
       └── queue leaky=downstream, max-size-buffers=1 [ramo preview — descartável]
               → nvvideoconvert
               → capsfilter video/x-raw(memory:NVMM),format=NV12
-              → nvv4l2h264enc (bitrate PREVIEW_BITRATE, IDR a cada GOP, SPS/PPS inline)
+              → nvv4l2h264enc (bitrate PREVIEW_BITRATE, IDR por GOP, SPS/PPS inline)
               → h264parse
-              → rtph264pay (pt=96, config-interval=-1)
-              → udpsink (PREVIEW_HOST:PREVIEW_PORT, sync/async off)
+              → PREVIEW_TRANSPORT:
+                    rtsp (padrão) → rtspclientsink → MediaMTX path 'live'
+                    udp           → rtph264pay → udpsink direto (testes Fase 5)
 ```
 
-- **Probe de entrada** (`nvinfer.sink`): contador de FPS de entrada.
-- **Probe de saída** (`fakesink.sink`): FPS processado + leitura de metadados via pyds (`NvDsFrameMeta`/`NvDsObjectMeta`), contagem da classe `person` (class_id=0) e alimentação do `AreaMonitor`.
-- **Probe do preview** (`nvv4l2h264enc.sink`): FPS codificado; `preview_dropped_fps = fps_in − fps_preview` nos logs periódicos.
-- **Ramo de preview descartável:** a fila com `leaky=downstream` e `max-size-buffers=1` descarta frames antigos se o encoder/consumidor atrasar — o vídeo nunca bloqueia a inferência. Ambos os sinks têm `sync=false, async=false` (obrigatório em splits de tee).
-- **Config do preview (env):** `PREVIEW_ENABLED` (padrão 1), `PREVIEW_HOST`/`PREVIEW_PORT` (padrão `127.0.0.1:5600`), `PREVIEW_BITRATE` (4 Mbps), `PREVIEW_IDR_GOP` (30).
-- **Pad-added do rtspsrc** filtra apenas pads `media=video` (a câmera também publica áudio PCMA).
-- **Logs JSON** de uma linha por evento; métricas periódicas a cada `METRICS_INTERVAL_S` (30 s padrão); duração de teste via `TEST_DURATION_S` (0 = executa até interromper).
+### Telemetria e dashboard
+```text
+pipeline_real.py ── JSONL stdout + data/logs/live.jsonl (TELEMETRY_FILE)
+                                   │ (volume ro)
+                                   ▼
+                     dashboard/backend (FastAPI :8080→8000)
+                       ├── tailer assíncrono do JSONL (replay na partida)
+                       ├── ring buffers: 480 amostras de métricas / 500 eventos
+                       ├── GET /api/snapshot · /api/history?minutes=N · /api/events
+                       └── WS   /ws (snapshot inicial + push por registro)
+
+navegador ──► http://<jetson>:8080            (dashboard: player WHEP + cards + gráficos canvas + log de eventos)
+navegador ──► http://<jetson>:8889/live/whep  (WebRTC, sinalização WHEP do MediaMTX)
+navegador ──► http://<jetson>:8888/live/      (HLS fallback, latência maior)
+```
+
+- **Saúde derivada** no backend: `healthy` se `interval_metrics` fresco (<90 s) com `fps_processed > 0`; `stale` se telemetria velha; `down` sem telemetria.
+- **Sem persistência além do JSONL**: o histórico dos gráficos é reconstruído replayando o arquivo na partida do backend; SQLite fica para fase futura.
+- **webrtcAdditionalHosts** no `mediamtx.yml` anuncia o IP LAN do Jetson para o ICE fechar com navegadores fora do host.
 
 ### Componentes
-1. **`deepstream/pipeline_real.py`** — pipeline instrumentado (cadeia acima com OSD e preview H.264, probes, logs JSON).
-2. **`deepstream/tracker_state.py`** — tracks com TTL (10 s) e transições `EMPTY`/`OCCUPIED`.
-3. **`deepstream/health_metrics.py`** — coleta psutil (RSS, crescimento de memória, threads, fds) + RAM/CPU do sistema.
-4. **`deepstream/tegrastats_reader.py`** — estatísticas nativas do Jetson (uso planejado para as fases seguintes).
-5. **`data/`** — modelo YOLO11m (`yolo11m.onnx`, engine `model_b1_gpu0_fp16.engine`) e parser customizado (`libnvdsinfer_custom_impl_Yolo.so`).
-6. **`deploy/docker-compose.yml`** — serviço `vision-app` montando `deepstream/` e `data/` no container L4T 7.1 com runtime NVIDIA.
-7. **`mediamtx/`** — servidor de mídia para as Fases 3–4 (ainda não integrado).
+1. **`deepstream/pipeline_real.py`** — pipeline instrumentado (OSD, preview H.264 RTSP/UDP, probes, telemetria JSONL).
+2. **`deepstream/tracker_state.py`** / **`area_monitor.py`** — tracks com TTL e transições `EMPTY`/`OCCUPIED`.
+3. **`deepstream/health_metrics.py`** — coleta psutil; **`tegrastats_reader.py`** — stats nativas do Jetson (uso planejado).
+4. **`dashboard/backend/app.py`** — API/WebSocket do dashboard; **`dashboard/frontend/`** — SPA vanilla (player WHEP, lâmpadas de status, gráficos canvas próprios).
+5. **`mediamtx/`** — servidor de mídia (RTSP/RTMP/HLS/WebRTC/SRT).
+6. **`data/`** — modelo YOLO11m, parser customizado, engines e logs de evidência.
+7. **`deploy/docker-compose.yml`** — serviços `vision-app`, `mediamtx`, `dashboard`.
 
 ### Observações e dependências
-- Scripts legados (`pipeline_rtsp_real.py`, `rtsp_*.py`, `phase1_*.py`) permanecem no repositório como histórico de diagnóstico; o caminho suportado da Fase 1 é `pipeline_real.py`.
-- `pyds` (bindings Python do DeepStream) precisa ser compilado dentro do container — ver `docs/incident-log.md` INC-003.
+- Scripts legados (`pipeline_rtsp_real.py`, `rtsp_*.py`, `phase1_*.py`, `app.py`+`pipeline.py`) permanecem como histórico de diagnóstico; o caminho suportado é `pipeline_real.py` (CMD da imagem).
+- O MediaMTX não ingere RTP/UDP puro; por isso a Fase 4 introduziu `PREVIEW_TRANSPORT=rtsp` como padrão. O modo UDP permanece para os testes de "viewer lento" da Fase 5.
