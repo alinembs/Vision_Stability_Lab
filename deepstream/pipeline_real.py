@@ -366,6 +366,17 @@ class VisionPipeline:
         fps_preview = self.fps_preview.update() if PREVIEW_ENABLED else None
         metrics = self.health.collect() or {}
         process = metrics.get("process", {})
+
+        # Fase 5: ocupação das filas do tee (buffers em cada ramo)
+        queue_levels = {}
+        for name in ("queue_analyze", "queue_preview"):
+            q = getattr(self, name, None)
+            if q is not None:
+                try:
+                    queue_levels[name] = q.get_property("current-level-buffers")
+                except Exception:
+                    queue_levels[name] = None
+
         log_event("interval_metrics",
                   interval_s=METRICS_INTERVAL_SECONDS,
                   fps_in=fps_in,
@@ -386,6 +397,7 @@ class VisionPipeline:
                   events_buffered=n_events,
                   total_entries=total_entries,
                   total_exits=total_exits,
+                  queue_buffers=queue_levels,
                   rss_mb=process.get("rss_mb"),
                   memory_growth_mb=process.get("memory_growth_mb"),
                   threads=process.get("threads"),
