@@ -7,6 +7,7 @@ Uso (no host/Jetson):
     python3 scripts/phase5_run.py viewer_slow         # 1 h
     python3 scripts/phase5_run.py dashboard_off       # 1 h
     python3 scripts/phase5_run.py rtsp_interrupt      # 30 min (requer sudo)
+    python3 scripts/phase5_run.py estresse            # 2 h (cena com várias pessoas)
     python3 python3 scripts/phase5_run.py restart_cycles  # 3 ciclos
 
 Cada teste captura tegrastats, fatia do live.jsonl e logs dos containers,
@@ -35,6 +36,7 @@ DURATIONS_S = {
     "viewer_slow": 60 * 60,
     "dashboard_off": 60 * 60,
     "rtsp_interrupt": 30 * 60,
+    "estresse": 2 * 3600,
 }
 
 CAMERA_HOST = "192.168.59.108"
@@ -314,6 +316,7 @@ TESTS = {
     "viewer_slow": dict(seconds=DURATIONS_S["viewer_slow"], action=act_viewer_slow),
     "dashboard_off": dict(seconds=DURATIONS_S["dashboard_off"], action=act_dashboard_off),
     "rtsp_interrupt": dict(seconds=DURATIONS_S["rtsp_interrupt"], action=act_rtsp_interrupt),
+    "estresse": dict(seconds=DURATIONS_S["estresse"]),
 }
 
 

@@ -1,0 +1,81 @@
+{
+  "test": "longrun",
+  "started_at": "2026-08-23T19:54:36-03:00",
+  "ended_at": "2026-08-24T01:54:36-03:00",
+  "duration_s": 21600,
+  "metrics_samples": 720,
+  "fps_processed": {
+    "min": 6.27,
+    "max": 12.04,
+    "avg": 10.9,
+    "p95": 12.03,
+    "n": 720
+  },
+  "fps_preview": {
+    "min": 6.27,
+    "max": 12.04,
+    "avg": 10.9,
+    "p95": 12.03,
+    "n": 720
+  },
+  "preview_dropped_fps_max": 0.04,
+  "rss_mb": {
+    "min": 790.31,
+    "max": 947.54,
+    "avg": 935.77,
+    "p95": 946.8,
+    "n": 720
+  },
+  "memory_growth_final_mb": 899.95,
+  "active_tracks_max": 1,
+  "queue_analyze_buffers_max": 0,
+  "queue_preview_buffers_max": 0,
+  "jetson_ram_used_mb": {
+    "min": 2694.0,
+    "max": 4599.0,
+    "avg": 2990.39,
+    "p95": 4337.0,
+    "n": 21449
+  },
+  "gpu_percent": {
+    "min": 0.0,
+    "max": 99.0,
+    "avg": 39.0,
+    "p95": 99.0,
+    "n": 21449
+  },
+  "cpu_percent": {
+    "min": 0.0,
+    "max": 42.0,
+    "avg": 7.7,
+    "p95": 22.0,
+    "n": 21449
+  },
+  "temp_gpu_c": {
+    "min": 56.187,
+    "max": 62.406,
+    "avg": 58.41,
+    "p95": 61.406,
+    "n": 21449
+  },
+  "temp_tj_c": {
+    "min": 56.187,
+    "max": 62.5,
+    "avg": 58.41,
+    "p95": 61.406,
+    "n": 21449
+  },
+  "power_mw": {
+    "min": 5986.0,
+    "max": 11314.0,
+    "avg": 7944.42,
+    "p95": 8503.0,
+    "n": 21449
+  },
+  "reconnection_errors": 0,
+  "recovery_times_s": [],
+  "gstreamer_cuda_errors": {
+    "gst": [],
+    "cuda": []
+  }
+}
