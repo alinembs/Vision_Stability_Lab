@@ -1,0 +1,6 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY scripts/watchdog.py /app/watchdog.py
+
+CMD ["python3", "-u", "/app/watchdog.py"]

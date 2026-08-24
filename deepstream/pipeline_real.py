@@ -53,6 +53,12 @@ TELEMETRY_FILE = os.environ.get(
     "TELEMETRY_FILE",
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                  "data", "logs", "live.jsonl"))
+# Fase 6: se nenhum frame chegar por este tempo, reseta só o rtspsrc
+# (reconexão de RTSP sem derrubar o processo; o watchdog externo é a
+# segunda linha de defesa e reinicia o container se isso não bastar)
+RTSP_IDLE_RECONNECT_S = float(os.environ.get("RTSP_IDLE_RECONNECT_S", "30"))
+RTSP_RECONNECT_COOLDOWN_S = float(
+    os.environ.get("RTSP_RECONNECT_COOLDOWN_S", "60"))
 
 
 def log_event(event, **fields):
@@ -115,6 +121,9 @@ class VisionPipeline:
         self.fps_preview = FpsCounter("preview")
         self.persons_detected_interval = 0
         self.persons_max_concurrent = 0
+        self._last_input_frame_at = time.monotonic()
+        self._rtsp_reconnecting = False
+        self._last_reconnect_at = 0.0
 
         self.pipeline = Gst.Pipeline.new("vision-phase1")
 
@@ -272,6 +281,7 @@ class VisionPipeline:
 
     def _on_input_buffer(self, _pad, info, _user_data):
         self.fps_in.tick()
+        self._last_input_frame_at = time.monotonic()
         return Gst.PadProbeReturn.OK
 
     def _on_preview_buffer(self, _pad, info, _user_data):
@@ -346,6 +356,35 @@ class VisionPipeline:
             log_event("pipeline_warning", warning=str(warn), debug=debug)
         return True
 
+    def _check_rtsp_alive(self):
+        """Regra 1 do watchdog: sem frame por 30s -> reconectar o RTSP.
+
+        Reseta apenas o rtspsrc (NULL -> PLAYING); o resto do pipeline
+        continua de pé. O pad-added religa o fluxo quando a câmera
+        responder. Timer GLib: retorno True mantém o ciclo ativo.
+        """
+        now = time.monotonic()
+        idle = now - self._last_input_frame_at
+        if idle < RTSP_IDLE_RECONNECT_S or self._rtsp_reconnecting:
+            return True
+        if now - self._last_reconnect_at < RTSP_RECONNECT_COOLDOWN_S:
+            return True
+        self._rtsp_reconnecting = True
+        log_event("rtsp_reconnect_started", idle_s=round(idle, 1))
+        self.rtspsrc.set_state(Gst.State.NULL)
+        GLib.timeout_add_seconds(2, self._resume_rtsp)
+        return True
+
+    def _resume_rtsp(self):
+        self.rtspsrc.set_state(Gst.State.PLAYING)
+        # Carência de um ciclo antes de considerar travado de novo;
+        # se o frame voltar, _on_input_buffer atualiza o timestamp.
+        self._last_input_frame_at = time.monotonic()
+        self._last_reconnect_at = time.monotonic()
+        self._rtsp_reconnecting = False
+        log_event("rtsp_reconnect_resumed")
+        return False
+
     def periodic_metrics(self):
         # Lê o monitor sob lock e blinda exceções para o timer GLib
         # não morrer silenciosamente (retorno True mantém o timeout ativo).
@@ -416,6 +455,7 @@ class VisionPipeline:
             log_event("test_started", duration_s=TEST_DURATION_SECONDS, codec=self.codec,
                       uri=self.rtsp_uri.split("@")[-1])
         GLib.timeout_add_seconds(METRICS_INTERVAL_SECONDS, self.periodic_metrics)
+        GLib.timeout_add_seconds(5, self._check_rtsp_alive)
 
         self.pipeline.set_state(Gst.State.PLAYING)
         log_event("pipeline_playing", codec=self.codec)

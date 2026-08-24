@@ -37,6 +37,30 @@ services:
       - ../scripts:/app/scripts
     depends_on:
       - mediamtx
+    healthcheck:
+      # Pipeline saudável = telemetria atualizada (intervalo de métricas é 30s)
+      test: ["CMD-SHELL", "python3 -c \"import os,time; st=os.stat('/app/data/logs/live.jsonl'); exit(0 if time.time()-st.st_mtime < 180 else 1)\""]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+
+  watchdog:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.watchdog
+    container_name: vision-watchdog
+    restart: unless-stopped
+    environment:
+      - APP_CONTAINER=vision-stability-app
+      - TELEMETRY_FILE=/app/data/logs/live.jsonl
+      - WATCHDOG_LOG=/app/data/logs/watchdog.jsonl
+      - TARGET_FPS=${WATCHDOG_TARGET_FPS:-25}
+    volumes:
+      - ../data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - vision-app
 
   dashboard:
     build:
