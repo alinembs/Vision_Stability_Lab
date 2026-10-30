@@ -162,6 +162,29 @@ class DockerAPI:
             return body.decode(errors="replace")
         return "".join(out)
 
+    def container_state(self, container):
+        """(running, StartedAt, uptime_s) do container, ou (None,)*3.
+
+        Usado para distinguir "a fonte parou" de "o processo do pipeline
+        reiniciou": depois de um restart externo (`docker restart`, crash,
+        recriação) não há frame porque o processo está subindo, e o watchdog
+        não deve cobrar isso como fonte morta. Qualquer falha na API devolve
+        None e o watchdog volta ao comportamento antigo.
+        """
+        try:
+            status, body = self.request(
+                "GET", f"/containers/{container}/json", timeout=5)
+        except OSError:
+            return None, None, None
+        if status != 200:
+            return None, None, None
+        try:
+            state = json.loads(body).get("State") or {}
+        except (json.JSONDecodeError, AttributeError):
+            return None, None, None
+        started = state.get("StartedAt") or ""
+        return bool(state.get("Running")), started or None, _age_seconds(started)
+
     def restart(self, container, timeout_s=10):
         status, _ = self.request(
             "POST", f"/containers/{container}/restart?t={timeout_s}",
@@ -173,35 +196,94 @@ class DockerAPI:
 # Tail simples de JSONL (acompanha rotação/truncamento)
 # ---------------------------------------------------------------------------
 class JsonlTail:
+    """Tail de JSONL que sobrevive a rotação e a truncamento no lugar.
+
+    Depois de um truncamento, o offset de leitura fica além do fim do arquivo
+    e o tail fica cego — tempo suficiente para o watchdog escalar restart por
+    falso positivo. Medido em bancada em 2026-10-30: `no_frames_detected`
+    às 17:25:53 e `frames_recovered` só às 17:27:23, sem nenhuma falha real.
+    """
+
+    MAX_PASSES = 2          # relê o arquivo novo/truncado na mesma chamada
+
     def __init__(self, path):
         self.path = path
         self.fh = None
         self.inode = None
+        self._primeira_abertura = True
+
+    def _open(self):
+        try:
+            self.fh = open(self.path)
+            self.inode = os.fstat(self.fh.fileno()).st_ino
+        except OSError:
+            self.fh = None
+            return False
+        if self._primeira_abertura:
+            self.fh.seek(0, os.SEEK_END)   # ignora histórico anterior
+            self._primeira_abertura = False
+        return True
+
+    def _read(self):
+        novas = []
+        try:
+            for line in self.fh:
+                novas.append(line.rstrip("\n"))
+        except (OSError, ValueError):
+            pass
+        return novas
+
+    def _reabrir_se_mudou(self):
+        """Fecha o arquivo se ele foi substituído, removido ou truncado."""
+        try:
+            trocado = os.stat(self.path).st_ino != self.inode
+        except OSError:
+            trocado = True                  # sumiu: reabre quando voltar
+        try:
+            posicao = self.fh.tell()
+            tamanho = os.fstat(self.fh.fileno()).st_size
+        except (OSError, ValueError):
+            posicao, tamanho = 0, 0
+        if not trocado and tamanho >= posicao:
+            return False
+        try:
+            self.fh.close()
+        except OSError:
+            pass
+        self.fh = None
+        return True
 
     def poll(self):
         """Retorna as novas linhas desde a última chamada."""
-        if self.fh is None:
-            try:
-                self.fh = open(self.path)
-                self.inode = os.fstat(self.fh.fileno()).st_ino
-                self.fh.seek(0, os.SEEK_END)  # ignora histórico
-            except OSError:
-                return []
-        new = []
-        for line in self.fh:
-            new.append(line.rstrip("\n"))
-        # arquivo truncado/substituído -> reabrir
-        try:
-            if os.stat(self.path).st_ino != self.inode:
-                self.fh.close()
-                self.fh = None
-        except OSError:
-            try:
-                self.fh.close()
-            except OSError:
-                pass
-            self.fh = None
-        return new
+        novas = []
+        for _ in range(self.MAX_PASSES):
+            if self.fh is None and not self._open():
+                break
+            novas.extend(self._read())
+            if not self._reabrir_se_mudou():
+                break
+        return novas
+
+
+DOCKER_TS_RE = re.compile(
+    r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?")
+
+
+def _age_seconds(iso_ts, now_epoch=None):
+    """Idade, em segundos, de um timestamp ISO-8601 do Docker.
+
+    O Docker devolve nanossegundos (`...16:59:23.123456789Z`) e `strptime`
+    só aceita microssegundos — daí o parse manual da fração.
+    """
+    match = DOCKER_TS_RE.match(iso_ts or "")
+    if not match:
+        return None
+    base = datetime.datetime.strptime(
+        match.group(1), "%Y-%m-%dT%H:%M:%S").replace(
+            tzinfo=datetime.timezone.utc).timestamp()
+    fracao = float("0." + (match.group(2) or "0")[:6])
+    agora = time.time() if now_epoch is None else now_epoch
+    return round(agora - base - fracao, 1)
 
 
 def system_ram_used_pct():
@@ -229,6 +311,14 @@ class Watchdog:
         # Regra 1 — frames
         self.last_frame_at = time.monotonic()
         self.no_frame_reported = False
+        # StartedAt do processo observado: quando muda, o pipeline reiniciou
+        # por fora (docker restart, crash, recriação do compose).
+        self._app_started_at = None
+        # Última leitura de frames_total_in, que é cumulativo POR PROCESSO do
+        # pipeline. None = ainda não há base (primeira amostra ou logo após
+        # um restart). Nunca guardar high-water entre processos: era a causa
+        # do restart em loop por falso positivo (E-B).
+        self._prev_frames_total = None
 
         # Regra 2 — degradação de FPS
         self.low_fps_since = None
@@ -266,6 +356,11 @@ class Watchdog:
             self.started_at = time.monotonic()
             self.last_frame_at = time.monotonic()
             self.no_frame_reported = False
+            # O processo do pipeline renasceu: o cumulativo começa em zero.
+            # Manter a base anterior é o que fazia o watchdog comparar o
+            # processo novo (~2.900 frames) com o recorde do antigo
+            # (~1.375.018) e escalar no_frames_escalation para sempre.
+            self._prev_frames_total = None
             self.low_fps_since = None
             self.degrade_reported = False
             self.rss_baseline_mb = None
@@ -276,18 +371,42 @@ class Watchdog:
     def _handle_metric(self, r):
         now = time.monotonic()
 
-        # Regra 1 — fluxo de frames (frames_total_in é cumulativo)
+        # Regra 1 — fluxo de frames.
+        # frames_total_in é cumulativo POR PROCESSO: só diz "houve frame" na
+        # diferença contra a leitura anterior DESTE processo.
         frames_total = r.get("frames_total_in") or 0
         fps_in = r.get("fps_in") or 0
-        if (frames_total > getattr(self, "_prev_frames_total", -1)
-                and frames_total > 0) or fps_in > 0:
-            if frames_total > getattr(self, "_prev_frames_total", -1):
-                self.last_frame_at = now
-                if self.no_frame_reported:
-                    emit("frames_recovered")
-                    self.no_frame_reported = False
-        self._prev_frames_total = max(frames_total,
-                                      getattr(self, "_prev_frames_total", 0))
+        prev = self._prev_frames_total
+        frame_seen = False
+
+        if prev is not None and frames_total < prev:
+            # Contador andou para trás: o processo do pipeline reiniciou sem
+            # o watchdog participar (docker restart manual, crash, recriação).
+            # O valor antigo não é base de nada — rebaseline explícito.
+            emit("frames_counter_reset", previous=prev, current=frames_total)
+            prev = None
+
+        if prev is None:
+            # Primeira amostra deste processo: qualquer contador > 0 já é
+            # prova de frame recebido (não dá para comparar com nada).
+            frame_seen = frames_total > 0
+        elif frames_total > prev:
+            frame_seen = True
+
+        # fps_in > 0 é evidência direta de frame na janela, mesmo com o
+        # cumulativo estagnado (antes esta checagem só valia se o
+        # frames_total também tivesse crescido).
+        if fps_in > 0:
+            frame_seen = True
+
+        if frame_seen:
+            self.last_frame_at = now
+            if self.no_frame_reported:
+                emit("frames_recovered")
+                self.no_frame_reported = False
+
+        # Sem max(): a base é sempre a última leitura real do processo atual.
+        self._prev_frames_total = frames_total
 
         # Regra 2 — FPS abaixo de 30% do alvo sustentado
         fps_proc = r.get("fps_processed") or 0
@@ -324,9 +443,44 @@ class Watchdog:
                              100 * (rss / self.rss_baseline_mb - 1), 1))
 
     # -- regras baseadas em tempo -------------------------------------------
+    def _observe_container_start(self):
+        """Dá carência quando o processo do pipeline reiniciou por fora.
+
+        Sem isto, um `docker restart` (ou um crash com `restart:
+        unless-stopped`) gera `no_frames_detected` só porque o processo levou
+        mais que o frame_timeout para voltar — ruído que mascara a diferença
+        entre "eu reiniciei" e "a fonte morreu". Retorna a idade do processo
+        em segundos (None = desconhecida).
+        """
+        running, started_at, uptime = self.docker.container_state(APP_CONTAINER)
+        if started_at is None:
+            return None                      # API indisponível: regra antiga
+        if started_at == self._app_started_at:
+            return uptime
+        primeira_leitura = self._app_started_at is None
+        self._app_started_at = started_at
+        if primeira_leitura:
+            return uptime
+        # processo novo: mesma carência de um restart feito por nós
+        now = time.monotonic()
+        self.started_at = now
+        self.last_frame_at = now
+        self.no_frame_reported = False
+        self._prev_frames_total = None
+        emit("container_restarted", started_at=started_at,
+             uptime_s=uptime, running=running,
+             action="nova carência; base do contador zerada",
+             grace_s=STARTUP_GRACE_S)
+        return uptime
+
     def _rule1_idle(self):
         now = time.monotonic()
+        # Antes da carência: o StartedAt do processo precisa ser observado
+        # mesmo durante ela, senão um crash-loop passaria invisível.
+        uptime = self._observe_container_start()
         if now - self.started_at < STARTUP_GRACE_S:
+            return
+        if uptime is not None and uptime < STARTUP_GRACE_S:
             return
         idle = now - self.last_frame_at
         if idle >= RULE1_FRAME_TIMEOUT_S and not self.no_frame_reported:

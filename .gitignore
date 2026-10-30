@@ -15,7 +15,7 @@ __pycache__/
 .DS_Store
 
 # Telemetria em runtime (não versionar)
-data/logs/live.jsonl
+data/logs/*.jsonl
 
 # Credenciais locais (usar deploy/.env.example como base)
 deploy/.env
