@@ -1,6 +1,9 @@
 services:
   mediamtx:
-    image: bluenviron/mediamtx:latest
+    # Versão pinada: a configuração de ICE mudou de nome entre releases
+    # (`webrtcICEUDPMuxAddress` → `webrtcLocalUDPAddress`). Sem pin, um `latest`
+    # quebrado ignora a chave em silêncio e o WebRTC fica sem mídia.
+    image: bluenviron/mediamtx:1.21.3
     container_name: vision-mediamtx
     restart: unless-stopped
     ports:
@@ -10,6 +13,7 @@ services:
       - "8889:8889"
       - "8890:8890/udp"
       - "8189:8189/udp"
+      - "8189:8189/tcp"
     volumes:
       - ../mediamtx/mediamtx.yml:/mediamtx.yml
 
