@@ -7,13 +7,18 @@ services:
     container_name: vision-mediamtx
     restart: unless-stopped
     ports:
-      - "8554:8554"
-      - "1935:1935"
-      - "8888:8888"
-      - "8889:8889"
-      - "8890:8890/udp"
-      - "8189:8189/udp"
-      - "8189:8189/tcp"
+      # Publicação amarrada ao IP da LAN, nunca em 0.0.0.0: RTSP/RTMP/WebRTC
+      # do MediaMTX não têm autenticação (DIV-003, docs/incident-log.md) e não
+      # devem escutar em todas as interfaces do host (tailscale0, bridges).
+      # LAN_IP tem default versionado para o host atual; sobrescreva via
+      # deploy/.env (ou `LAN_IP=<ip> docker compose ...`) se a LAN mudar.
+      - "${LAN_IP:-192.168.59.102}:8554:8554"
+      - "${LAN_IP:-192.168.59.102}:1935:1935"
+      - "${LAN_IP:-192.168.59.102}:8888:8888"
+      - "${LAN_IP:-192.168.59.102}:8889:8889"
+      - "${LAN_IP:-192.168.59.102}:8890:8890/udp"
+      - "${LAN_IP:-192.168.59.102}:8189:8189/udp"
+      - "${LAN_IP:-192.168.59.102}:8189:8189/tcp"
     volumes:
       - ../mediamtx/mediamtx.yml:/mediamtx.yml
 
@@ -75,7 +80,8 @@ services:
     container_name: vision-dashboard
     restart: unless-stopped
     ports:
-      - "8080:8000"
+      # 8080 é do arquo-web neste host; o VSL usa 8081 (F6 do plano).
+      - "${DASHBOARD_PORT:-8081}:8000"
     environment:
       - TELEMETRY_FILE=/app/data/logs/live.jsonl
     volumes:

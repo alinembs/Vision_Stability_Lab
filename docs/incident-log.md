@@ -41,3 +41,11 @@
 - **Ação requerida:** remover as credenciais hardcoded (exigir `RTSP_URI` via ambiente/secret) **antes** de compartilhar o repo ou iniciar a Fase 3.
 - **Status:** **resolvido em 2026-10-30.** `RTSP_URI` passou a ser obrigatória via ambiente (`deepstream/rtsp_env.py`; `require_rtsp_uri()` encerra com mensagem clara se ausente). A URI saiu de `pipeline_real.py`, de `pipeline_rtsp_real.py` e dos 6 scripts `rtsp_*_test.py`/`rtsp_bin_complete.py`, e de `deploy/docker-compose.yml` (agora `${RTSP_URI:-}` a partir de `deploy/.env`, não versionado; modelo em `deploy/.env.example`). Guarda de regressão em `deepstream/tests/test_no_hardcoded_secrets.py`.
 - **Pendência:** a credencial **permanece no histórico do Git**. Trocar a senha da câmera e, se o repo for publicado, considerar reescrita de histórico (`git filter-repo`).
+
+### DIV-003 — MediaMTX sem autenticação: publish/leitura anônimos na LAN
+- **Data:** 2026-10-30
+- **Tipo:** Dívida de segurança (não incidente — nenhuma exposição conhecida)
+- **Descrição:** O MediaMTX roda com `api: no` (`mediamtx/mediamtx.yml:15`) e **sem** `authMethod`/`authUser`/`authPass`: qualquer máquina que alcance as portas 1935 (RTMP), 8888/8889 (HLS/WebRTC) ou 8554 (RTSP) pode **publicar** e **ler** os paths `live`, `drone` e `phone` sem credencial. O `api: no` só desliga a API de controle — não é autenticação. Consequências: substituição do stream por terceiro (o path `live` é o preview consumido pelo dashboard), injeção de vídeo falso e leitura do vídeo da câmera/celular por quem estiver na mesma rede. Identificado em **2026-10-30**, ao revisar os contratos de ingestão do plano de troca de fonte.
+- **Mitigação aplicada nesta tarefa (E0-T2):** as portas do MediaMTX deixaram de ser publicadas em `0.0.0.0` e passaram a ser amarradas ao **IP da LAN** (`${LAN_IP:-192.168.59.102}`), o que remove a exposição via `tailscale0` e as bridges do Docker. Isso reduz a superfície, **não** autentica ninguém: qualquer host da LAN confiável continua podendo publicar.
+- **Ação requerida:** adicionar autenticação (`authMethod: internal` com `authUser`/`authPass`, ou `jwt`/`http` com allowlist) e/ou uma allowlist de IP por path **antes** de usar o stack fora da rede confiável (evento em campo, Wi-Fi compartilhado, VPN de terceiros).
+- **Status:** aberta (mitigação parcial em 2026-10-30).
