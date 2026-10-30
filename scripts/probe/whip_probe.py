@@ -20,7 +20,9 @@ Ciclo de vida da sessão: o WHIP é um POST no recurso `<base>/<path>/whip`; o
 servidor devolve o `Location` da sessão. Ao final a sonda faz **DELETE** nesse
 `Location` (o mesmo que o navegador faz ao fechar), para não deixar uma sessão
 pendurada no path sondado. O efeito aparece em `delete` no JSON e no log do
-container (`docker logs vision-mediamtx`).
+container (`docker logs vision-mediamtx`). `--keep-session` pula o DELETE de
+propósito (a sessão fica até o ICE expirar) e continua saindo 0: o contrato que
+importa é "a sonda provou a sessão", não "o path ficou livre".
 
 **TLS (E0-T4).** Com `webrtcEncryption: yes`, a 8889 só fala HTTPS, e o
 certificado é assinado pela CA interna de `deploy/certs/` — que **não** está no
@@ -37,9 +39,12 @@ Uso:
 Atenção: `--path phone` cria e encerra uma sessão WHIP de verdade no path
 informado. Com `urllib` + `ssl` apenas — sem dependência nova.
 
-Exit codes: 0 = resposta WHIP aceita (2xx), 2 = servidor recusou o POST ou está
-inacessível, 3 = problema de TLS/CA local (arquivo de CA ausente ou ilegível).
-Uso incorreto de argumento também sai 2, pelo `argparse`.
+Exit codes: 0 = resposta WHIP aceita (2xx) e sessão encerrada — ou, com
+`--keep-session`, aceita com a sessão deixada viva de propósito; 2 = servidor
+recusou o POST ou está inacessível; 3 = problema de TLS/CA local (arquivo de CA
+ausente ou ilegível); 4 = o POST foi aceito mas o DELETE da sessão falhou (o
+path pode continuar publicado). Uso incorreto de argumento também sai 2, pelo
+`argparse`.
 """
 
 from __future__ import annotations
@@ -252,9 +257,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
             "--path phone. As portas do MediaMTX são publicadas no IP da LAN "
             "(E0-T2), então 127.0.0.1 não responde. Desde o E0-T4 o WebRTC exige "
             "TLS com a CA interna: passe --cacert deploy/certs/ca.crt.\n\n"
-            "Exit codes: 0 = sessão WHIP aceita (2xx e DELETE executado), "
-            "2 = servidor recusou o POST ou está inacessível, "
-            "3 = CA/certificado local ilegível."
+            "Exit codes: 0 = sessão WHIP aceita (2xx) e DELETE executado; "
+            "2 = servidor recusou o POST ou está inacessível; "
+            "3 = CA/certificado local ilegível; "
+            "4 = sessão aceita mas o DELETE falhou (o path pode seguir "
+            "publicado).\n\n"
+            "Com --keep-session o DELETE não é enviado de propósito: a sessão "
+            "fica viva no MediaMTX até o timeout de ICE e o exit é 0, porque a "
+            "sonda provou a sessão (use para inspecionar o path pela RTSP "
+            "enquanto ela dura)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -347,7 +358,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if session_url and not args.keep_session:
         report["delete"] = delete_session(session_url, args.timeout, context)
     elif args.keep_session:
+        # Sessão deixada viva de propósito: exit 0 (o contrato é "a sessão foi
+        # aceita"), com o motivo explícito no relatório.
         report["delete"] = None
+        report["delete_skipped"] = (
+            "--keep-session: sessão deixada viva até o timeout de ICE do "
+            "MediaMTX")
     else:
         report["delete"] = {
             "ok": False,
@@ -356,7 +372,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         }
 
     _print(report)
-    return 0
+
+    # `--help` promete "sessão aceita E encerrada": aceitar o POST com o path
+    # ainda publicado não é sucesso. Exit 4 separa isso de "servidor recusou"
+    # (2), que é diagnóstico diferente.
+    if args.keep_session:
+        return 0
+    return 0 if (report.get("delete") or {}).get("ok") else 4
 
 
 if __name__ == "__main__":

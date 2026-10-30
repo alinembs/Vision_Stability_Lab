@@ -14,6 +14,7 @@ import ssl
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "probe"))
 
@@ -647,6 +648,80 @@ class TestWhipProbeTls(unittest.TestCase):
     def test_base_sobrescreve_o_default(self):
         args = whip_probe.parse_args(["--base", "https://10.0.0.5:8889"])
         self.assertEqual(args.base, "https://10.0.0.5:8889")
+
+
+class TestWhipProbeExitCodes(unittest.TestCase):
+    """I6: o exit code tem de casar com o que o `--help` promete.
+
+    O epilog dizia "0 = sessão aceita (2xx **e** DELETE executado)", mas
+    `main()` saía 0 com `delete.ok: false` — um path publicado passava por
+    sucesso em qualquer script que só olhasse o exit code.
+    """
+
+    POST_OK = {
+        "ok": True,
+        "status": 201,
+        "headers": {"Location": "/phone/whip/abc"},
+        "body": "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n",
+    }
+    DELETE_OK = {"ok": True, "status": 200}
+    BASE = ["--base", "http://127.0.0.1:8889"]
+
+    def _main(self, argv, post=None, delete=None):
+        import contextlib
+        import io
+        import json
+
+        buffer = io.StringIO()
+        with patch.object(whip_probe, "post_offer",
+                          post or (lambda *a, **k: self.POST_OK)), \
+                patch.object(whip_probe, "delete_session",
+                             delete or (lambda *a, **k: self.DELETE_OK)), \
+                contextlib.redirect_stdout(buffer):
+            code = whip_probe.main(self.BASE + argv)
+        return code, (json.loads(buffer.getvalue()) if buffer.getvalue() else None)
+
+    def test_sessao_aceita_e_encerrada_sai_zero(self):
+        code, report = self._main(["--path", "phone"])
+        self.assertEqual(code, 0)
+        self.assertTrue(report["delete"]["ok"])
+        self.assertEqual(report["status"], 201)
+
+    def test_delete_falhando_sai_quatro(self):
+        code, report = self._main(
+            ["--path", "phone"],
+            delete=lambda *a, **k: {"ok": False, "status": 500, "error": "boom"})
+        self.assertEqual(code, 4)
+        self.assertFalse(report["delete"]["ok"])
+        # o relatório continua provando a sessão (o POST foi 2xx)
+        self.assertEqual(report["status"], 201)
+
+    def test_sem_location_sai_quatro(self):
+        """Sessão não identificada = não encerrada: mesmo veredito do DELETE."""
+        post = dict(self.POST_OK, headers={})
+        code, report = self._main(["--path", "phone"], post=lambda *a, **k: post)
+        self.assertEqual(code, 4)
+        self.assertFalse(report["delete"]["ok"])
+        self.assertIn("Location", report["delete"]["error"])
+
+    def test_keep_session_sai_zero_e_marca_skip(self):
+        def _nao_deve_apagar(*a, **k):
+            raise AssertionError("DELETE não pode ser enviado com --keep-session")
+
+        code, report = self._main(["--path", "phone", "--keep-session"],
+                                  delete=_nao_deve_apagar)
+        self.assertEqual(code, 0)
+        self.assertIsNone(report["delete"])
+        self.assertIn("keep-session", report["delete_skipped"])
+
+    def test_post_recusado_sai_dois(self):
+        code, report = self._main(
+            ["--path", "phone"],
+            post=lambda *a, **k: {"ok": False, "status": 409,
+                                  "error": "stream is already available"})
+        self.assertEqual(code, 2)
+        self.assertEqual(report["status"], 409)
+        self.assertEqual(report["tls"], "off")
 
 
 if __name__ == "__main__":
