@@ -37,6 +37,47 @@ async function fetchJson(url) {
   return res.json();
 }
 
+/* ---------------- diagnóstico do WHEP ---------------- */
+
+/**
+ * True se a URL responde a qualquer coisa (inclusive 404/401).
+ *
+ * `mode: "no-cors"` é o ponto: sem ele uma recusa de CORS vira `TypeError`
+ * igual a certificado inválido e o diagnóstico perderia o sentido. Em no-cors
+ * a resposta é opaca, mas a requisição só falha por rede/TLS — exatamente a
+ * separação que interessa aqui. `/` na 8889 responde 404 e isso já prova TLS.
+ */
+async function probeReachable(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3000);
+  try {
+    await fetch(url, { mode: "no-cors", cache: "no-store", signal: controller.signal });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Por que o WHEP falhou: "tls" (CA não confiável), "offline" (host fora) ou
+ * "reachable" (o servidor está de pé; o problema é a sessão).
+ *
+ * O navegador não expõe o motivo de um `fetch` recusado — certificado inválido
+ * e host fora do ar dão o mesmo `TypeError`. A separação sai comparando
+ * esquemas no MESMO host: se o HTTPS da 8889 (WebRTC, desde o E0-T4) não
+ * responde e o HTTP da 8888 (HLS) responde, o host está de pé e o que falta é
+ * confiança no certificado. Sem esse diagnóstico o player anunciava "sem
+ * stream do mediamtx" com o MediaMTX `healthy` — inversão de causa que custou
+ * horas de bancada.
+ */
+async function diagnoseWhepFailure(host) {
+  if (await probeReachable(`https://${host}:8889/`)) return "reachable";
+  if (await probeReachable(`http://${host}:8888/live/`)) return "tls";
+  return "offline";
+}
+
 /* ---------------- WHEP player ---------------- */
 
 const player = {
@@ -93,7 +134,23 @@ const player = {
       $("btn-play").textContent = "Desconectar";
     } catch (err) {
       console.error(err);
-      setVideoStatus("sem stream do mediamtx — tentando de novo…");
+      // Diagnóstico antes da mensagem: "sem stream" com o MediaMTX saudável é
+      // o sintoma de CA não instalada neste navegador (o `fetch` da 8889 falha
+      // na verificação do certificado, não por servidor fora).
+      setVideoStatus("verificando o certificado do mediamtx…");
+      const diag = await diagnoseWhepFailure(location.hostname);
+      if (diag === "tls") {
+        setVideoStatus(
+          "certificado do MediaMTX não é confiável neste navegador — " +
+          "instale deploy/certs/ca.crt na máquina que abre o dashboard " +
+          "(README, seção do dashboard)");
+      } else if (diag === "reachable") {
+        setVideoStatus(
+          "mediamtx respondeu, mas a sessão WHEP falhou — confira o path /live " +
+          "e o log do vision-mediamtx");
+      } else {
+        setVideoStatus("sem stream do mediamtx — tentando de novo…");
+      }
       setLamp("lamp-video", "off");
       this.scheduleReconnect();
     }

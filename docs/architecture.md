@@ -55,6 +55,22 @@ celular   ──► https://192.168.59.102:8443/capture.html (página de captura
 > `deploy/certs/`): o navegador que abre o dashboard precisa confiar na CA
 > interna (`deploy/certs/ca.crt`), senão o `fetch` do WHEP falha por
 > certificado. A página de captura do celular usa a 8443 pelo mesmo motivo.
+>
+> **Requisito de CA na máquina do dashboard (não é do servidor).** O `ca.crt`
+> tem de ser instalado em cada máquina que abre o player:
+>
+> ```bash
+> sudo cp deploy/certs/ca.crt /usr/local/share/ca-certificates/vsl-ca.crt
+> sudo update-ca-certificates   # Chrome/Edge no Linux
+> ```
+>
+> Firefox usa store próprio (*Ver certificados* → *Autoridades* → *Importar*);
+> Android, o runbook `docs/runbooks/captura-celular.md` (seção 3). `docker ps`
+> mostrar tudo `healthy` **não** prova que o player negocia: a verificação do
+> certificado é do navegador. `dashboard/frontend/app.js` distingue os dois
+> casos com uma sonda `no-cors` (HTTPS 8889 vs. HTTP 8888) e mostra
+> "certificado do MediaMTX não é confiável neste navegador — instale
+> deploy/certs/ca.crt" em vez de "sem stream do mediamtx".
 
 - **Saúde derivada** no backend: `healthy` se `interval_metrics` fresco (<90 s) com `fps_processed > 0`; `stale` se telemetria velha; `down` sem telemetria.
 - **Sem persistência além do JSONL**: o histórico dos gráficos é reconstruído replayando o arquivo na partida do backend; SQLite fica para fase futura.

@@ -526,6 +526,27 @@ Para baixa latência, prefira WebRTC. Para a primeira integração, HLS pode ser
 > `${location.hostname}:8889`), logo em `localhost` o player negocia contra uma
 > porta fechada e o vídeo não aparece.
 
+> **A máquina que abre o dashboard precisa confiar na CA interna.** Desde o
+> E0-T4 a 8889 é TLS (`webrtcEncryption: yes`) e o certificado é assinado pela
+> CA de `deploy/certs/` — que não está no store do sistema. Sem instalar o
+> `ca.crt` nessa máquina, o `fetch` do WHEP falha na verificação de certificado
+> e o player anuncia "certificado do MediaMTX não é confiável neste navegador"
+> (antes o sintoma era "sem stream do mediamtx", com tudo `healthy` no
+> `docker ps`). Instalação, no host que abre o dashboard:
+>
+> ```bash
+> sudo cp deploy/certs/ca.crt /usr/local/share/ca-certificates/vsl-ca.crt
+> sudo update-ca-certificates
+> ```
+>
+> Isso vale para Chrome/Edge no Linux (usam o store do sistema). Firefox tem
+> store próprio: `about:preferences#privacy` → *Ver certificados* → *Autoridades*
+> → *Importar* `deploy/certs/ca.crt`. No **Android**, o caminho é o do runbook
+> (`docs/runbooks/captura-celular.md`, seção 3) — Configurações → Segurança →
+> Criptografia e credenciais → Instalar um certificado → Certificado de CA. O
+> aviso de certificado é só do lado do navegador: o pipeline e o
+> `whip_probe.py --cacert` não dependem disso.
+
 ### Fase 5 — Testes de estabilidade
 
 Execute testes controlados:
