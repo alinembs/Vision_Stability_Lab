@@ -518,6 +518,14 @@ Entregáveis:
 
 Para baixa latência, prefira WebRTC. Para a primeira integração, HLS pode ser mais simples, embora normalmente introduza mais atraso.
 
+> **Acesse o dashboard pelo IP da LAN** (`http://192.168.59.102:8081`), não por
+> `http://localhost:8081`. O MediaMTX é publicado amarrado no IP da LAN
+> (`${LAN_IP:-192.168.59.102}`, nunca `0.0.0.0` — DIV-003 em
+> `docs/incident-log.md`), então `127.0.0.1:8889` não responde; e o frontend
+> deriva a URL do WHEP do hostname da página (`dashboard/frontend/app.js`:
+> `${location.hostname}:8889`), logo em `localhost` o player negocia contra uma
+> porta fechada e o vídeo não aparece.
+
 ### Fase 5 — Testes de estabilidade
 
 Execute testes controlados:

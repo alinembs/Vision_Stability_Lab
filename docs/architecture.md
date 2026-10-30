@@ -31,16 +31,24 @@ rtspsrc (latency=200, drop-on-latency, protocols=tcp+udp)
 pipeline_real.py ── JSONL stdout + data/logs/live.jsonl (TELEMETRY_FILE)
                                    │ (volume ro)
                                    ▼
-                     dashboard/backend (FastAPI :8080→8000)
+                     dashboard/backend (FastAPI :8081→8000; host 8080 é do arquo-web)
                        ├── tailer assíncrono do JSONL (replay na partida)
                        ├── ring buffers: 480 amostras de métricas / 500 eventos
                        ├── GET /api/snapshot · /api/history?minutes=N · /api/events
                        └── WS   /ws (snapshot inicial + push por registro)
 
-navegador ──► http://<jetson>:8080            (dashboard: player WHEP + cards + gráficos canvas + log de eventos)
-navegador ──► http://<jetson>:8889/live/whep  (WebRTC, sinalização WHEP do MediaMTX)
-navegador ──► http://<jetson>:8888/live/      (HLS fallback, latência maior)
+navegador ──► http://192.168.59.102:8081        (dashboard: player WHEP + cards + gráficos canvas + log de eventos)
+navegador ──► http://192.168.59.102:8889/live/whep (WebRTC, sinalização WHEP do MediaMTX)
+navegador ──► http://192.168.59.102:8888/live/     (HLS fallback, latência maior)
 ```
+
+> **Acesse o dashboard pelo IP da LAN** (`http://192.168.59.102:8081`), não por
+> `http://localhost:8081`. Dois motivos: (1) as portas do MediaMTX são
+> publicadas amarradas no IP da LAN `${LAN_IP:-192.168.59.102}`, não em
+> `0.0.0.0` (DIV-003, `docs/incident-log.md`), então `127.0.0.1:8889` não
+> responde; (2) `dashboard/frontend/app.js` deriva a URL do WHEP do hostname da
+> página (`location.hostname:8889`), logo abrir o dashboard em `localhost` faz o
+> player apontar para `localhost:8889` e o vídeo fica morto, sem erro na tela.
 
 - **Saúde derivada** no backend: `healthy` se `interval_metrics` fresco (<90 s) com `fps_processed > 0`; `stale` se telemetria velha; `down` sem telemetria.
 - **Sem persistência além do JSONL**: o histórico dos gráficos é reconstruído replayando o arquivo na partida do backend; SQLite fica para fase futura.
