@@ -31,6 +31,7 @@ import pyds  # noqa: E402
 
 from area_monitor import AreaMonitor  # noqa: E402
 from health_metrics import HealthMetricsCollector  # noqa: E402
+from rtsp_env import require_rtsp_uri  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("VisionPipelineReal")
@@ -103,10 +104,8 @@ class FpsCounter:
 
 class VisionPipeline:
     def __init__(self):
-        self.rtsp_uri = os.environ.get(
-            "RTSP_URI",
-            "rtsp://admin:cameraepi1@192.168.59.108:5543/live/channel0",
-        )
+        # Credencial nunca embutida no código (DIV-001).
+        self.rtsp_uri = require_rtsp_uri()
         self.codec = os.environ.get("RTSP_CODEC", "h265").lower()  # câmera confirmada H.265
         self.monitor = AreaMonitor(ttl_seconds=TRACK_TTL_SECONDS,
                                    max_events=MAX_EVENTS_BUFFERED)

@@ -16,3 +16,6 @@ __pycache__/
 
 # Telemetria em runtime (não versionar)
 data/logs/live.jsonl
+
+# Credenciais locais (usar deploy/.env.example como base)
+deploy/.env

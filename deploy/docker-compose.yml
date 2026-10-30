@@ -22,7 +22,9 @@ services:
     privileged: true
     runtime: nvidia
     environment:
-      - RTSP_URI=rtsp://admin:cameraepi1@192.168.59.108:5543/live/channel0
+      # Credencial fora do repositório: preencha deploy/.env (veja deploy/.env.example).
+      # Sem RTSP_URI o pipeline encerra com mensagem clara (deepstream/rtsp_env.py).
+      - RTSP_URI=${RTSP_URI:-}
       - LOG_LEVEL=INFO
       - PREVIEW_ENABLED=${PREVIEW_ENABLED:-1}
       - PREVIEW_TRANSPORT=${PREVIEW_TRANSPORT:-rtsp}

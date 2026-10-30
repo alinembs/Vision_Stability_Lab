@@ -10,6 +10,7 @@ from gi.repository import Gst, GLib
 from tracker_state import TrackerState
 from health_metrics import HealthMetricsCollector
 from tegrastats_reader import TegrastatsReader
+from rtsp_env import require_rtsp_uri  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("VisionPipelineRTSP")
@@ -21,7 +22,7 @@ def main():
     health_collector = HealthMetricsCollector()
     tegrastats = TegrastatsReader()
 
-    rtsp_uri = os.environ.get("RTSP_URI", "rtsp://admin:cameraepi1@192.168.59.108:5543/live/channel0")
+    rtsp_uri = require_rtsp_uri()
     logger.info(f"Conectando à câmera RTSP real: {rtsp_uri}")
 
     # Pipeline GStreamer adaptado para o ambiente sem plugins de SDK DeepStream (nvinfer/nvstreammux),

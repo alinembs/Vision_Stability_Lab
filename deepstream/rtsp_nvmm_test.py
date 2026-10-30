@@ -6,13 +6,14 @@ import logging
 import gi
 gi.require_version('Gst', '1.0')
 from gi.repository import Gst, GLib
+from rtsp_env import require_rtsp_uri  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("RTSPNVMMTest")
 
 def main():
     Gst.init(None)
-    rtsp_uri = os.environ.get("RTSP_URI", "rtsp://admin:cameraepi1@192.168.59.108:5543/live/channel0")
+    rtsp_uri = require_rtsp_uri()
     logger.info(f"Testando pipeline NVMM completo: {rtsp_uri}")
 
     # Pipeline mantendo tudo em NVMM para o encoder acelerado

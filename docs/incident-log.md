@@ -39,3 +39,5 @@
 - **Tipo:** Dívida de segurança (não incidente — ainda sem exposição conhecida)
 - **Descrição:** `deepstream/pipeline_real.py` usa usuário/senha da câmera como valor default de `RTSP_URI` (`rtsp://admin:...@...`). Qualquer clone do repositório expõe a credencial.
 - **Ação requerida:** remover as credenciais hardcoded (exigir `RTSP_URI` via ambiente/secret) **antes** de compartilhar o repo ou iniciar a Fase 3.
+- **Status:** **resolvido em 2026-10-30.** `RTSP_URI` passou a ser obrigatória via ambiente (`deepstream/rtsp_env.py`; `require_rtsp_uri()` encerra com mensagem clara se ausente). A URI saiu de `pipeline_real.py`, de `pipeline_rtsp_real.py` e dos 6 scripts `rtsp_*_test.py`/`rtsp_bin_complete.py`, e de `deploy/docker-compose.yml` (agora `${RTSP_URI:-}` a partir de `deploy/.env`, não versionado; modelo em `deploy/.env.example`). Guarda de regressão em `deepstream/tests/test_no_hardcoded_secrets.py`.
+- **Pendência:** a credencial **permanece no histórico do Git**. Trocar a senha da câmera e, se o repo for publicado, considerar reescrita de histórico (`git filter-repo`).
