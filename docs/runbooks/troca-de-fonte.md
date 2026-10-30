@@ -31,7 +31,7 @@ Duas regras do pós-check que evitam PASS mentiroso:
 Saída (contrato de uma linha):
 
 ```text
-PASS source=camera first_frame_in=34,3s fps_in=19.9 codec=h265 precheck=ok session_epoch=2026-10-30T21:39:37.457+00:00
+PASS source=camera first_frame_in=34.2s fps_in=15.9 codec=h265 precheck=ok session_epoch=2026-10-30T21:44:53.933+00:00
 FAIL source=drone reason="no_frames_on_path" observed="camera" rollback=restored:camera last_error="—"
 ```
 

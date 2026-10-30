@@ -26,6 +26,9 @@
 #      `session_epoch >= StartedAt` do container: sem isso, uma troca para a
 #      mesma fonte já ativa aprovaria com a métrica do processo anterior.
 #
+# Toda execução deixa uma linha em `data/logs/switch.jsonl` — inclusive a
+# tentativa bloqueada pelo guard de precedência (exit 3).
+#
 # Uso:
 #   ./scripts/switch_source.sh camera
 #   ./scripts/switch_source.sh drone --timeout 120
@@ -61,9 +64,9 @@ TELEMETRY_FILE="${TELEMETRY_FILE:-$REPO_ROOT/data/logs/live.jsonl}"
 SWITCH_LOG="${SWITCH_LOG:-$REPO_ROOT/data/logs/switch.jsonl}"
 PRECHECK_SECONDS="${PRECHECK_SECONDS:-5}"
 
-# Estado do arquivo de controle anterior (preenchido em definitivo depois do
-# pré-check; os defaults existem porque `record_switch` é chamado também nos
-# caminhos que abortam antes de ler o controle).
+# Estado do arquivo de controle anterior (preenchido antes do guard de
+# precedência, porque a tentativa bloqueada também é registrada em
+# `switch.jsonl` com o `from` correto).
 PREVIOUS_EXISTS=0
 PREVIOUS_VALUE=""
 # `StartedAt` do processo novo e epoch local logo depois da recriação: são a
@@ -152,9 +155,18 @@ resolved=$("$PYTHON" "$LIB" resolve --id "$SOURCE_ID" --env-file "$ENV_FILE") \
     || exit 2
 PRECHECK_URI="$(kv "$resolved" precheck_uri)"
 MASKED_URI="$(kv "$resolved" masked_uri)"
+PRECHECK_MASKED_URI="$(kv "$resolved" precheck_masked_uri)"
 CODEC="$(kv "$resolved" codec)"
 TARGET_FPS="$(kv "$resolved" target_fps)"
 log "fonte válida: id=$SOURCE_ID codec=$CODEC target_fps=$TARGET_FPS uri=$MASKED_URI"
+
+# --- 1b. valor anterior do controle ----------------------------------------
+# Lido antes do guard: a tentativa bloqueada também é auditada (F4) e a linha
+# de `switch.jsonl` precisa do `from` real.
+if [[ -f "$CONTROL_FILE" ]]; then
+    PREVIOUS_EXISTS=1
+    PREVIOUS_VALUE="$(cat -- "$CONTROL_FILE")"
+fi
 
 # --- 2. guarda de precedência: ACTIVE_SOURCE vence o arquivo ---------------
 container_active="$(docker exec "$APP_CONTAINER" printenv ACTIVE_SOURCE \
@@ -166,6 +178,11 @@ if ! guard_out=$("$PYTHON" "$LIB" guard \
     # O bloco traz a mensagem acionável e uma linha de contrato (`blocked=1`)
     # que não interessa a quem lê o erro.
     printf '%s\n' "$guard_out" | grep -v '^blocked=' >&2 || true
+    # Contrato do módulo: uma linha por execução, PASS ou FAIL. Tentativa
+    # bloqueada também é execução — sem isto a recusa não deixava auditoria.
+    # `probe=blocked`: a sonda nem chegou a rodar (o guard veio antes, D7).
+    PRECHECK_NOTE="blocked"
+    record_switch "FAIL" "active_source_no_ambiente"
     die 3 "FAIL source=$SOURCE_ID reason=active_source_no_ambiente (nada foi escrito; container intacto)"
 fi
 
@@ -174,7 +191,10 @@ if [[ "$SKIP_PRECHECK" == "1" ]]; then
     PRECHECK_NOTE="skipped"
     log "AVISO: pré-check pulado (--skip-precheck) — só para o teste de ciclo (E6)"
 else
-    log "pré-check: lendo $MASKED_URI por ${PRECHECK_SECONDS}s"
+    # A URI logada é a **sondada** (host da LAN), não a do YAML (`mediamtx`) —
+    # logar outra URI manda o operador diagnosticar um endereço que a sonda
+    # nunca abriu. Mascarada: DIV-001.
+    log "pré-check: lendo $PRECHECK_MASKED_URI por ${PRECHECK_SECONDS}s"
     if ! probe_json=$("$PYTHON" "$PROBE" --url "$PRECHECK_URI" \
         --seconds "$PRECHECK_SECONDS" --json 2>/dev/null); then
         probe_info=$("$PYTHON" "$LIB" probe-reason --report "$probe_json" \
@@ -190,11 +210,7 @@ else
     log "pré-check PASS: a fonte está entregando vídeo"
 fi
 
-# --- 4. valor anterior + escrita atômica do controle -----------------------
-if [[ -f "$CONTROL_FILE" ]]; then
-    PREVIOUS_EXISTS=1
-    PREVIOUS_VALUE="$(cat -- "$CONTROL_FILE")"
-fi
+# --- 4. escrita atômica do controle ---------------------------------------
 log "fonte anterior: ${PREVIOUS_VALUE:-<vazio: default_source do YAML>}"
 
 telemetry_offset=0

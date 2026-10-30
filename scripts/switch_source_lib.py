@@ -185,13 +185,19 @@ def precheck_url(uri: str, env: Mapping[str, str]) -> str:
 def source_report(source: "sources.SourceConfig",
                   env: Mapping[str, str]) -> Dict[str, str]:
     """Linhas `chave=valor` que o bash consome em `resolve`."""
+    precheck = precheck_url(source.uri, env)
     return {
         "id": source.id,
         "codec": source.codec,
         "target_fps": f"{source.target_fps:g}",
         # Nunca a URI crua: `masked_uri` é a única forma que pode ir para log.
         "masked_uri": source.masked_uri(),
-        "precheck_uri": precheck_url(source.uri, env),
+        "precheck_uri": precheck,
+        # O log do pré-check citava a URI do YAML (host `mediamtx`, DNS do
+        # compose) enquanto a sonda usava o host da LAN: URI diferente da
+        # sondada é diagnóstico errado quando o path está mudo. Esta é a URI
+        # que a sonda realmente abriu, mascarada (DIV-001).
+        "precheck_masked_uri": sources.mask_uri(precheck),
     }
 
 
@@ -521,9 +527,13 @@ def switch_record(*, source_id: str, previous: str, result: str, reason: str,
                   extra: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     """Linha de `data/logs/switch.jsonl` (uma por execução, PASS ou FAIL).
 
-    `probe` é `ok`, `skipped` (`--skip-precheck`, usado no teste de ciclo E6) ou
+    `probe` é `ok`, `skipped` (`--skip-precheck`, usado no teste de ciclo E6),
+    `blocked` (o guard de precedência abortou antes de qualquer sonda) ou
     `failed`. O histórico de trocas é o que permite responder "quando o drone
-    entrou e por quê" sem vasculhar `live.jsonl`.
+    entrou e por quê" sem vasculhar `live.jsonl`. Uma linha por **execução**:
+    PASS, FAIL do pós-check e também a tentativa bloqueada no guard de
+    precedência (`reason=active_source_no_ambiente`), que antes abortava sem
+    deixar rastro em `switch.jsonl`.
     """
     record: Dict[str, Any] = {
         "ts": timestamp or datetime.now(timezone.utc).isoformat(

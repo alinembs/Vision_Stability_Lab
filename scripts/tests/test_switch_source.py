@@ -233,6 +233,29 @@ class PrecheckUrlTest(unittest.TestCase):
         uri = lib.precheck_url("rtsps://mediamtx:8322/phone?x=1", {})
         self.assertEqual(uri, "rtsps://192.168.59.102:8322/phone?x=1")
 
+    def test_uri_logada_e_a_que_a_sonda_abriu(self) -> None:
+        """F5: o log citava `mediamtx` e a sonda abria o host da LAN.
+
+        Diagnóstico com o endereço errado manda o operador olhar para um host
+        que a sonda nunca tocou. A URI do log é a sondada, mascarada.
+        """
+        fonte = lib.resolve_source(
+            "drone", {"MTX_HOST": "10.0.0.7", "RTSP_URI": URI_CAMERA},
+            str(RAIZ / "deepstream" / "config" / "sources.yaml"))
+        relatorio = lib.source_report(fonte, {"MTX_HOST": "10.0.0.7"})
+        self.assertEqual(relatorio["precheck_masked_uri"], relatorio["precheck_uri"])
+        self.assertIn("10.0.0.7", relatorio["precheck_masked_uri"])
+        self.assertNotIn("mediamtx", relatorio["precheck_masked_uri"])
+
+    def test_credencial_nao_vaza_na_uri_do_precheck_logada(self) -> None:
+        """O host do drone é alcançável e tem credencial: só `***@` vai ao log."""
+        camera = _com_credencial(URI_CAMERA)
+        fonte = lib.sources.SourceConfig(id="camera", name="câmera",
+                                         uri=camera, codec="h265")
+        relatorio = lib.source_report(fonte, {})
+        self.assertNotIn(SENHA_FALSA, relatorio["precheck_masked_uri"])
+        self.assertIn("***@192.168.59.108:5543", relatorio["precheck_masked_uri"])
+
 
 # ---------------------------------------------------------------------------
 # deploy/.env
@@ -615,6 +638,18 @@ class RegistroDaTrocaTest(unittest.TestCase):
                                    result="PASS", reason="ok", probe="skipped")
         self.assertEqual(record["probe"], "skipped")
 
+    def test_tentativa_bloqueada_tem_motivo_e_probe_proprio(self) -> None:
+        """F4: o guard de precedência abortava sem deixar auditoria."""
+        record = lib.switch_record(
+            source_id="camera", previous="drone", result="FAIL",
+            reason="active_source_no_ambiente", probe="blocked")
+        self.assertEqual(record["result"], "FAIL")
+        self.assertEqual(record["reason"], "active_source_no_ambiente")
+        self.assertEqual(record["from"], "drone")
+        self.assertEqual(record["to"], "camera")
+        self.assertEqual(record["probe"], "blocked")
+        json.dumps(record)
+
 
 # ---------------------------------------------------------------------------
 # Contrato do script (texto, sem executar)
@@ -681,6 +716,30 @@ class ContratoDoScriptTest(unittest.TestCase):
         """F2: `--since $SWITCH_START` era o bug — o custo fixo comia o orçamento."""
         self.assertNotIn("--since \"$SWITCH_START\"", self.codigo)
         self.assertNotIn("SWITCH_START", self.codigo)
+
+    # -- F4/F5 --------------------------------------------------------------
+    def test_tentativa_bloqueada_fica_no_switch_jsonl(self) -> None:
+        """F4: uma linha por execução, inclusive a recusada pelo guard."""
+        guarda = self.codigo.index('guard_out=$("$PYTHON" "$LIB" guard')
+        registro = self.codigo.index(
+            'record_switch "FAIL" "active_source_no_ambiente"')
+        saida = self.codigo.index("die 3", guarda)
+        self.assertLess(guarda, registro)
+        self.assertLess(registro, saida,
+                        "o registro precisa acontecer antes do exit 3")
+
+    def test_valor_anterior_e_lido_antes_do_guarda(self) -> None:
+        self.assertLess(self.codigo.index('PREVIOUS_VALUE="$(cat -- "$CONTROL_FILE")"'),
+                        self.codigo.index('guard_out=$("$PYTHON" "$LIB" guard'))
+
+    def test_precheck_loga_a_uri_sondada_e_nao_a_do_yaml(self) -> None:
+        """F5: `$MASKED_URI` é a do YAML (`mediamtx`), não a que a sonda abriu."""
+        linha = [l for l in self.codigo.splitlines()
+                 if l.strip().startswith("log \"pré-check: lendo")]
+        self.assertEqual(len(linha), 1, "o log do pré-check mudou de forma")
+        self.assertIn("$PRECHECK_MASKED_URI", linha[0])
+        self.assertNotIn("$MASKED_URI", linha[0])
+        self.assertIn('--url "$PRECHECK_URI"', self.codigo)
 
 
 
