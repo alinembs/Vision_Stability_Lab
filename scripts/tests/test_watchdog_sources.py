@@ -101,14 +101,20 @@ class FakeDocker:
         return ""
 
 
-class WatchdogSourcesTest(unittest.TestCase):
+class WatchdogHarness(unittest.TestCase):
     def setUp(self) -> None:
         self.clock = FakeClock()
         self.events: list[tuple[str, dict]] = []
+        # Marcador de troca de fonte em diretório temporário: nenhum teste pode
+        # depender de `data/config/switch_in_progress` da bancada.
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.switch_marker = Path(self._tmp.name) / "switch_in_progress"
         self._patchers = [
             patch.object(wd, "time", SimpleNamespace(
                 monotonic=self.clock.monotonic, time=self.clock.time)),
             patch.object(wd, "emit", self._record),
+            patch.object(wd, "SWITCH_MARKER", str(self.switch_marker)),
         ]
         for patcher in self._patchers:
             patcher.start()
@@ -159,7 +165,7 @@ class WatchdogSourcesTest(unittest.TestCase):
 
     def run_loop(self, seconds: float, freeze_counter: bool = False) -> None:
         """Reproduz o loop: clock em passos de CHECK_INTERVAL_S, uma métrica
-        por METRICS_INTERVAL_S e `_rule1_idle()` a cada passo.
+        por METRICS_INTERVAL_S, marcador de troca e `_rule1_idle()` a cada passo.
 
         `freeze_counter=True` mantém `frames_total_in` parado (processo vivo
         que parou de entregar frame sem reiniciar o contador).
@@ -177,7 +183,13 @@ class WatchdogSourcesTest(unittest.TestCase):
                 if not freeze_counter:
                     self.frames_total += int(self.fps_in * METRICS_INTERVAL_S)
                 self.feed()
+            # Mesma ordem do `run()`: marcador de troca, depois a Regra 1.
+            self.dog._observe_switch_marker()
             self.dog._rule1_idle()
+
+
+class WatchdogSourcesTest(WatchdogHarness):
+    """Regra 1 ("tem frame?") e crash-loop com contador por processo."""
 
     # -- (a) operação normal -------------------------------------------------
     def test_sequencia_normal_de_contadores_crescentes(self) -> None:
@@ -653,6 +665,227 @@ class WatchdogSourcesTest(unittest.TestCase):
         # e sem spam: no máximo uma linha por ALERT_COOLDOWN_S
         self.assertLessEqual(self.count("container_missing"),
                              int(360 / wd.ALERT_COOLDOWN_S) + 1)
+
+
+class SwitchMarkerTest(WatchdogHarness):
+    """Marcador `switch_in_progress` (E2-T3): uma troca não gera alerta.
+
+    `scripts/switch_source.sh` recria o container do pipeline no meio da troca.
+    Para o watchdog, 5 `StartedAt` novos em minutos é, por assinatura,
+    crash-loop — foi o `crash_loop_detected` informativo observado na bancada
+    em 2026-10-30 20:56. O critério do E2-T3 é que a troca **não** gere alerta.
+    """
+
+    def write_marker(self, raw: str) -> None:
+        self.switch_marker.write_text(raw, encoding="utf-8")
+
+    def marker_for(self, ttl_s: float, to: str = "camara") -> None:
+        """Marcador válido por `ttl_s` segundos, no relógio do teste."""
+        import datetime
+
+        expires = datetime.datetime.fromtimestamp(
+            self.clock.time() + ttl_s,
+            datetime.timezone.utc).isoformat(timespec="milliseconds")
+        self.write_marker(json.dumps({"to": to, "expires_at": expires}))
+
+    def restart_series(self, reinicios: int, intervalo_s: float = 60.0) -> None:
+        for n in range(reinicios):
+            self.dog.docker.simulate_restart(
+                f"2026-10-30T21:{n:02d}:00.000000000Z")
+            self.run_loop(intervalo_s, freeze_counter=True)
+
+    def restart_reasons(self) -> list[str]:
+        return [f["reason"] for name, f in self.events
+                if name == "restart_triggered"]
+
+    # -- (a) troca em andamento ---------------------------------------------
+    def test_marcador_valido_silencia_crash_loop_e_no_frames(self) -> None:
+        self.run_loop(150)
+        self.events.clear()
+        self.fps_in = 0.0
+        self.fps_processed = 0.0
+        self.marker_for(3600)             # a troca inteira
+
+        self.restart_series(wd.CRASH_LOOP_MIN_RESTARTS + 2)
+
+        self.assertNotIn("crash_loop_detected", self.names())
+        self.assertNotIn("no_frames_detected", self.names())
+        self.assertEqual(self.restart_reasons(), [])
+
+    def test_observado_uma_vez_por_marcador(self) -> None:
+        """Um evento por troca, não um a cada poll de 10 s."""
+        self.marker_for(3600, to="drone")
+        self.run_loop(120)
+
+        self.assertEqual(self.count("switch_in_progress_observed"), 1)
+        observado = self.first("switch_in_progress_observed")
+        self.assertEqual(observado["to"], "drone")
+        self.assertGreater(observado["ttl_s"], 0)
+
+    def test_novo_marcador_e_anunciado_de_novo(self) -> None:
+        self.marker_for(3600, to="drone")
+        self.run_loop(60)
+        self.events.clear()
+
+        # troca seguinte (drone -> camera), com outro expires_at
+        self.clock.advance(10)
+        self.marker_for(3600, to="camera")
+        self.run_loop(60)
+        self.assertEqual(self.count("switch_in_progress_observed"), 1)
+        self.assertEqual(self.first("switch_in_progress_observed")["to"],
+                         "camera")
+
+    def test_recriacao_da_troca_nao_entra_na_janela_de_crash_loop(self) -> None:
+        """O evento saía **depois** da troca, com o marcador já removido.
+
+        Medido em bancada (2026-10-30 21:34:52): a troca foi confirmada
+        (`PASS`) e 5 s depois o watchdog emitia `crash_loop_detected` com
+        `frames_flowing: true`, porque as recriações do `switch_source.sh`
+        ficavam no deque de 900 s. Recriação durante o marcador não é crash-loop.
+        """
+        self.run_loop(150)
+        self.events.clear()
+        self.fps_in = FPS_NOMINAL
+        self.marker_for(3600)
+
+        self.restart_series(wd.CRASH_LOOP_MIN_RESTARTS + 2)
+        self.assertNotIn("crash_loop_detected", self.names())
+
+        # Trocas terminam: o script remove o marcador.
+        self.switch_marker.unlink()
+        self.run_loop(wd.RULE1_FRAME_TIMEOUT_S * 2)
+
+        self.assertNotIn("crash_loop_detected", self.names(),
+                         "crash_loop_detected saiu depois da troca")
+        self.assertEqual(self.restart_reasons(), [])
+        self.assertEqual(self.dog._switch_restarts,
+                         wd.CRASH_LOOP_MIN_RESTARTS + 2)
+
+    def test_crash_loop_real_depois_da_troca_continua_detectado(self) -> None:
+        """A exclusão vale só enquanto o marcador existe — nada fica cego."""
+        self.run_loop(150)
+        self.events.clear()
+        self.fps_in = 0.0
+        self.fps_processed = 0.0
+
+        self.marker_for(3600)
+        self.restart_series(2)
+        self.switch_marker.unlink()       # troca terminou
+        self.restart_series(wd.CRASH_LOOP_MIN_RESTARTS + 1)
+
+        self.assertIn("crash_loop_detected", self.names())
+
+    # -- (b) marcador expirado / ausente ------------------------------------
+    def test_marcador_expirado_volta_ao_comportamento_normal(self) -> None:
+        """Marcador órfão de um `kill -9` não pode calar o watchdog para sempre."""
+        self.marker_for(-30)              # já expirado
+        self.run_loop(150)
+        self.events.clear()
+        self.fps_in = 0.0
+        self.fps_processed = 0.0
+
+        self.restart_series(wd.CRASH_LOOP_MIN_RESTARTS + 1)
+
+        self.assertIn("crash_loop_detected", self.names())
+        self.assertNotIn("switch_in_progress_observed", self.names())
+
+    def test_sem_marcador_nada_muda(self) -> None:
+        self.run_loop(150)
+        self.events.clear()
+        self.fps_in = 0.0
+        self.run_loop(wd.RULE1_FRAME_TIMEOUT_S + 20, freeze_counter=True)
+        self.assertIn("no_frames_detected", self.names())
+        self.assertNotIn("switch_in_progress_observed", self.names())
+        self.assertNotIn("switch_marker_invalid", self.names())
+
+    # -- (c) marcador corrompido --------------------------------------------
+    def test_marcador_corrompido_e_ignorado_e_logado(self) -> None:
+        self.write_marker('{"to": "drone", "expires_at"')   # JSON truncado
+        self.run_loop(150)
+        self.fps_in = 0.0
+        self.run_loop(wd.RULE1_FRAME_TIMEOUT_S + 20, freeze_counter=True)
+
+        self.assertEqual(self.count("switch_marker_invalid"), 1,
+                         "o marcador inválido precisa aparecer no log, uma vez")
+        self.assertEqual(self.first("switch_marker_invalid")["reason"], "corrupt")
+        # Ignorado = regras normais valem: frame parado ainda alerta.
+        self.assertIn("no_frames_detected", self.names())
+        self.assertNotIn("switch_in_progress_observed", self.names())
+
+    def test_marcador_sem_expires_at_e_tratado_como_corrompido(self) -> None:
+        self.write_marker('{"to": "drone"}')
+        self.dog._observe_switch_marker()
+        self.assertFalse(self.dog._switch_active)
+        self.assertEqual(self.first("switch_marker_invalid")["reason"], "corrupt")
+
+    # -- (d) regras de segurança continuam valendo --------------------------
+    def test_ram_critica_ainda_escala_durante_a_troca(self) -> None:
+        """Suprimir RAM/CUDA durante a troca esconderia o risco real do Jetson."""
+        self.marker_for(3600)
+        self.run_loop(150)
+        self.events.clear()
+
+        with patch.object(wd, "system_ram_used_pct", return_value=95.0):
+            for _ in range(wd.RAM_CONFIRMATIONS + 1):
+                self.dog._observe_switch_marker()
+                self.dog._rule1_idle()
+                self.dog._rule4_ram()
+                self.clock.advance(wd.CHECK_INTERVAL_S)
+
+        self.assertEqual(self.restart_reasons(), ["system_ram_critical"])
+
+
+class ReadSwitchMarkerTest(unittest.TestCase):
+    """`read_switch_marker` isolado: ausente, expirado, corrompido, válido."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.path = Path(self._tmp.name) / "switch_in_progress"
+        self.now = 1_793_400_000.0
+
+    def write(self, raw: str) -> None:
+        self.path.write_text(raw, encoding="utf-8")
+
+    def iso(self, epoch: float) -> str:
+        return datetime.datetime.fromtimestamp(
+            epoch, datetime.timezone.utc).isoformat(timespec="milliseconds")
+
+    def test_ausente_nao_esta_ativo(self) -> None:
+        self.assertEqual(wd.read_switch_marker(self.path, self.now),
+                         (False, {"reason": "absent"}))
+
+    def test_valido_esta_ativo_com_ttl(self) -> None:
+        self.write(json.dumps({"to": "drone",
+                               "expires_at": self.iso(self.now + 90)}))
+        ativo, info = wd.read_switch_marker(self.path, self.now)
+        self.assertTrue(ativo)
+        self.assertEqual(info["to"], "drone")
+        self.assertAlmostEqual(info["ttl_s"], 90.0, delta=0.1)
+
+    def test_expirado_nao_esta_ativo(self) -> None:
+        self.write(json.dumps({"to": "drone",
+                               "expires_at": self.iso(self.now - 5)}))
+        ativo, info = wd.read_switch_marker(self.path, self.now)
+        self.assertFalse(ativo)
+        self.assertEqual(info["reason"], "expired")
+        self.assertEqual(info["to"], "drone")
+
+    def test_corrompido_nao_esta_ativo(self) -> None:
+        for raw in ("", "não é json", "[1, 2]", '{"expires_at": "nada"}',
+                    '{"to": "drone"}'):
+            self.write(raw)
+            ativo, info = wd.read_switch_marker(self.path, self.now)
+            self.assertFalse(ativo, f"{raw!r} não pode suprimir alerta")
+            self.assertEqual(info["reason"], "corrupt", raw)
+
+    def test_arquivo_ilegivel_nao_esta_ativo(self) -> None:
+        """`open` de um diretório levanta IsADirectoryError (OSError)."""
+        diretorio = Path(self._tmp.name) / "dir"
+        diretorio.mkdir()
+        ativo, info = wd.read_switch_marker(diretorio, self.now)
+        self.assertFalse(ativo)
+        self.assertEqual(info["reason"], "unreadable")
 
 
 class AgeSecondsTest(unittest.TestCase):

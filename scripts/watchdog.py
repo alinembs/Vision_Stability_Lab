@@ -25,6 +25,14 @@ Evento fora das regras: `container_missing` — a API do Docker devolveu 404
 para o container observado (o stack sumiu). Distinto de `api_down`; não
 escala restart (reiniciar container inexistente falha calado).
 
+Troca de fonte em andamento (E2-T3): `data/config/switch_in_progress` marca o
+intervalo em que `scripts/switch_source.sh` recria o container. Enquanto o
+marcador existe e não expirou, a Regra 1 e o crash-loop ficam mudos
+(`switch_in_progress_observed` sai uma vez) — `up -d --force-recreate` em série
+é, por assinatura, idêntico a crash-loop, e o critério do E2-T3 é que uma troca
+não gere alerta. RAM/CUDA continuam valendo. Marcador corrompido é registrado
+(`switch_marker_invalid`) e ignorado.
+
 Fontes de dados:
   - data/logs/live.jsonl  (telemetria JSONL do pipeline, seguida em tail)
   - /proc/meminfo         (RAM do sistema)
@@ -52,6 +60,12 @@ WATCHDOG_LOG = os.environ.get(
 
 APP_CONTAINER = os.environ.get("APP_CONTAINER", "vision-stability-app")
 DOCKER_SOCK = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
+# Marcador de troca de fonte em andamento (E2-T3): escrito por
+# `scripts/switch_source.sh` com `{"to": "<id>", "expires_at": "<ISO>"}` e
+# removido ao fim. Enquanto ele vale, a recriação do container é **esperada** —
+# não é crash-loop nem fonte morta.
+SWITCH_MARKER = os.environ.get(
+    "SWITCH_MARKER", "/app/data/config/switch_in_progress")
 
 CHECK_INTERVAL_S = float(os.environ.get("WATCHDOG_INTERVAL_S", "10"))
 STARTUP_GRACE_S = float(os.environ.get("WATCHDOG_GRACE_S", "120"))
@@ -316,16 +330,12 @@ DOCKER_TS_RE = re.compile(
     r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?")
 
 
-def _age_seconds(iso_ts, now_epoch=None):
-    """Idade, em segundos, de um timestamp ISO-8601 do Docker.
+def _timestamp_epoch(iso_ts):
+    """Epoch (UTC) de um timestamp ISO-8601 do Docker/pipeline, ou None.
 
-    O Docker devolve nanossegundos (`...16:59:23.123456789Z`) e `strptime`
-    só aceita microssegundos — daí o parse manual da fração.
-
-    Nunca levanta: `StartedAt` malformado devolve None (o watchdog volta ao
-    comportamento antigo, sem carência) e idade negativa — relógio do host
-    andou para trás depois do start do container — é tratada como 0, o que dá
-    a mesma carência de um processo recém-subido.
+    O Docker devolve nanossegundos (`...16:59:23.123456789Z`) e `strptime` só
+    aceita microssegundos — daí o parse manual da fração. Nunca levanta:
+    timestamp malformado (`nada`, `2026-13-45T99:99:99Z`) devolve None.
     """
     match = DOCKER_TS_RE.match(iso_ts or "")
     if not match:
@@ -337,9 +347,77 @@ def _age_seconds(iso_ts, now_epoch=None):
         fracao = float("0." + (match.group(2) or "0")[:6])
     except (ValueError, OverflowError, OSError):
         return None
+    return base + fracao
+
+
+def _age_seconds(iso_ts, now_epoch=None):
+    """Idade, em segundos, de um timestamp ISO-8601 do Docker.
+
+    Nunca levanta: `StartedAt` malformado devolve None (o watchdog volta ao
+    comportamento antigo, sem carência) e idade negativa — relógio do host
+    andou para trás depois do start do container — é tratada como 0, o que dá
+    a mesma carência de um processo recém-subido.
+    """
+    base = _timestamp_epoch(iso_ts)
+    if base is None:
+        return None
     agora = time.time() if now_epoch is None else now_epoch
-    idade = agora - base - fracao
+    idade = agora - base
     return round(idade, 1) if idade > 0 else 0.0
+
+
+def read_switch_marker(path, now_epoch=None):
+    """Estado do marcador de troca de fonte (E2-T3) — `(ativo, info)`.
+
+    `scripts/switch_source.sh` grava `data/config/switch_in_progress` com
+    `{"to": "<id>", "expires_at": "<ISO>"}` e o remove no fim (trap, inclusive
+    em falha). O watchdog precisa deste sinal por dois motivos:
+
+    - `up -d --no-deps --force-recreate` em série tem, por assinatura, a mesma
+      cara de um crash-loop (5 `StartedAt` novos em minutos) — `crash_loop`
+      durante uma troca é ruído garantido, e o critério do E2-T3 é que uma
+      troca **não** gere alerta;
+    - a carência de startup não cobre todo o intervalo em que o processo novo
+      ainda não publicou `interval_metrics` (~34 s).
+
+    Tolerante por construção:
+
+      - arquivo ausente (o caso normal, 99,9% do tempo) -> `(False, absent)`;
+      - `expires_at` no passado -> `(False, expired)`: marcador órfão de um
+        `kill -9` no meio da troca deixa de valer sozinho;
+      - JSON inválido, `expires_at` ausente/ilegível ou arquivo ilegível ->
+        `(False, corrupt|unreadable)`: vale o comportamento normal (alertar) e
+        o caso vai para o log. Nunca deixar um marcador malformado suprimir
+        regra de segurança.
+
+    Devolve `(True, {"to", "expires_at", "ttl_s"})` só quando a troca está em
+    andamento e ainda não expirou.
+    """
+    now = time.time() if now_epoch is None else now_epoch
+    try:
+        with open(path) as handle:
+            raw = handle.read()
+    except FileNotFoundError:
+        return False, {"reason": "absent"}
+    except OSError as exc:
+        return False, {"reason": "unreadable", "detail": str(exc)}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return False, {"reason": "corrupt", "detail": f"json: {exc.msg}"}
+    if not isinstance(data, dict):
+        return False, {"reason": "corrupt", "detail": "não é um objeto JSON"}
+    expires_raw = data.get("expires_at")
+    expires_epoch = _timestamp_epoch(str(expires_raw or ""))
+    if expires_epoch is None:
+        return False, {"reason": "corrupt",
+                       "detail": "expires_at ausente ou ilegível"}
+    ttl = expires_epoch - now
+    if ttl <= 0:
+        return False, {"reason": "expired", "to": data.get("to") or "",
+                       "expires_at": expires_raw, "ttl_s": round(ttl, 1)}
+    return True, {"to": data.get("to") or "", "expires_at": expires_raw,
+                  "ttl_s": round(ttl, 1)}
 
 
 def system_ram_used_pct():
@@ -409,6 +487,17 @@ class Watchdog:
         # Regra 5 — logs/CUDA
         self.log_last_poll = 0.0
         self.log_since_epoch = time.time()
+
+        # Troca de fonte em andamento (E2-T3): enquanto o marcador vale, a
+        # recriação do container é esperada. Suprime `no_frames_detected` e
+        # `crash_loop_detected` — **não** as regras de RAM/CUDA.
+        self._switch_active = False
+        self._switch_reported = None          # (to, expires_at) já anunciado
+        self._switch_invalid_reported = None  # conteúdo já registrado inválido
+        # Recriações causadas por troca (marcador válido). Ficam FORA da janela
+        # de crash-loop: se entrassem, o evento sairia no primeiro poll depois
+        # da troca (medido em 2026-10-30 21:34:52, `frames_flowing: true`).
+        self._switch_restarts = 0
 
     # -- ações -------------------------------------------------------------
     def _can_restart(self):
@@ -581,9 +670,19 @@ class Watchdog:
         Em crash-loop o processo troca a cada poll de 10 s: emitir uma linha
         por troca enchia o log de ruído e escondia o evento que importa
         (`crash_loop_detected`). Os restarts continuam contados no deque.
+
+        Restart com `switch_in_progress` válido **não** entra no deque: é o
+        `up -d --force-recreate` do `switch_source.sh`, não crash-loop. Sem
+        essa exclusão o evento sairia mesmo assim — no primeiro poll depois que
+        o script removesse o marcador, com a troca já confirmada (medido em
+        2026-10-30 21:34:52).
         """
         events = self._restart_events
-        events.append(now)
+        esperado = self._switch_active
+        if esperado:
+            self._switch_restarts += 1
+        else:
+            events.append(now)
         while events and now - events[0] > CRASH_LOOP_WINDOW_S:
             events.popleft()
         emitida = self._restart_event_emitted_at
@@ -595,7 +694,8 @@ class Watchdog:
              restarts_in_window=len(events),
              window_s=CRASH_LOOP_WINDOW_S,
              action="nova carência; base do contador zerada",
-             grace_s=STARTUP_GRACE_S)
+             grace_s=STARTUP_GRACE_S,
+             expected_by_switch=esperado)
 
     def _crash_loop_check(self, now):
         """True quando o container está em crash-loop (>= N restarts na janela).
@@ -652,11 +752,55 @@ class Watchdog:
                       window_s=CRASH_LOOP_WINDOW_S)
         return True
 
+    def _observe_switch_marker(self):
+        """Lê `switch_in_progress` e mantém `_switch_active`.
+
+        `switch_in_progress_observed` sai **uma vez** por marcador (chaveado por
+        `to` + `expires_at`, não por poll): o watchdog checa a cada 10 s e a
+        troca dura ~40 s, então um evento por ciclo encheria o log de ruído —
+        o mesmo problema que `container_restarted` já resolveu.
+
+        Marcador corrompido é registrado uma vez (`switch_marker_invalid`) e
+        tratado como ausente: sem `expires_at` legível não há como saber até
+        quando ele vale, e suprimir alerta por tempo indeterminado é pior que
+        um alerta espúrio.
+        """
+        active, info = read_switch_marker(SWITCH_MARKER)
+        self._switch_active = active
+        if active:
+            chave = (info.get("to"), info.get("expires_at"))
+            if chave != self._switch_reported:
+                self._switch_reported = chave
+                emit("switch_in_progress_observed",
+                     to=info.get("to"), expires_at=info.get("expires_at"),
+                     ttl_s=info.get("ttl_s"),
+                     action="troca de fonte em andamento: sem no_frames/crash_loop")
+            return
+        self._switch_reported = None
+        reason = info.get("reason")
+        if reason in ("corrupt", "unreadable"):
+            chave = info.get("detail")
+            if chave != self._switch_invalid_reported:
+                self._switch_invalid_reported = chave
+                emit("switch_marker_invalid", path=SWITCH_MARKER,
+                     reason=reason, detail=info.get("detail"),
+                     action="marcador ignorado; regras normais valem")
+            return
+        self._switch_invalid_reported = None
+
     def _rule1_idle(self):
         now = time.monotonic()
         # Antes da carência: o StartedAt do processo precisa ser observado
         # mesmo durante ela, senão um crash-loop passaria invisível.
         uptime = self._observe_container_start()
+        if self._switch_active:
+            # Troca de fonte em andamento (E2-T3): o processo novo ainda não
+            # publicou `interval_metrics` e a recriação em si já foi anotada
+            # como esperada (`_switch_restarts`, fora da janela de crash-loop).
+            # Alertar aqui é ruído em toda troca — e o critério do E2-T3 é que
+            # uma troca não gere alerta. RAM/CUDA não passam por aqui:
+            # continuam valendo durante a troca.
+            return
         if self._crash_loop_check(now):
             return
         if now - self.started_at < STARTUP_GRACE_S:
@@ -727,6 +871,7 @@ class Watchdog:
                         continue
                     if rec.get("event") == "interval_metrics":
                         self._handle_metric(rec)
+                self._observe_switch_marker()
                 self._rule1_idle()
                 self._rule4_ram()
                 self._rule5_cuda_logs()

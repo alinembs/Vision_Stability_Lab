@@ -14,13 +14,24 @@ de fonte = reinício do pipeline (D4).
 O script faz, nesta ordem: valida o id no `sources.yaml`; recusa trocar se
 `ACTIVE_SOURCE` estiver definida no ambiente do container; roda o pré-check
 RTSP (`rtsp_read_probe.py --seconds 5`, D7); grava o controle de forma atômica;
-recria **só** o container `vision-stability-app`; espera até 90 s por um
-`interval_metrics` novo com o `source_id` pedido **e** `fps_in > 0`.
+recria **só** o container `vision-stability-app`; espera um `interval_metrics`
+**do processo novo** com o `source_id` pedido **e** `fps_in > 0`.
+
+Duas regras do pós-check que evitam PASS mentiroso:
+
+- **o processo novo** é `session_epoch >= StartedAt` do container recriado. Sem
+  isso, trocar para a fonte que já está ativa (`camera` estando em `camera`)
+  passaria com a métrica do processo anterior — medido em bancada;
+- **o `--timeout` conta da recriação** do container, não do início do script.
+  O pré-check (~5 s) e a parada/recriação ficam fora do orçamento. O primeiro
+  `interval_metrics` chega ~34 s depois da recriação (import do DeepStream +
+  `METRICS_INTERVAL_S=30 s`), então `--timeout 40` é o menor valor prático no
+  caminho feliz.
 
 Saída (contrato de uma linha):
 
 ```text
-PASS source=camera first_frame_in=12.3s fps_in=19.9 codec=h265 precheck=ok
+PASS source=camera first_frame_in=34,3s fps_in=19.9 codec=h265 precheck=ok session_epoch=2026-10-30T21:39:37.457+00:00
 FAIL source=drone reason="no_frames_on_path" observed="camera" rollback=restored:camera last_error="—"
 ```
 
@@ -33,9 +44,16 @@ FAIL source=drone reason="no_frames_on_path" observed="camera" rollback=restored
 | 4 | pré-check reprovado | a fonte não está publicando; nada foi escrito e o container está intacto |
 
 Histórico de trocas: `data/logs/switch.jsonl` (uma linha por execução, com
-`from`, `to`, `probe`, `result`, `reason`). Durante a troca existe
-`data/config/switch_in_progress` (o watchdog vai usá-lo no E5-T1 e ele é
-removido ao fim, inclusive em falha).
+`from`, `to`, `probe`, `result`, `reason`) — inclusive a tentativa bloqueada
+pelo guard de precedência (exit 3, `reason=active_source_no_ambiente`).
+
+Durante a troca existe `data/config/switch_in_progress`
+(`{"to": "<id>", "expires_at": "<ISO>"}`, removido ao fim, inclusive em falha).
+O watchdog lê esse marcador: enquanto ele vale, a recriação do container não é
+tratada como crash-loop nem como fonte morta (`switch_in_progress_observed` no
+`watchdog.jsonl`, uma vez por troca). As regras de RAM e CUDA continuam valendo.
+Marcador expirado (`kill -9` no meio da troca) ou corrompido é ignorado — e o
+corrompido é registrado como `switch_marker_invalid`.
 
 ## Antes de trocar: a fonte pedida está publicando?
 
