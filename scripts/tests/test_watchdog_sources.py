@@ -61,16 +61,26 @@ class FakeDocker:
         self.started_at: str | None = "2026-10-30T00:00:00.000000000Z"
         self.started_epoch = clock.now
         self.api_down = False
+        # Uptime fixo devolvido pela API: reproduz o relógio de parede atrás do
+        # `StartedAt` (passo de NTP para trás), em que a idade é sempre 0.0.
+        self.uptime_override: float | None = None
+        # Chamado a cada restart simulado: um processo novo tem contador
+        # cumulativo próprio. Sem isso o duplo fingia frame na primeira amostra
+        # de todo processo novo (`prev is None` + contador herdado > 0).
+        self.on_process_reset = None
 
     def simulate_restart(self, started_at: str) -> None:
         self.started_at = started_at
         self.started_epoch = self.clock.now
+        if self.on_process_reset is not None:
+            self.on_process_reset()
 
     def container_state(self, container: str):
         if self.api_down or self.started_at is None:
             return None, None, None
-        return True, self.started_at, round(
-            self.clock.now - self.started_epoch, 1)
+        uptime = (self.uptime_override if self.uptime_override is not None
+                  else round(self.clock.now - self.started_epoch, 1))
+        return True, self.started_at, uptime
 
     def restart(self, container: str, timeout_s: int = 10) -> bool:
         self.restarts.append(container)
@@ -100,6 +110,12 @@ class WatchdogSourcesTest(unittest.TestCase):
         self.frames_total = 0
         self.fps_in = FPS_NOMINAL
         self.fps_processed = FPS_NOMINAL
+        # `frames_total_in` é cumulativo por processo: um restart externo faz o
+        # contador do pipeline recomeçar em zero (pipeline_real.py).
+        self.dog.docker.on_process_reset = self._reset_frames_counter
+
+    def _reset_frames_counter(self) -> None:
+        self.frames_total = 0
 
     def _stop_patchers(self) -> None:
         for patcher in reversed(self._patchers):
@@ -439,6 +455,164 @@ class WatchdogSourcesTest(unittest.TestCase):
         self.run_loop(wd.RULE1_ESCALATE_S + 120, freeze_counter=True)
 
         self.assertIn("no_frames_detected", self.names())
+
+    # -- crash-loop: corroboração por frames (D1) ----------------------------
+    def _crash_loop_cadence(self, reinicios: int, intervalo_s: float,
+                            fonte_viva: bool = True) -> None:
+        """Restarts externos em série, com a fonte viva ou morta entre eles."""
+        for n in range(reinicios):
+            self.dog.docker.simulate_restart(
+                f"2026-10-30T19:{n:02d}:00.000000000Z")
+            self.run_loop(intervalo_s, freeze_counter=not fonte_viva)
+
+    def _restart_reasons(self) -> list[str]:
+        return [f["reason"] for name, f in self.events
+                if name == "restart_triggered"]
+
+    def _docker_api(self, payload: dict | None, status: int = 200):
+        """`DockerAPI` real com transporte falso (parse de `StartedAt` incluso).
+
+        Permite exercitar o caminho de verdade de `container_state` — parse do
+        timestamp e código HTTP — sem docker.sock. Devolve a API e a lista de
+        paths de restart efetivamente pedidos.
+        """
+        api = wd.DockerAPI("/tmp/watchdog-test-docker.sock")
+        restarts: list[str] = []
+
+        def request(method, path, timeout=20):
+            if path.endswith("/json"):
+                body = b"{}" if payload is None else json.dumps(payload).encode()
+                return status, body
+            if "restart" in path:
+                restarts.append(path)
+                return 204, b""
+            return 200, b""
+
+        api.request = request
+        return api, restarts
+
+    def test_restarts_em_serie_com_frames_fluindo_nao_reiniciam_o_pipeline(
+            self) -> None:
+        """D1: 5 restarts em 14 min com a fonte a 20 fps o tempo todo.
+
+        É a assinatura de `StartedAt` de um `docker compose up -d` ou de um
+        ciclo de `switch_source.sh`. Sem corroboração de frames o watchdog
+        reiniciava um pipeline saudável (evidência do revisor: `restart_result`
+        com a fonte entregando 20 fps) — ~35 s sem vídeo e 5 min de vigilância
+        de RSS cega (RSS_BASELINE_GRACE_S) dentro da janela do E6/E7.
+        """
+        self.run_loop(150)
+        self.events.clear()
+
+        self._crash_loop_cadence(wd.CRASH_LOOP_MIN_RESTARTS, 840.0 / 5)
+
+        # o pipeline está entregando frame: nenhum restart pode ser acionado
+        self.assertEqual(self._restart_reasons(), [])
+        self.assertEqual(self.dog.docker.restarts, [])
+        self.assertNotIn("restart_result", self.names())
+
+        detectado = self.first("crash_loop_detected")
+        self.assertEqual(detectado["restarts"], wd.CRASH_LOOP_MIN_RESTARTS)
+        self.assertTrue(detectado["frames_flowing"])
+        self.assertLess(detectado["source_idle_s"], wd.RULE1_FRAME_TIMEOUT_S)
+        # avisa uma vez (é restart em série de verdade) e não toca no container
+        self.assertEqual(self.count("crash_loop_detected"), 1)
+
+    def test_restarts_em_serie_com_fonte_morta_continuam_escalando(self) -> None:
+        """I1 preservado: mesma assinatura de restarts, agora sem frames."""
+        self.run_loop(150)
+        self.events.clear()
+        self.fps_in = 0.0
+        self.fps_processed = 0.0
+
+        self._crash_loop_cadence(wd.CRASH_LOOP_MIN_RESTARTS, 840.0 / 5,
+                                 fonte_viva=False)
+
+        detectado = self.first("crash_loop_detected")
+        self.assertEqual(self._restart_reasons(), ["crash_loop"])
+        self.assertEqual(self.dog.docker.restarts, ["vision-stability-app"])
+        self.assertFalse(detectado["frames_flowing"])
+        self.assertGreaterEqual(detectado["source_idle_s"],
+                                wd.RULE1_FRAME_TIMEOUT_S)
+
+    def test_re_reporte_nao_reinicia_container_ja_estabilizado(self) -> None:
+        """D1 (achado secundário): loop encerrado logo antes do re-reporte.
+
+        O gate "já reportado" vence em reportado+900 s, quando a janela ainda
+        guarda os restarts do loop que já acabou — o watchdog reiniciava um
+        container estabilizado 60 s antes (provado pelo revisor: loop de 25 min
+        com estabilização em reportado+840 s).
+        """
+        self.run_loop(150)
+        self.events.clear()
+
+        # restart a cada 60 s por 20 min: o reporte cai no 5º ciclo
+        self._crash_loop_cadence(20, 60.0)
+        self.assertEqual(self.count("crash_loop_detected"), 1)
+        self.events.clear()
+
+        # estabilizou em reportado+840 s; o gate de 900 s vence depois disso
+        self.run_loop(130)
+
+        self.assertEqual(self.count("crash_loop_detected"), 0)
+        self.assertEqual(self._restart_reasons(), [])
+        self.assertEqual(self.dog.docker.restarts, [])
+
+    def test_loop_longo_com_fonte_morta_nao_reinsiste_no_restart(self) -> None:
+        """Escalada é uma por tempestade: o container estabilizado não é alvo."""
+        self.run_loop(150)
+        self.events.clear()
+        self.fps_in = 0.0
+        self.fps_processed = 0.0
+
+        self._crash_loop_cadence(20, 60.0, fonte_viva=False)
+        self.assertEqual(self._restart_reasons(), ["crash_loop"])
+        self.events.clear()
+
+        self.run_loop(130)
+
+        self.assertEqual(self._restart_reasons(), [])
+        self.assertEqual(len(self.dog.docker.restarts), 1)
+
+    # -- carência: monotônico observado (D2) ---------------------------------
+    def test_uptime_zero_repetido_nao_muta_a_regra_1(self) -> None:
+        """D2: `StartedAt` no futuro (NTP para trás) -> uptime 0.0 em todo poll.
+
+        A carência de `uptime < STARTUP_GRACE_S` virava portão absoluto e a
+        Regra 1 ficava muda para sempre (30 min de fonte morta -> só
+        `fps_degradation`). A carência precisa vir do monotônico observado.
+        """
+        self.run_loop(150)
+        self.events.clear()
+
+        self.dog.docker.uptime_override = 0.0
+        self.fps_in = 0.0
+        self.fps_processed = 0.0
+        self.run_loop(30 * 60, freeze_counter=True)
+
+        self.assertIn("no_frames_detected", self.names())
+        self.assertGreaterEqual(self.count("no_frames_detected"), 1)
+        self.assertEqual(set(self._restart_reasons()), {"no_frames_escalation"})
+        # escalou de verdade (não ficou só olhando): o cooldown limita o resto
+        self.assertGreaterEqual(len(self.dog.docker.restarts), 1)
+
+    def test_started_at_invalido_estavel_nao_cega_a_regra_1(self) -> None:
+        """I2 (regressão): `StartedAt` impossível em todos os polls."""
+        self.run_loop(150)
+        self.events.clear()
+
+        api, restarts = self._docker_api({"State": {
+            "Running": True, "StartedAt": "2026-13-45T99:99:99.123456789Z"}})
+        self.dog.docker = api
+        self.fps_in = 0.0
+        self.fps_processed = 0.0
+        self.run_loop(wd.STARTUP_GRACE_S + wd.RULE1_ESCALATE_S + 60,
+                      freeze_counter=True)
+
+        self.assertIn("no_frames_detected", self.names())
+        self.assertIn("no_frames_escalation", self._restart_reasons())
+        self.assertEqual(len(restarts), 1)
+        self.assertNotIn("watchdog_error", self.names())
 
 
 class AgeSecondsTest(unittest.TestCase):

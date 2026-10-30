@@ -11,8 +11,11 @@ Regras implementadas (spec Fase 6):
      (a reconexão RTSP em si acontece dentro do pipeline; se o quadro
       não voltar em NO_FRAME_ESCALATE_S, reinicia o container)
      Crash-loop (>= CRASH_LOOP_MIN_RESTARTS restarts em
-     CRASH_LOOP_WINDOW_S) -> evento crash_loop_detected + restart: a
-     carência de startup deixaria o watchdog cego nesse estado.
+     CRASH_LOOP_WINDOW_S) -> evento crash_loop_detected: a carência de
+     startup deixaria o watchdog cego nesse estado. O restart só é
+     escalado se houver corroboração de que a fonte não entrega frames
+     (RULE1_FRAME_TIMEOUT_S sem frame) — restart em série sozinho também
+     é a assinatura de `docker compose up -d` e de troca de fonte.
   2. FPS < 30% do alvo por 2 min  -> registra degradação
   3. RSS > 15% acima da baseline  -> emite alerta
   4. RAM do sistema > 90%         -> reinicia o pipeline (docker restart)
@@ -351,6 +354,12 @@ class Watchdog:
 
         # Regra 1 — frames
         self.last_frame_at = time.monotonic()
+        # Evidência de frame imune ao reset otimista de `last_frame_at`: um
+        # restart (ou a carência) reescreve `last_frame_at` para "agora" porque
+        # o processo pode ainda estar subindo. Corroborar crash-loop com essa
+        # marca daria "fonte viva" para todo restart em série — só a telemetria
+        # de verdade mexe aqui.
+        self.last_frame_evidence_at = time.monotonic()
         self.no_frame_reported = False
         # StartedAt do processo observado: quando muda, o pipeline reiniciou
         # por fora (docker restart, crash, recriação do compose).
@@ -449,6 +458,7 @@ class Watchdog:
 
         if frame_seen:
             self.last_frame_at = now
+            self.last_frame_evidence_at = now
             if self.no_frame_reported:
                 emit("frames_recovered")
                 self.no_frame_reported = False
@@ -499,12 +509,19 @@ class Watchdog:
         mais que o frame_timeout para voltar — ruído que mascara a diferença
         entre "eu reiniciei" e "a fonte morreu". Retorna a idade do processo
         em segundos (None = desconhecida).
+
+        A carência efetiva é o **monotônico observado** (`self.started_at`),
+        não o `uptime` do Docker: com `StartedAt` no futuro (passo de NTP para
+        trás) a idade é 0.0 em todos os polls e `uptime < STARTUP_GRACE_S`
+        virava portão absoluto — a Regra 1 ficava muda para sempre, sem
+        crash-loop para desempatar (D2). O `uptime` do Docker só vale a
+        primeira leitura, quando ainda não há monotônico para comparar.
         """
         running, started_at, uptime = self.docker.container_state(APP_CONTAINER)
         if started_at is None:
             return None                      # API indisponível: regra antiga
         if started_at == self._app_started_at:
-            return uptime
+            return None                      # processo conhecido: carência monotônica
         primeira_leitura = self._app_started_at is None
         self._app_started_at = started_at
         if primeira_leitura:
@@ -516,7 +533,7 @@ class Watchdog:
         self.no_frame_reported = False
         self._prev_frames_total = None
         self._register_restart_event(now, started_at, uptime, running)
-        return uptime
+        return None                          # carência do processo novo é monotônica
 
     def _register_restart_event(self, now, started_at, uptime, running):
         """Anota o restart na janela e emite `container_restarted` no máximo 1x.
@@ -547,8 +564,22 @@ class Watchdog:
         crash-loop ela é um portão absoluto: o processo nunca vive
         STARTUP_GRACE_S, então `_rule1_idle` retornaria antes de
         `no_frames_detected` **e** de `_restart()` para sempre. Por isso esta
-        checagem vem antes da carência e escala pelo `_restart()` existente
-        (respeitando cooldown/supressão).
+        checagem vem antes da carência.
+
+        Restart em série, porém, **não prova fonte morta**: um `docker compose
+        up -d` e um ciclo de `switch_source.sh` produzem a mesma assinatura de
+        `StartedAt` (5 restarts em 14 min) com a fonte entregando 20 fps o
+        tempo todo — medido no duplo de Docker do teste. Por isso:
+
+          - `frames_flowing` (frame na telemetria dentro de
+            RULE1_FRAME_TIMEOUT_S): emite `crash_loop_detected` uma vez e **não**
+            reinicia; reiniciar aqui custa ~35 s de vídeo bom + 5 min de
+            vigilância de RSS cega (RSS_BASELINE_GRACE_S).
+          - fonte sem frame: emite e escala `restart` (I1 preservado).
+
+        A escalada e o aviso são um por **tempestade** (sequência máxima de
+        restarts com intervalo < CRASH_LOOP_ACTIVE_S), não um por janela: o
+        re-reporte de 900 s reincidia sobre um container já estabilizado.
         """
         events = self._restart_events
         while events and now - events[0] > CRASH_LOOP_WINDOW_S:
@@ -558,16 +589,25 @@ class Watchdog:
             return False
         if now - events[-1] > CRASH_LOOP_ACTIVE_S:
             # o container parou de reiniciar: o ciclo acabou e a vigilância
-            # normal (Regra 1) volta a ser dona do caso.
+            # normal (Regra 1) volta a ser dona do caso. Nova tempestade pode
+            # voltar a reportar/escalar.
+            self._crash_loop_reported_at = None
             return False
-        anterior = self._crash_loop_reported_at
-        if anterior is not None and now - anterior < CRASH_LOOP_WINDOW_S:
-            return True                      # já reportado nesta janela
+        if self._crash_loop_reported_at is not None:
+            return True                      # já reportado nesta tempestade
         self._crash_loop_reported_at = now
+
+        source_idle = now - self.last_frame_evidence_at
+        source_dead = source_idle >= RULE1_FRAME_TIMEOUT_S
         emit("crash_loop_detected", restarts=restarts,
              window_s=CRASH_LOOP_WINDOW_S,
              min_restarts=CRASH_LOOP_MIN_RESTARTS,
-             action="carência de startup ignorada; escalando restart")
+             frames_flowing=not source_dead,
+             source_idle_s=round(source_idle, 1),
+             action=("fonte sem frame: escalando restart" if source_dead else
+                     "frames fluindo: sem restart, Regra 1 segue dona do caso"))
+        if not source_dead:
+            return True
         self._restart("crash_loop", restarts=restarts,
                       window_s=CRASH_LOOP_WINDOW_S)
         return True
