@@ -108,12 +108,13 @@ deepstream/config/sources.yaml ──► deepstream/sources.py
 
 Regras estruturais:
 
-1. **O pipeline não conhece nomes de fonte.** Ele conhece `SourceSpec` (dataclass de
-   `deepstream/sources.py`): `id`, `label`, `uri`, `codec`, `fps_target`, `latency_gated`,
-   `transport`. A escolha do elemento de depayload é `depay_factory(spec.codec)`.
+1. **O pipeline não conhece nomes de fonte.** Ele conhece `SourceConfig` (dataclass de
+   `deepstream/sources.py`): `id`, `name`, `uri`, `codec`, `target_fps`, `gate`,
+   `transport`. A escolha do elemento de depayload é `depay_factory(config.codec)`.
 2. **Credencial não entra no YAML.** A câmera tem usuário/senha ⇒ `sources.yaml` guarda
-   `uri_env: RTSP_URI` e a URI é resolvida em runtime por `require_rtsp_uri()`
-   (`deepstream/rtsp_env.py`, DIV-001). Drone e celular chegam pelo MediaMTX, que **não tem
+   `uri_env: RTSP_URI` e a URI é lida em runtime por `rtsp_env.read_rtsp_uri()`
+   (`deepstream/rtsp_env.py`, DIV-001); `uri_env` é ambiente **já resolvido** —
+   `${...}` dentro do valor não é expandido. Drone e celular chegam pelo MediaMTX, que **não tem
    autenticação** (DIV-003) ⇒ URI literal `rtsp://<LAN_IP>:8554/<path>` é aceitável, e
    mesmo assim é derivada de `LAN_IP`.
 3. **Codec muda só a cadeia de depayload.** `nvv4l2decoder`, `nvstreammux`, `nvinfer`,
@@ -207,39 +208,55 @@ Detalhes que o relatório **precisa** conter (aprendidos na v1):
 | **Prioridade** | **P0** |
 | **Risco** | Baixo — módulo puro, sem GPU; risco concentrado na validação do YAML |
 | **Complexidade** | M |
-| **Critério de aceite** | `python3 -c "from sources import load_sources"` funciona **sem** `gi`; `resolve_active_source()` respeita `data/config/active_source`, cai para `default:` do YAML quando o arquivo está ausente e para `RTSP_URI`/`RTSP_CODEC` quando `VSL_SOURCE_SELECTION=off`; `depay_factory("h265") == ("rtph265depay","h265parse")` e idem H.264; fonte desconhecida em `active_source` **não** cai silenciosamente em default (falha com mensagem que lista os ids válidos) |
+| **Critério de aceite** | `python3 -c "from sources import load_sources"` funciona **sem** `gi`; `resolve_active_source()` respeita `data/config/active_source`, cai para `default_source` do YAML quando o arquivo está ausente e para `RTSP_URI`/`RTSP_CODEC` quando `VSL_SOURCE_SELECTION=off`; `depay_factory("h265") == ("rtph265depay","h265parse")` e idem H.264; fonte desconhecida em `active_source` **não** cai silenciosamente em default (falha com mensagem que lista os ids válidos) |
 | **Validação** | `python3 -m pytest deepstream/tests/test_sources.py -q`. Casos mínimos: (a) YAML válido com 3 fontes, (b) `active_source` ausente → default, (c) `active_source` com id inválido → erro com lista de ids, (d) `uri_env` ausente no ambiente → erro de `rtsp_env` (não default embutido), (e) `depay_factory` para os 2 codecs + codec inválido, (f) `VSL_SOURCE_SELECTION=off` → caminho legado. Sem GPU, sem container |
 
-Contrato de `sources.yaml` (forma prescrita):
+Contrato de `sources.yaml` (forma implementada em `deepstream/sources.py`, E2-T1 —
+estas são as chaves que o código lê; o `deepstream/config/sources.yaml` versionado
+é a referência):
 
 ```yaml
 # Sem credencial: DIV-001. A URI da câmera vem de RTSP_URI (deploy/.env).
-default: camera
+version: 1
+default_source: camera            # id, não rótulo
 sources:
   - id: camera
-    label: "Câmera fixa (H.265)"
-    uri_env: RTSP_URI              # deepstream/rtsp_env.py: require_rtsp_uri()
+    name: "câmera fixa"           # rótulo humano; não é usado como chave
+    uri_env: RTSP_URI             # deepstream/rtsp_env.py: read_rtsp_uri()
     codec: h265
-    fps_target: 20                 # medido: 20,18 fps por rtsp_read_probe (baseline v1)
-    latency_gated: true            # D3: câmera entra no gate p95
     transport: tcp
+    latency_ms: 200
+    target_fps: 20                # alvo nominal: ~19,9 fps em 2026-08-23/24;
+                                  # mediana 12,0 e regime ~7,0 em 2026-10-30
+    enabled: true
+    gate:                         # D3: gate de qualidade por fonte
+      latency_p95_ms: 300
   - id: drone
-    label: "Drone (RTMP → MediaMTX)"
-    uri: "rtsp://${LAN_IP}:8554/drone"   # MediaMTX sem auth (DIV-003): LAN confiável
+    name: "drone"
+    # MediaMTX sem auth (DIV-003); `mediamtx` é o DNS do compose no container,
+    # `MTX_HOST`/`LAN_IP` é o caminho no host (probe, switch_source.sh).
+    uri: "rtsp://${MTX_HOST:-mediamtx}:8554/drone"
     codec: h264
-    fps_target: 25
-    latency_gated: false           # D3: latência só reportada
     transport: tcp
+    latency_ms: 200
+    target_fps: 25
+    enabled: true
+    gate:
+      latency_p95_ms: null
+      report_only: true           # D3: latência reportada, não gated
   - id: phone
-    label: "Celular Android (WHIP → MediaMTX)"
-    uri: "rtsp://${LAN_IP}:8554/phone"
+    name: "celular"
+    uri: "rtsp://${MTX_HOST:-mediamtx}:8554/phone"
     codec: h264
-    fps_target: 25
-    latency_gated: true
     transport: tcp
+    latency_ms: 200
+    target_fps: 25
+    enabled: true
+    gate:
+      latency_p95_ms: 300
 ```
 
-> `fps_target` por fonte é **a** correção do maior gerador de alerta espúrio atual: o
+> `target_fps` por fonte é **a** correção do maior gerador de alerta espúrio atual: o
 > watchdog compara `fps_processed` com `0,3 × TARGET_FPS = 7,5` fixo, enquanto a câmera
 > entrega ~20 fps e já foi medida em **7,0 fps** (`data/logs/watchdog.jsonl`, eventos de
 > 16:59 a 18:32). Ver E5-T1.
@@ -249,13 +266,13 @@ sources:
 | Campo | Valor |
 |---|---|
 | **Objetivo** | `pipeline_real.py` deixa de ler `RTSP_URI`/`RTSP_CODEC` do ambiente como caminho principal e passa a usar `resolve_active_source()`; codec vem da fonte, não de env |
-| **Arquivos** | `deepstream/pipeline_real.py` (construtor: `self.source`, `self.rtsp_uri`, `self.codec`, `self.depay`/`self.parser`; `run()`/`main()`: evento `source_selected`), `deepstream/config/sources.yaml` (só leitura), `deepstream/tests/test_sources.py` (caso de integração leve) |
+| **Arquivos** | `deepstream/pipeline_real.py` (construtor: `self.source`, `self.rtsp_uri`, `self.codec`, `self.depay`/`self.parser`; `run()`: evento `source_active`), `deepstream/config/sources.yaml` (só leitura), `deepstream/tests/test_sources.py` (caso de integração leve) |
 | **Depende de** | E1-T2 (baseline válido antes da mudança), E2-T1 |
 | **Prioridade** | **P0** |
 | **Risco** | **Alto** — é a única alteração que toca o caminho de mídia já validado; um erro de pad/link derruba as três fontes |
 | **Complexidade** | M |
-| **Critério de aceite** | Com `active_source=camera`, o pipeline sobe e a telemetria mostra `fps_in > 0` e `source_id: camera` em `interval_metrics`; com `active_source=drone` (e `rtmp_publisher.sh` publicando), o depay criado é `rtph264depay` (visível em `source_selected`); `grep -n "RTSP_CODEC" deepstream/pipeline_real.py` só encontra o caminho de fallback documentado; nenhum `location=` do `rtspsrc` fora de `self.source.uri` |
-| **Validação** | Gate obrigatório `deepstream-tester` para `deepstream/*` (seção 7). Além disso: `pytest deepstream/tests -q`; 3 execuções curtas (`TEST_DURATION_S=120`) com cada `active_source`; conferir `docker exec vision-stability-app gst-inspect-1.0 rtph265depay` no log de `source_selected` |
+| **Critério de aceite** | Com `active_source=camera`, o pipeline sobe e a telemetria mostra `fps_in > 0` e `source_id: camera` em `interval_metrics`; com `active_source=drone` (e `rtmp_publisher.sh` publicando), o depay criado é `rtph264depay` (visível em `source_active`); `grep -n "RTSP_CODEC" deepstream/pipeline_real.py` só encontra o caminho de fallback documentado; nenhum `location=` do `rtspsrc` fora de `self.source.uri` |
+| **Validação** | Gate obrigatório `deepstream-tester` para `deepstream/*` (seção 7). Além disso: `pytest deepstream/tests -q`; 3 execuções curtas (`TEST_DURATION_S=120`) com cada `active_source`; conferir `docker exec vision-stability-app gst-inspect-1.0 rtph265depay` no log de `source_active` |
 
 Notas de implementação:
 
@@ -264,26 +281,29 @@ Notas de implementação:
   não é preciso deslinkar nada em runtime — basta construir a cadeia certa no boot.
 - `_on_rtspsrc_pad_added` já ignora pads de áudio (`pipeline_real.py:275-282`); não mexer —
   é o que faz a câmera (com áudio PCMA) e o celular funcionarem juntos.
-- Manter `require_rtsp_uri()` importado e usado **apenas** no caminho `uri_env` e no
-  fallback `VSL_SOURCE_SELECTION=off`. Isso preserva DIV-001 e é o rollback da seção 8.
+- `RTSP_URI` continua vindo de `deepstream/rtsp_env.py` (DIV-001) e só é lida no caminho
+  legado (`sem sources.yaml`, `VSL_SOURCE_SELECTION=off`) e no `uri_env` da câmera. Erro de
+  variável ausente é `SourceConfigError` — **nunca** `sys.exit` dentro de `sources.py`:
+  `SystemExit` não é capturado por `except Exception` e saía sem `startup_failed` na
+  telemetria. O `sys.exit` fica só no `main()` do pipeline.
 
 #### E2-T3 — `scripts/switch_source.sh` com pré-check obrigatório (D7)
 
 | Campo | Valor |
 |---|---|
 | **Objetivo** | Um comando que troca a fonte ativa **só** quando a fonte pedida está entregando vídeo, e que volta sozinho se a troca não der certo |
-| **Arquivos** | `scripts/switch_source.sh` (novo), `scripts/tests/test_switch_source.py` (novo), `data/config/active_source.example` (referência), `docs/runbooks/troca-de-fonte.md` (novo, curto: uso + o que olhar quando falha) |
+| **Arquivos** | `scripts/switch_source.sh` (novo), `scripts/switch_source_lib.py` (novo — as funções puras), `scripts/tests/test_switch_source.py` (novo), `data/config/active_source.example` (referência), `docs/runbooks/troca-de-fonte.md` (novo, curto: uso + o que olhar quando falha) |
 | **Depende de** | E2-T1, E2-T2 |
 | **Prioridade** | **P0** |
 | **Risco** | Médio — o script reinicia o container do pipeline; um bug deixa o stack parado |
 | **Complexidade** | M |
-| **Critério de aceite** | Sequência fixa e verificável: (1) valida `source_id` contra `sources.yaml`; (2) **pré-check** `python3 scripts/probe/rtsp_read_probe.py --url <uri> --seconds 5 --json` — exit `!= 0` aborta **sem** tocar em `active_source`; (3) grava `data/config/active_source` de forma atômica (arquivo temporário no mesmo diretório + `mv`); (4) `docker restart vision-stability-app`; (5) pós-check: espera em `data/logs/live.jsonl` um `interval_metrics` com `source_id` novo, `fps_in > 0` e `session_epoch` posterior ao restart, dentro de 120 s; (6) falha no pós-check ⇒ restaura a fonte anterior, reinicia de novo e sai `!= 0`; (7) registra `data/logs/switch.jsonl` (uma linha: `from`, `to`, `probe`, `result`, `ts`). `--dry-run` imprime a sequência sem executar; `--check-only` roda só (1)+(2) |
-| **Validação** | `python3 -m pytest scripts/tests/test_switch_source.py -q` com `docker` e `rtsp_read_probe` substituídos por falsos no `PATH` (script tem de ser testável sem GPU/rede): (a) probe falha ⇒ `active_source` **inalterado**, exit ≠ 0; (b) probe passa ⇒ arquivo escrito com o id, ordem `probe → escrita → restart`; (c) pós-check falha ⇒ arquivo restaurado; (d) id inválido ⇒ exit 2 sem chamar o probe. Manualmente: uma troca real `camera → drone` com `rtmp_publisher.sh --seconds 60`, conferindo `session_epoch` novo |
+| **Critério de aceite** | Sequência fixa e verificável: (1) valida `source_id` contra `sources.yaml` (id inexistente/desabilitado ⇒ exit 2, **sem** fallback para `default_source`); (1b) **guarda de precedência**: `docker exec <app> printenv ACTIVE_SOURCE` preenchido ⇒ aborta com exit 3, sem escrever nada e sem recriar o container (o ambiente vence o arquivo: a troca não pegaria e o pós-check aprovaria a fonte errada); (2) **pré-check** `python3 scripts/probe/rtsp_read_probe.py --url <uri> --seconds 5 --json` — exit `!= 0` aborta com exit 4 **sem** tocar em `active_source` e com o container intacto; (3) grava `data/config/active_source` de forma atômica (temporário no mesmo diretório + `mv`); (4) recria o container único do projeto com `docker compose up -d --no-deps vision-app`; (5) pós-check: espera em `data/logs/live.jsonl`, a partir do tamanho medido antes da recriação, um `interval_metrics` com `source_id` pedido e `fps_in > 0`, dentro de `--timeout` (default 90 s); (6) falha no pós-check ⇒ restaura o valor anterior (ou apaga o arquivo quando não havia controle), recria de novo e sai 1; (7) registra `data/logs/switch.jsonl` (uma linha: `from`, `to`, `probe`, `result`, `reason`, `ts`). `--skip-precheck` (registra `probe: skipped`, só para o teste de ciclo E6), `--timeout`, `--help`, `set -euo pipefail`, `bash -n` limpo |
+| **Validação** | `python3 -m pytest scripts/tests/test_switch_source.py -q` sobre a metade pura (`switch_source_lib.py`; nenhum teste chama docker): (a) espera sobre JSONL de fixture: fonte certa com `fps_in > 0` ⇒ PASS, fonte errada/`fps_in = 0`/registro anterior ao offset ⇒ FAIL; (b) decisão de rollback: confirmado ⇒ `keep`, senão `restore_to` = valor anterior (vazio quando não havia arquivo); (c) guarda de precedência: container ou `deploy/.env` preenchido ⇒ bloqueio; (d) id inválido ⇒ exit 2. O script prova a ordem por asserção de texto (`probe` antes de `write_control`). Manualmente: `./scripts/switch_source.sh drone` com `rtmp_publisher.sh` no ar (PASS) e sem ele (FAIL `no_frames_on_path`, `StartedAt` do container e arquivo de controle inalterados) |
 
 Mitigação de ruído obrigatória (senão E6-T2 é impossível): o script grava
 `data/config/switch_in_progress` com `{"to": "<id>", "expires_at": "<ISO>"}` e o remove no
 fim (inclusive em falha). O watchdog consome esse marcador (E5-T1) para não registrar
-`crash_loop`/`no_frames` durante a troca — `docker restart` em série é, por assinatura,
+`crash_loop`/`no_frames` durante a troca — `up -d --no-deps` em série é, por assinatura,
 idêntico a crash-loop (o próprio docstring de `scripts/watchdog.py` registra essa
 ambiguidade: "restart em série sozinho também é a assinatura de `docker compose up -d` e de
 troca de fonte").
@@ -315,7 +335,7 @@ troca de fonte").
 | **Prioridade** | **P1** |
 | **Risco** | Médio — `log_event` é chamado de threads de probe; mudar o formato do registro quebra consumidores (`scripts/watchdog.py`, `dashboard/backend/app.py`) |
 | **Complexidade** | S |
-| **Critério de aceite** | Todo JSONL emitido tem `source_id` e `session_epoch`; `startup` inclui `source_id`, `codec`, `fps_target`, `session_epoch`; `interval_metrics` inclui `source_id`, `session_epoch`, `source_fps_target` (este é o insumo de E5-T1); campos antigos (`frames_total_in`, `fps_in`, `fps_processed`, `rss_mb`) **inalterados**; `scripts/watchdog.py` continua funcionando sem nenhuma mudança (campo novo é aditivo) |
+| **Critério de aceite** | Todo JSONL emitido tem `source_id` e `session_epoch`; `startup` inclui `source_id`, `codec`, `target_fps`, `session_epoch`; `interval_metrics` inclui `source_id`, `source_name`, `session_epoch`, `source_target_fps` (este é o insumo de E5-T1: é o nome **exato** do campo que `pipeline_real.py` emite desde o E2-T2); campos antigos (`frames_total_in`, `fps_in`, `fps_processed`, `rss_mb`) **inalterados**; `scripts/watchdog.py` continua funcionando sem nenhuma mudança (campo novo é aditivo) |
 | **Validação** | Gate `deepstream-tester`; `pytest deepstream/tests scripts/tests -q` (o teste do watchdog usa fixture de telemetria — se quebrar, o campo deixou de ser aditivo); `python3 -c "import json;[json.loads(l) for l in open('data/logs/live.jsonl')]"` após 5 min de execução |
 
 ---
@@ -332,7 +352,7 @@ troca de fonte").
 | **Prioridade** | **P2** |
 | **Risco** | Médio — o replay do JSONL na partida (`tail_telemetry`) é o mecanismo de histórico; trocar a chave quebra o gráfico se o frontend não for junto |
 | **Complexidade** | M |
-| **Critério de aceite** | `/api/snapshot` traz `source: {id, label, session_epoch, since}` e `health` derivado da sessão **ativa** apenas; `/api/history?minutes=30` sem `source` usa a ativa, com `source=<id>` devolve `[]` (não erro) para id sem histórico ou devolve os pontos daquele id; nenhum ponto de uma fonte aparece na série de outra; `healthy/stale/down` continua com os limiares atuais (`healthy` = `interval_metrics` < 90 s e `fps_processed > 0`, `dashboard/backend/app.py:86-99`, `docs/architecture.md:75`) |
+| **Critério de aceite** | `/api/snapshot` traz `source: {id, name, session_epoch, since}` (`name` vem de `source_name` na telemetria) e `health` derivado da sessão **ativa** apenas; `/api/history?minutes=30` sem `source` usa a ativa, com `source=<id>` devolve `[]` (não erro) para id sem histórico ou devolve os pontos daquele id; nenhum ponto de uma fonte aparece na série de outra; `healthy/stale/down` continua com os limiares atuais (`healthy` = `interval_metrics` < 90 s e `fps_processed > 0`, `dashboard/backend/app.py:86-99`, `docs/architecture.md:75`) |
 | **Validação** | Replay de um JSONL de fixture com 2 fontes intercaladas e 2 epochs da mesma fonte: assertar separação das séries e que `health` só olha a última sessão da fonte ativa; `curl -s localhost:8081/api/sources | jq` com o stack real |
 
 #### E4-T2 — Frontend: fonte ativa e histórico por fonte
@@ -345,7 +365,7 @@ troca de fonte").
 | **Prioridade** | **P2** |
 | **Risco** | Baixo — SPA vanilla, sem build |
 | **Complexidade** | S |
-| **Critério de aceite** | Card "Fonte ativa" com `label`, `id`, `session_epoch` e uptime da sessão; troca de fonte no seletor troca gráfico e eventos; o player WHEP continua apontando para `live` (o preview é sempre o mesmo path, independente da fonte); nada de `localhost` hardcoded (o WHEP deriva de `location.hostname` — `README.md:521-527`) |
+| **Critério de aceite** | Card "Fonte ativa" com `name`, `id`, `session_epoch` e uptime da sessão; troca de fonte no seletor troca gráfico e eventos; o player WHEP continua apontando para `live` (o preview é sempre o mesmo path, independente da fonte); nada de `localhost` hardcoded (o WHEP deriva de `location.hostname` — `README.md:521-527`) |
 | **Validação** | `node --check dashboard/frontend/app.js` (Node 24.19 presente no host); abrir `http://192.168.59.102:8081` com a CA instalada e conferir 2 sessões de fontes diferentes no seletor |
 
 ---
@@ -357,13 +377,13 @@ troca de fonte").
 | Campo | Valor |
 |---|---|
 | **Objetivo** | Eliminar a fonte nº 1 de alerta espúrio: `TARGET_FPS=25` fixo contra uma câmera que entrega ~20 fps (e caiu a 7,0) |
-| **Arquivos** | `scripts/watchdog.py` (`TARGET_FPS` → alvo por fonte lido de `interval_metrics.source_fps_target`, com fallback env; leitura de `data/config/switch_in_progress`), `scripts/tests/test_watchdog_sources.py` (estender) |
-| **Depende de** | E3-T2 (campo `source_fps_target`), E2-T3 (marcador de troca) |
+| **Arquivos** | `scripts/watchdog.py` (`TARGET_FPS` → alvo por fonte lido de `interval_metrics.source_target_fps`, com fallback env; leitura de `data/config/switch_in_progress`), `scripts/tests/test_watchdog_sources.py` (estender) |
+| **Depende de** | E3-T2 (campo `source_target_fps`), E2-T3 (marcador de troca) |
 | **Prioridade** | **P1** |
 | **Risco** | Médio — mexer na Regra 2 pode **mascarar** degradação real; o watchdog é a segunda linha de defesa |
 | **Complexidade** | M |
-| **Critério de aceite** | (a) com `source_fps_target: 20`, `fps_processed: 16` **não** gera `fps_degradation` (é 80 % do alvo); com `fps_processed: 7,0` gera; (b) o limiar passa a ser **60 % do alvo da fonte** (12 fps para a câmera), não 30 % de 25 — justificativa: 30 % de 25 = 7,5 é exatamente onde a câmera foi medida, então o gate antigo alternava entre "espúrio" e "quase disparando"; (c) durante `switch_in_progress` válido, `no_frames_detected` e `crash_loop_detected` **não** escalam restart; (d) sem `source_fps_target` na telemetria (JSONL antigo), o comportamento é o de hoje (fallback `TARGET_FPS`); (e) o evento `watchdog_started` registra o alvo resolvido |
-| **Validação** | `pytest scripts/tests/test_watchdog_sources.py -q` com fixtures de `interval_metrics` (20/16/12/7 fps; com e sem `source_fps_target`; com e sem marcador de troca). Gate `deepstream-tester` **não** se aplica (não é `deepstream/*`), mas `scripts/watchdog.py` exige revisão por `REVIEWER` antes do merge |
+| **Critério de aceite** | (a) com `source_target_fps: 20`, `fps_processed: 16` **não** gera `fps_degradation` (é 80 % do alvo); com `fps_processed: 7,0` gera; (b) o limiar passa a ser **60 % do alvo da fonte** (12 fps para a câmera), não 30 % de 25 — justificativa: 30 % de 25 = 7,5 é exatamente onde a câmera foi medida, então o gate antigo alternava entre "espúrio" e "quase disparando"; (c) durante `switch_in_progress` válido, `no_frames_detected` e `crash_loop_detected` **não** escalam restart; (d) sem `source_target_fps` na telemetria (JSONL antigo), o comportamento é o de hoje (fallback `TARGET_FPS`); (e) o evento `watchdog_started` registra o alvo resolvido |
+| **Validação** | `pytest scripts/tests/test_watchdog_sources.py -q` com fixtures de `interval_metrics` (20/16/12/7 fps; com e sem `source_target_fps`; com e sem marcador de troca). Gate `deepstream-tester` **não** se aplica (não é `deepstream/*`), mas `scripts/watchdog.py` exige revisão por `REVIEWER` antes do merge |
 
 #### E5-T2 — `healthcheck` e heartbeat do próprio watchdog
 
@@ -566,7 +586,7 @@ docker compose -f deploy/docker-compose.yml up -d --force-recreate vision-app
 ```
 
 `deepstream/sources.py` mantém o caminho legado vivo: com a flag `off`, o pipeline usa
-`require_rtsp_uri()` e `RTSP_CODEC` exatamente como hoje. **`RTSP_CODEC` e `RTSP_URI` não
+`rtsp_env.read_rtsp_uri()` e `RTSP_CODEC` exatamente como hoje. **`RTSP_CODEC` e `RTSP_URI` não
 podem ser removidos do compose** enquanto a flag existir — removê-los é o que transforma o
 rollback em cirurgia.
 
@@ -663,7 +683,7 @@ Estes itens **não** podem ser resolvidos durante o E6: eles fazem o E6 medir a 
 5. **Falso positivo de watchdog invalida medição.** O `no_frames_escalation` por high-water
    derrubou o container a cada ~12 min no dia da v1. Regra que reinicia precisa de
    corroboração (fonte morta), não só de um contador.
-6. **`fps_target` fixo contra fonte de fps variável é gerador de ruído.** A câmera alterna
+6. **`target_fps` fixo contra fonte de fps variável é gerador de ruído.** A câmera alterna
    entre ~20 fps e 7 fps; o alvo tem de ser por fonte, e o limiar relativo a ele.
 
 ---
@@ -706,7 +726,7 @@ Marcos:
 ### 14.1 Contrato de `data/config/active_source`
 
 - Arquivo texto, **uma linha**, o `id` da fonte (`camera`, `drone`, `phone`), newline final.
-- Ausente ⇒ `default:` de `deepstream/config/sources.yaml`.
+- Ausente ⇒ `default_source` de `deepstream/config/sources.yaml`.
 - Id inválido ⇒ **erro explícito** com a lista de ids válidos (nunca fallback silencioso: uma
   troca que "não pegou" é pior que uma troca que falha).
 - Escrita **atômica** (tmp no mesmo diretório + `mv`); quem escreve é só
