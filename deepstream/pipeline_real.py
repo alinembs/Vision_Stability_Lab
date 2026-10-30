@@ -54,9 +54,14 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("VisionPipelineReal")
 
 # Identificador desta execução (E2-T2; E3-T1 troca por `SessionState`). É o
-# relógio de início do processo: único por execução, comparável com
+# relógio de início do **processo**: único por execução, comparável com
 # `docker inspect .State.StartedAt` e suficiente para separar sessões de
 # fontes diferentes no JSONL append-only.
+# Nota (m7 da revisão): o valor é o instante do **import** deste módulo, que no
+# container coincide com o início do processo (`python3 pipeline_real.py` é o
+# entrypoint). Não é um relógio de sessão de fonte nem sobrevive a
+# reimportação em outro processo; o E3-T1 (`SessionState`) passa a usar
+# `STARTED_AT` explícito.
 SESSION_EPOCH = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 PERSON_CLASS_ID = 0

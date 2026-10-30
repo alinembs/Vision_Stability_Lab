@@ -13,13 +13,16 @@ As credenciais falsas são montadas em tempo de execução com `_com_credencial(
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import rtsp_env  # noqa: E402
 import sources  # noqa: E402
 
 USUARIO_FALSO = "admin"
@@ -239,13 +242,56 @@ class ExpansaoDeVariavelTest(SourcesTestCase):
             sources.load_sources(caminho, env={})
         self.assertIn("IP_DO_DRONE", str(ctx.exception))
 
-    def test_expansao_na_uri_vinda_de_uri_env(self) -> None:
+    def test_uri_env_nao_e_expandida(self) -> None:
+        """m10: `uri_env` é o ambiente já resolvido — `${...}` não se expande.
+
+        O valor vem de `deploy/.env`/compose, que já fizeram a expansão do
+        compose. Expandir de novo abriria a porta para `$` dentro de senha e
+        mascararia um `.env` mal preenchido.
+        """
+        caminho = self.escrever(
+            "sources:\n  - id: camera\n    uri_env: RTSP_URI\n    codec: h265\n")
+        with self.assertRaises(sources.SourceConfigError) as ctx:
+            sources.load_sources(
+                caminho, env={"RTSP_URI": "rtsp://${CAM_HOST}:5543/live/channel0",
+                              "CAM_HOST": "192.168.59.108"})
+        mensagem = str(ctx.exception)
+        self.assertIn("RTSP_URI", mensagem)
+        self.assertIn("não expandido", mensagem)
+
+    def test_uri_env_resolvida_entra_literal(self) -> None:
         caminho = self.escrever(
             "sources:\n  - id: camera\n    uri_env: RTSP_URI\n    codec: h265\n")
         fonte = sources.load_sources(
-            caminho, env={"RTSP_URI": "rtsp://${CAM_HOST}:5543/live/channel0",
-                          "CAM_HOST": "192.168.59.108"})[0]
-        self.assertEqual(fonte.uri, URI_CAMERA)
+            caminho, env={"RTSP_URI": _com_credencial(URI_CAMERA)})[0]
+        self.assertEqual(fonte.uri, _com_credencial(URI_CAMERA))
+
+    def test_host_so_com_espaco_e_erro(self) -> None:
+        """m4: `H=" "` produzia `rtsp:// /x`, aceito e opaco no `rtspsrc`."""
+        caminho = self.escrever(
+            "sources:\n  - id: drone\n    uri: \"rtsp://${H}:8554/drone\"\n"
+            "    codec: h264\n")
+        with self.assertRaises(sources.SourceConfigError) as ctx:
+            sources.load_sources(caminho, env={"H": " "})
+        mensagem = str(ctx.exception)
+        self.assertIn("vazia", mensagem)
+        self.assertIn("H", mensagem)
+
+    def test_host_vazio_pela_expansao_e_erro_de_host(self) -> None:
+        caminho = self.escrever(
+            "sources:\n  - id: drone\n    uri: \"rtsp://${H:-}:8554/drone\"\n"
+            "    codec: h264\n")
+        with self.assertRaises(sources.SourceConfigError) as ctx:
+            sources.load_sources(caminho, env={})
+        self.assertIn("host", str(ctx.exception))
+
+    def test_valor_expandido_e_aparado(self) -> None:
+        """m4: `strip()` no valor expandido (espaço no fim da URI)."""
+        caminho = self.escrever(
+            "sources:\n  - id: drone\n    uri: \"  rtsp://${HOST}:8554/drone  \"\n"
+            "    codec: h264\n")
+        fonte = sources.load_sources(caminho, env={"HOST": "192.168.59.102 "})[0]
+        self.assertEqual(fonte.uri, URI_DRONE)
 
 
 class UriEnvTest(SourcesTestCase):
@@ -354,7 +400,10 @@ class FallbackLegadoTest(SourcesTestCase):
     """Sem YAML (ou com a seleção desligada) = comportamento de antes do E2."""
 
     def test_sem_arquivo_usa_rtsp_uri_e_rtsp_codec(self) -> None:
-        fontes = sources.load_sources(self.dir / "nao_existe.yaml",
+        # Arquivo **vazio** (não caminho inexistente: caminho explícito que não
+        # existe é erro, ver `test_caminho_explicito_inexistente_nao_cai_no_legado`).
+        vazio = self.escrever("", nome="vazio.yaml")
+        fontes = sources.load_sources(vazio,
                                       env={"RTSP_URI": _com_credencial(URI_CAMERA),
                                            "RTSP_CODEC": "h265"})
         self.assertEqual(len(fontes), 1)
@@ -365,6 +414,22 @@ class FallbackLegadoTest(SourcesTestCase):
             sources.resolve_active_source(fontes, env={},
                                           control_path=self.control_ausente).id,
             sources.LEGACY_SOURCE_ID)
+
+    def test_caminho_explicito_inexistente_nao_cai_no_legado(self) -> None:
+        """m1: typo em `SOURCES_CONFIG`/argumento é erro, não legado."""
+        for env_extra in ({sources.ENV_CONFIG: str(self.dir / "typo.yaml")}, {}):
+            with self.assertRaises(sources.SourceConfigError) as ctx:
+                sources.load_sources(
+                    self.dir / "nao_existe.yaml",
+                    env={"RTSP_URI": URI_CAMERA, **env_extra})
+            mensagem = str(ctx.exception)
+            self.assertIn("não existe", mensagem)
+            self.assertNotIn(SENHA_FALSA, mensagem)
+
+    def test_caminho_explicito_que_e_diretorio_e_erro(self) -> None:
+        with self.assertRaises(sources.SourceConfigError) as ctx:
+            sources.load_sources(self.dir, env={"RTSP_URI": URI_CAMERA})
+        self.assertIn("arquivo regular", str(ctx.exception))
 
     def test_sources_config_apontando_para_arquivo_vazio(self) -> None:
         fontes = sources.load_sources(
@@ -397,6 +462,99 @@ class FallbackLegadoTest(SourcesTestCase):
         self.assertFalse(sources.selection_enabled(
             {sources.ENV_SELECTION: "OFF"}))
         self.assertTrue(sources.selection_enabled({"VSL_SOURCE_SELECTION": "on"}))
+
+
+class ArquivoDeControleTest(SourcesTestCase):
+    """`data/config/active_source`: leitura robusta e *fail-closed* (m2)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.fontes = self.carregar()
+        self.arquivo = self.dir / "active_source"
+
+    def resolver(self, **env) -> sources.SourceConfig:
+        return sources.resolve_active_source(self.fontes, env=env,
+                                             control_path=str(self.arquivo))
+
+    def test_bom_nao_vira_parte_do_id(self) -> None:
+        self.arquivo.write_bytes(b"\xef\xbb\xbfdrone\n")
+        self.assertEqual(sources.read_active_source(str(self.arquivo)), "drone")
+        self.assertEqual(self.resolver().id, "drone")
+
+    def test_crlf_continua_funcionando(self) -> None:
+        self.arquivo.write_bytes(b"drone\r\n")
+        self.assertEqual(self.resolver().id, "drone")
+
+    def test_comentarios_e_linhas_em_branco_sao_ignorados(self) -> None:
+        self.arquivo.write_text(
+            "# fonte ativa da bancada\n\n   # drone hoje\ndrone\nphone\n",
+            encoding="utf-8")
+        self.assertEqual(self.resolver().id, "drone")
+
+    def test_so_a_primeira_linha_valida_vale(self) -> None:
+        self.arquivo.write_text("drone\nphone\n", encoding="utf-8")
+        self.assertEqual(sources.read_active_source(str(self.arquivo)), "drone")
+
+    def test_arquivo_so_com_comentarios_cai_no_default(self) -> None:
+        self.arquivo.write_text("# nada escolhido ainda\n\n", encoding="utf-8")
+        self.assertEqual(self.resolver().id, "camera")
+
+    def test_arquivo_ilegivel_nao_cai_no_default(self) -> None:
+        """m3 original: `except OSError: return ""` fazia `chmod 000` virar câmera."""
+        self.arquivo.write_text("drone\n", encoding="utf-8")
+        self.arquivo.chmod(0o000)
+        self.addCleanup(self.arquivo.chmod, 0o644)
+        if os.geteuid() == 0:  # pragma: no cover - root lê qualquer coisa
+            self.skipTest("root ignora as permissões do arquivo")
+        with self.assertRaises(sources.SourceConfigError) as ctx:
+            self.resolver()
+        mensagem = str(ctx.exception)
+        self.assertIn("não pôde ser lido", mensagem)
+        self.assertIn("NÃO cai em default", mensagem)
+
+    def test_controle_que_e_diretorio_e_erro(self) -> None:
+        """EISDIR: arquivo existe e não é legível como arquivo (sem chmod)."""
+        with self.assertRaises(sources.SourceConfigError) as ctx:
+            sources.read_active_source(str(self.dir))
+        self.assertIn("não pôde ser lido", str(ctx.exception))
+
+    def test_arquivo_binario_e_erro_de_codificacao(self) -> None:
+        self.arquivo.write_bytes(b"\xff\xfe\x00drone")
+        with self.assertRaises(sources.SourceConfigError) as ctx:
+            sources.read_active_source(str(self.arquivo))
+        self.assertIn("UTF-8", str(ctx.exception))
+
+    def test_ausente_devolve_string_vazia(self) -> None:
+        self.assertEqual(sources.read_active_source(self.control_ausente), "")
+
+
+class CaminhoLegadoSemSystemExitTest(unittest.TestCase):
+    """m3: `sources.py` levanta `SourceConfigError`; o `sys.exit` fica no main."""
+
+    def test_rtsp_uri_ausente_no_ambiente_real_nao_encerra_o_processo(self) -> None:
+        ambiente = {sources.ENV_CONFIG: "/dev/null"}
+        with mock.patch.dict(os.environ, ambiente, clear=True):
+            with self.assertRaises(sources.SourceConfigError) as ctx:
+                sources.load_sources()  # env=None => ambiente do processo
+        mensagem = str(ctx.exception)
+        self.assertIn("RTSP_URI", mensagem)
+        self.assertIn("DIV-001", mensagem)
+
+    def test_ambiente_real_com_rtsp_uri_usa_a_fonte_legada(self) -> None:
+        ambiente = {sources.ENV_CONFIG: "/dev/null",
+                    "RTSP_URI": _com_credencial(URI_CAMERA),
+                    "RTSP_CODEC": "h264"}
+        with mock.patch.dict(os.environ, ambiente, clear=True):
+            fontes = sources.load_sources()
+        self.assertEqual(fontes[0].codec, "h264")
+        self.assertEqual(fontes[0].uri, _com_credencial(URI_CAMERA))
+
+    def test_require_rtsp_uri_continua_saindo_para_os_scripts_de_bancada(self) -> None:
+        self.assertTrue(callable(rtsp_env.require_rtsp_uri))
+        self.assertTrue(issubclass(rtsp_env.RtspUriError, ValueError))
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(SystemExit):
+                rtsp_env.require_rtsp_uri()
 
 
 class DepayFactoryTest(unittest.TestCase):

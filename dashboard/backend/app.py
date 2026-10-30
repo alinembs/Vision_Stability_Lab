@@ -71,11 +71,14 @@ class DashboardState:
             self._push_event(record)
         else:
             # eventos relevantes para a lista (transições, tracks, erros...)
+            # `source_active` entra aqui (m8 da revisão): é o evento que registra
+            # QUAL fonte subiu e com qual cadeia de mídia. Só registra — o card
+            # "fonte ativa" é E4; sem isso a tela não mostra a troca.
             if event in ("track_entered", "track_exited", "area_transition",
                          "pipeline_error", "pipeline_warning", "eos",
                          "interrupted_by_user", "test_duration_reached",
                          "pipeline_stopped", "pipeline_playing",
-                         "preview_branch_ready"):
+                         "source_active", "preview_branch_ready"):
                 self._push_event(record)
         return event
 

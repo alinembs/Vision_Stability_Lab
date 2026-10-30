@@ -23,9 +23,34 @@ _MENSAGEM = (
 )
 
 
-def require_rtsp_uri():
-    """Retorna RTSP_URI do ambiente; encerra o processo se ausente."""
+class RtspUriError(ValueError):
+    """`RTSP_URI` ausente ou vazia no ambiente (DIV-001).
+
+    Existe para que quem **não** é o entrypoint do processo (`sources.py`)
+    possa converter a ausência da variável no próprio erro de configuração, em
+    vez de herdar um `SystemExit` — que `except Exception` não captura e que
+    saía sem evento `startup_failed` na telemetria.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(_MENSAGEM)
+
+
+def read_rtsp_uri():
+    """Retorna `RTSP_URI` do ambiente ou levanta `RtspUriError`."""
     uri = (os.environ.get(ENV_VAR) or "").strip()
     if not uri:
-        sys.exit(f"ERRO: {_MENSAGEM}")
+        raise RtspUriError()
     return uri
+
+
+def require_rtsp_uri():
+    """Retorna RTSP_URI do ambiente; encerra o processo se ausente.
+
+    Reservado aos entrypoints de bancada (`deepstream/rtsp_*_test.py`). Quem
+    precisa de mensagem tratável usa `read_rtsp_uri()`.
+    """
+    try:
+        return read_rtsp_uri()
+    except RtspUriError as exc:
+        sys.exit(f"ERRO: {exc}")

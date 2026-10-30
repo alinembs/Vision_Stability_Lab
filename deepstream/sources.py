@@ -20,6 +20,9 @@ Caminho do YAML: `SOURCES_CONFIG` (env) > `deepstream/config/sources.yaml`
 resolvido **a partir deste arquivo** — o mesmo caminho funciona no host e no
 container, onde o cwd é `/app` e `../deepstream` está montado em
 `/app/deepstream`; se o caminho do módulo não existir, tenta relativo ao cwd.
+Caminho **explícito** (argumento ou `SOURCES_CONFIG`) que não existe é erro, não
+fallback: um typo em `SOURCES_CONFIG=/tmp/fontes.yaml` cairia na configuração
+legada e o operador acharia que a troca pegou.
 
 Fallback legado: sem `sources.yaml` (arquivo ausente ou vazio) ou com
 `VSL_SOURCE_SELECTION=off`, o módulo devolve **uma** fonte derivada de
@@ -41,7 +44,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import urlsplit
 
-from rtsp_env import require_rtsp_uri
+from rtsp_env import RtspUriError, read_rtsp_uri
 
 MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(MODULE_DIR)
@@ -64,7 +67,10 @@ VALID_SCHEMES = ("rtsp", "rtsps")
 DEFAULT_CODEC = "h265"
 DEFAULT_TRANSPORT = "tcp"
 DEFAULT_LATENCY_MS = 200     # mesmo valor que o rtspsrc já usava
-DEFAULT_TARGET_FPS = 20.0    # câmera medida em 19,90 fps (data/logs/live.jsonl)
+# Alvo nominal da câmera. As amostras de ~19,9 fps são de 2026-08-23/24
+# (`data/logs/phase5/*`, baseline v1); em 2026-10-30 a mediana é 12,0 e o
+# regime atual da fonte é ~7,0 (por isso o gate de fps é por fonte, E5-T1).
+DEFAULT_TARGET_FPS = 20.0
 LEGACY_SOURCE_ID = "camera"
 MASKED_USERINFO = "***"
 
@@ -181,6 +187,11 @@ def expand_vars(text: str, env: Optional[Mapping[str, str]] = None) -> str:
     Sem default e sem valor no ambiente é **erro**, não string vazia: um
     `rtsp://${IP_DA_CAMERA}:554/...` sem `IP_DA_CAMERA` produziria uma URI
     inválida que só falharia depois, no `rtspsrc`, com mensagem opaca.
+
+    O resultado sai com `strip()` em cada substituição e no texto final: um
+    valor com espaço sobrando (`H=" 192.168.59.102 "`, ou `H=" "`) produziria
+    `rtsp:// 192.168.59.102 :8554/x` ou `rtsp:// /x` — URI que passa pela
+    validação de esquema e só quebra no `rtspsrc`, com mensagem opaca.
     """
     environ = os.environ if env is None else env
     missing: List[str] = []
@@ -188,10 +199,10 @@ def expand_vars(text: str, env: Optional[Mapping[str, str]] = None) -> str:
     def _substitute(match: "re.Match[str]") -> str:
         name, default = match.group(1), match.group(2)
         value = environ.get(name)
-        if value:
-            return value
+        if value and value.strip():
+            return value.strip()
         if default is not None:
-            return default
+            return default.strip()
         missing.append(name)
         return match.group(0)
 
@@ -199,10 +210,11 @@ def expand_vars(text: str, env: Optional[Mapping[str, str]] = None) -> str:
     if missing:
         names = ", ".join(sorted(set(missing)))
         raise SourceConfigError(
-            f"variável de ambiente ausente na uri ({mask_uri(text)}): {names}\n"
+            f"variável de ambiente ausente ou vazia na uri "
+            f"({mask_uri(text)}): {names}\n"
             f"  defina {names} no ambiente ou use ${{{names}:-<default>}} "
             "no sources.yaml")
-    return expanded
+    return expanded.strip()
 
 
 # -- carga do YAML -----------------------------------------------------------
@@ -211,21 +223,48 @@ def resolve_config_path(path: Optional[str] = None,
     """Caminho do YAML de fontes, ou `None` quando o fallback legado vale.
 
     Ordem: argumento explícito > `SOURCES_CONFIG` > caminho do módulo >
-    caminho relativo ao cwd. `None` = arquivo não encontrado **ou** vazio
-    (`/dev/null`), que é o gatilho do fallback legado.
+    caminho relativo ao cwd. `None` = nenhum arquivo utilizável (ausente na
+    busca padrão, ou vazio — `/dev/null`), que é o gatilho do fallback legado.
+
+    Caminho **explícito** (argumento ou `SOURCES_CONFIG` preenchido) que não
+    existe é `SourceConfigError`: a ausência sem intenção explícita pode cair no
+    legado, mas um typo (`SOURCES_CONFIG=/tmp/fontes.yaml`) não — cair em
+    silêncio é o "fail-open" que o plano quer eliminar (seção 14.1).
     """
     environ = os.environ if env is None else env
-    if path is None:
+    explicit = path is not None
+    if not explicit:
         path = (environ.get(ENV_CONFIG) or "").strip() or None
-    candidates = []
-    if path:
-        candidates.append(path)
-    else:
-        candidates.append(DEFAULT_CONFIG_PATH)
-        candidates.append(os.path.join(os.getcwd(), "deepstream", "config",
-                                       "sources.yaml"))
-        candidates.append(os.path.join(os.getcwd(), "config", "sources.yaml"))
-    for candidate in candidates:
+        explicit = bool(path)
+    if explicit:
+        candidate = os.fspath(path)
+        try:
+            exists = os.path.exists(candidate)
+            size = os.path.getsize(candidate) if exists else 0
+        except OSError as exc:
+            raise SourceConfigError(
+                f"caminho das fontes inválido ({candidate}): {exc}\n"
+                "  o caminho veio de argumento ou de "
+                f"{ENV_CONFIG}; ele precisa ser legível ou ficar vazio para "
+                "usar o sources.yaml versionado") from exc
+        if not exists:
+            raise SourceConfigError(
+                f"{ENV_CONFIG} aponta para {candidate}, que não existe.\n"
+                "  Caminho explícito não cai no fallback legado: corrija o "
+                f"caminho ou remova {ENV_CONFIG} para usar o sources.yaml "
+                "versionado (deepstream/config/sources.yaml)")
+        if size == 0:
+            # arquivo vazio (ou /dev/null): mesmo tratamento de "sem arquivo"
+            return None
+        if not os.path.isfile(candidate):
+            raise SourceConfigError(
+                f"{candidate} não é um arquivo regular — "
+                f"{ENV_CONFIG} precisa apontar para um sources.yaml")
+        return candidate
+    for candidate in (DEFAULT_CONFIG_PATH,
+                      os.path.join(os.getcwd(), "deepstream", "config",
+                                   "sources.yaml"),
+                      os.path.join(os.getcwd(), "config", "sources.yaml")):
         try:
             if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
                 return candidate
@@ -293,27 +332,38 @@ def _build_source(entry: Mapping[str, Any], index: int,
             "(a credencial da câmera não entra no repositório, DIV-001)")
     if uri_env:
         var = str(uri_env).strip()
-        raw_uri = (env.get(var) or "").strip()
-        if not raw_uri:
+        # `uri_env` é ambiente **já resolvido** (deploy/.env no host, variável do
+        # compose no container): não se expande `${...}` dentro do valor dele.
+        # Se sobrar um `${...}` literal, é erro aqui — no `rtspsrc` viraria uma
+        # falha opaca de DNS/host.
+        uri = (env.get(var) or "").strip()
+        if not uri:
             raise SourceConfigError(
                 f"{where}: variável {var} (uri_env) não definida no ambiente.\n"
                 f"  copie deploy/.env.example para deploy/.env e preencha, ou "
                 f"exporte {var}.\n"
                 "  Nenhuma credencial é embutida no código nem no "
                 "sources.yaml (DIV-001)")
+        if VAR_RE.search(uri):
+            raise SourceConfigError(
+                f"{where}: o valor de {var} contém um ${{...}} não expandido.\n"
+                f"  {var} é lido do ambiente já resolvido (deploy/.env ou "
+                "compose); expanda a variável no .env, não no valor dela")
     elif uri_field:
-        raw_uri = str(uri_field).strip()
+        uri = expand_vars(str(uri_field), env)
     else:
         raise SourceConfigError(
             f"{where}: declare `uri` ou `uri_env`")
-    uri = expand_vars(raw_uri, env)
+    uri = uri.strip()
 
     parts = urlsplit(uri)
     if parts.scheme.lower() not in VALID_SCHEMES:
         raise SourceConfigError(
             f"{where}: uri precisa de esquema rtsp:// (recebido "
             f"{mask_uri(uri)!r})")
-    if not parts.hostname:
+    # `hostname` pode ser só espaço (`H=" "` num `rtsp://${H}/x`): o strip do
+    # valor expandido não alcança o meio da URI, então o host é validado aqui.
+    if not (parts.hostname or "").strip():
         raise SourceConfigError(
             f"{where}: uri sem host (recebido {mask_uri(uri)!r})")
 
@@ -368,13 +418,19 @@ def _legacy_source(env: Mapping[str, str],
     projeto é a da câmera fixa — e porque id estável preserva o consumo de
     `source_id` pela telemetria/watchdog (E5).
 
-    Com o ambiente real (`live_env`), a URI continua vindo de
-    `rtsp_env.require_rtsp_uri()` — o mesmo contrato da DIV-001 de antes do E2,
-    com a mesma mensagem e o mesmo `sys.exit` (exit code 1). Ambiente injetado
-    (testes) levanta `SourceConfigError` em vez de derrubar o processo.
+    Com o ambiente real (`live_env`), a URI continua vindo de `RTSP_URI` — o
+    mesmo contrato da DIV-001 de antes do E2, com a mesma mensagem. A diferença
+    é **quem** encerra: aqui a ausência vira `SourceConfigError`, não `sys.exit`.
+    `SystemExit` não é capturado por `except Exception`, então o caminho legado
+    saía 1 sem evento `startup_failed` na telemetria (achado m3 da revisão); o
+    `sys.exit` fica só no `main()` do pipeline. Ambiente injetado (testes)
+    levanta `SourceConfigError` em vez de derrubar o processo.
     """
     if live_env:
-        uri = require_rtsp_uri()
+        try:
+            uri = read_rtsp_uri()
+        except RtspUriError as exc:
+            raise SourceConfigError(str(exc)) from exc
     else:
         uri = (env.get(ENV_URI) or "").strip()
     if not uri:
@@ -408,7 +464,7 @@ def load_sources(path: Optional[str] = None,
     """
     environ = os.environ if env is None else env
     # `live_env`: o ambiente do processo de verdade (não um dict de teste) —
-    # é o caso em que o caminho legado usa `require_rtsp_uri()`.
+    # é o caso em que o caminho legado lê `RTSP_URI` do ambiente real.
     live_env = env is None or env is os.environ
 
     def _legacy() -> SourceList:
@@ -462,20 +518,57 @@ def load_sources(path: Optional[str] = None,
 
 
 # -- seleção da fonte ativa --------------------------------------------------
+def _first_valid_line(content: str) -> str:
+    """Primeira linha útil do arquivo de controle (ignora branco e `#`).
+
+    O runbook ensina a editar `data/config/active_source` à mão e o exemplo
+    versionado (`active_source.example`) tem comentários: sem esse filtro, um
+    arquivo comentado viraria id inválido e a mensagem de erro despejaria o
+    arquivo inteiro. Só a **primeira** linha válida vale — o resto é ignorado.
+    """
+    for line in content.splitlines():
+        candidate = line.strip()
+        if not candidate or candidate.startswith("#"):
+            continue
+        return candidate
+    return ""
+
+
 def read_active_source(path: Optional[str] = None) -> str:
     """Id gravado em `data/config/active_source`; `""` se ausente/vazio.
 
-    Arquivo de uma linha (seção 14.1 do plano). Ausente ou vazio **não** é
-    erro: cai para o `default_source` do YAML. Id inválido, sim — quem decide
-    isso é `resolve_active_source()`.
+    Arquivo de uma linha (seção 14.1 do plano), tolerante a BOM, CRLF, linhas
+    em branco e comentários (`#`) — o operador edita esse arquivo à mão.
+    Ausente ou sem linha útil **não** é erro: cai para o `default_source` do
+    YAML. Id inválido, sim — quem decide isso é `resolve_active_source()`.
+
+    Arquivo que **existe e não é legível** é erro (`SourceConfigError`), não
+    default silencioso: `chmod 000` no controle fazia a fonte cair na câmera
+    mesmo com `drone` escrito nele — o "fail-open" que o plano quer eliminar.
+    Só `FileNotFoundError` significa "sem arquivo".
     """
     candidate = path or DEFAULT_CONTROL_PATH
     try:
-        with open(candidate, "r", encoding="utf-8") as handle:
+        # utf-8-sig: editor no Windows/Notepad deixa BOM, e `'\ufeffdrone'` não
+        # é id válido (a mensagem sairia como "fonte ativa '\\ufeffdrone'").
+        with open(candidate, "r", encoding="utf-8-sig") as handle:
             content = handle.read()
-    except OSError:
+    except FileNotFoundError:
         return ""
-    return content.strip()
+    except OSError as exc:
+        raise SourceConfigError(
+            f"{candidate} existe e não pôde ser lido ({exc.strerror or exc}).\n"
+            "  Corrija as permissões do arquivo de controle ou remova-o para "
+            "usar o `default_source` do sources.yaml.\n"
+            "  Fonte ativa ilegível NÃO cai em default: a troca pareceria "
+            "feita sem estar (seção 14.1 do plano)") from exc
+    except UnicodeDecodeError as exc:
+        raise SourceConfigError(
+            f"{candidate} não é texto UTF-8 ({exc.reason} na posição "
+            f"{exc.start}).\n"
+            "  O arquivo de controle tem uma linha só, com o id de uma fonte "
+            "de deepstream/config/sources.yaml") from exc
+    return _first_valid_line(content)
 
 
 def resolve_active_source(sources: List[SourceConfig],

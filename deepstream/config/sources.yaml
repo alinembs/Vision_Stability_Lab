@@ -25,7 +25,9 @@ sources:
     # 200 ms é o valor que o pipeline já usava no rtspsrc; TCP porque a LAN
     # não garante ordem/UDP sem perda para o decoder de hardware.
     latency_ms: 200
-    # Medido: 19,90 fps de média (data/logs/live.jsonl, 2026-10-30).
+    # Alvo nominal de 20 fps. As amostras de ~19,9 fps são de 2026-08-23/24
+    # (baseline v1); em 2026-10-30 a mediana é 12,0 e o regime atual da fonte
+    # é ~7,0 — é por isso que o gate de fps é por fonte (E5-T1), não global.
     target_fps: 20
     enabled: true
     # D3: a câmera entra no gate de latência p95 do E6 (alvo ≤ 300 ms).
