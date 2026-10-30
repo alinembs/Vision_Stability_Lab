@@ -10,6 +10,14 @@ preview é declarado descartável no cabeçalho de `pipeline_real.py`, mas
 qualquer `Gst.MessageType.ERROR` — inclusive o de `rtspclientsink` quando o
 MediaMTX reinicia — encerrava o pipeline inteiro e a análise morria junto,
 com `State.ExitCode = 0`.
+
+Motivação (E2, 2026-10-30): erro do **`rtspsrc`** também reconecta. Com a
+fonte fora do ar o `rtspsrc` não publica EOS, publica ERROR
+(`Could not open resource for reading (5)` — o MediaMTX recusa uma sessão para
+um path sem publisher). Classificado como "erro da análise" o processo saía
+com `exit 1` e o `restart: unless-stopped` escondia o ciclo num crash loop,
+sem gastar o orçamento de reconexões e sem chegar ao `exit 2`
+(`EXIT_SOURCE_LOST`) que o runbook documenta.
 """
 
 from __future__ import annotations
@@ -45,10 +53,19 @@ PREVIEW_ELEMENTS = frozenset({
 
 _TRAILING_INDEX = re.compile(r"\d+$")
 
+# Elemento da fonte. Só ele: erro de depay/parser/decoder/mux é mídia quebrada
+# de verdade (não se resolve reconectando o `rtspsrc`) e continua encerrando.
+SOURCE_ELEMENTS = frozenset({"rtspsrc"})
+
 
 def base_element_name(element_name: str) -> str:
     """Remove o índice que o GStreamer acrescenta: `rtspclientsink0` -> `rtspclientsink`."""
     return _TRAILING_INDEX.sub("", element_name or "")
+
+
+def is_source_element(src_name: str) -> bool:
+    """True se o elemento de origem é a própria fonte (`rtspsrc`)."""
+    return base_element_name(src_name or "") in SOURCE_ELEMENTS
 
 
 def _preview_names(preview_elements) -> frozenset[str]:
@@ -101,6 +118,12 @@ def classify_bus_message(message_type: str, src_name: str = "",
     if kind == MSG_EOS:
         # Fim de stream da fonte: o processo não deve morrer, a fonte reconecta
         # pelo mesmo caminho usado para inatividade (RTSP_IDLE_RECONNECT_S).
+        return ACTION_RECONNECT
+
+    if is_source_element(source):
+        # Fonte indisponível (não EOS): mesmo caminho do EOS — o orçamento de
+        # `SourceReconnectBudget` decide quando declarar a fonte perdida
+        # (exit 2), em vez de sair com exit 1 e ser mascarado pelo restart.
         return ACTION_RECONNECT
 
     # Ramo de análise (ou elemento que não dá para provar ser descartável):

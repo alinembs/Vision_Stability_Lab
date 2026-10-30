@@ -94,6 +94,17 @@ services:
       - PREVIEW_PORT=${PREVIEW_PORT:-5600}
       - PREVIEW_BITRATE=${PREVIEW_BITRATE:-4000000}
       - PREVIEW_IDR_GOP=${PREVIEW_IDR_GOP:-30}
+      # Reconexão da fonte (E2). Ficam aqui porque são o que o operador
+      # ajusta em campo: sem elas no compose, mudar o comportamento exigiria
+      # editar o Python dentro do container. Defaults iguais aos do
+      # `pipeline_real.py` (`:-5` evita chegar vazio e quebrar o `int()`).
+      - SOURCE_RECONNECT_MAX_ATTEMPTS=${SOURCE_RECONNECT_MAX_ATTEMPTS:-5}
+      - SOURCE_RECONNECT_RESET_S=${SOURCE_RECONNECT_RESET_S:-600}
+      - SOURCE_FRAME_TIMEOUT_S=${SOURCE_FRAME_TIMEOUT_S:-15}
+      - SOURCE_RETRY_S=${SOURCE_RETRY_S:-10}
+      # Teto do `set_state(NULL)` no encerramento: é o que garante
+      # `docker stop` ≤ 2 s (e nenhum exit 137) mesmo com a fonte morta.
+      - PIPELINE_STOP_TIMEOUT_S=${PIPELINE_STOP_TIMEOUT_S:-1.5}
     volumes:
       - ../deepstream:/app/deepstream
       - ../data:/app/data

@@ -50,7 +50,10 @@ class TestErroDaAnalise(unittest.TestCase):
     """Ramo de análise mantém o comportamento: encerra com código != 0."""
 
     def test_elementos_da_analise(self):
-        for elemento in ("rtspsrc0", "rtph265depay0", "h265parse0",
+        # `rtspsrc` NÃO está aqui: erro da fonte reconecta (ver
+        # TestErroDaFonte). Depay/parser/decoder/mux são mídia quebrada de
+        # verdade — reconectar o `rtspsrc` não conserta nenhum deles.
+        for elemento in ("rtph265depay0", "h265parse0",
                          "nvv4l2decoder0", "nvstreammux0", "nvinfer0",
                          "nvtracker0", "nvdsosd0", "tee0", "queue0",
                          "fakesink0"):
@@ -86,6 +89,34 @@ class TestEos(unittest.TestCase):
     def test_eos_do_preview_derruba_so_o_preview(self):
         self.assertEqual(bc.classify_bus_message(bc.MSG_EOS, "rtspclientsink0"),
                          bc.ACTION_DROP_PREVIEW)
+
+
+class TestErroDaFonte(unittest.TestCase):
+    """Erro do `rtspsrc` reconecta — e é o orçamento quem desiste (E2).
+
+    Com a fonte fora do ar o `rtspsrc` publica
+    `Could not open resource for reading (5)` (o MediaMTX recusa sessão para
+    path sem publisher), não EOS. Antes isso era "erro da análise": exit 1 e o
+    `restart: unless-stopped` escondia o ciclo num crash loop, sem chegar ao
+    exit 2 documentado no runbook.
+    """
+
+    def test_erro_do_rtspsrc_reconecta(self):
+        self.assertEqual(
+            bc.classify_bus_error("rtspsrc0",
+                                  "Could not open resource for reading. (5)"),
+            bc.ACTION_RECONNECT)
+
+    def test_outros_nomes_do_rtspsrc(self):
+        for elemento in ("rtspsrc", "rtspsrc1", "rtspsrc12"):
+            with self.subTest(elemento=elemento):
+                self.assertEqual(bc.classify_bus_error(elemento, "erro"),
+                                 bc.ACTION_RECONNECT)
+
+    def test_is_source_element(self):
+        self.assertTrue(bc.is_source_element("rtspsrc0"))
+        self.assertFalse(bc.is_source_element("rtph265depay0"))
+        self.assertFalse(bc.is_source_element(""))
 
 
 class TestErroDesconhecido(unittest.TestCase):

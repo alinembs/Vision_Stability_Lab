@@ -18,7 +18,13 @@ inferência (queue leaky com 1 buffer de folga). Falha nele — erro de bus ou
 EOS — derruba só o ramo de preview (`preview_branch_failed`) e tenta
 religá-lo com backoff; a análise segue. A classificação dessa decisão está
 em `bus_classifier.py` (puro, testável sem DeepStream).
-EOS do `rtspsrc` também não encerra o processo: reconecta a fonte.
+EOS (ou erro) do `rtspsrc` também não encerra o processo: reconecta a fonte.
+A reconexão é **agendada**, nunca executada no callback do bus: aquele
+callback roda no thread do loop GLib, e uma chamada de GStreamer que espere um
+stream lock preso (o `nvstreammux` segura o do pad src enquanto espera batch)
+congelava o loop inteiro — métricas, `_check_rtsp_alive` e `SIGTERM`
+inclusive. A decisão mora em `source_reconnect.py` (puro) e as fatias são
+executadas por `_reconnect_step` (timer de 250 ms, com teto por fase).
 Códigos de saída (`main`): 0 = encerramento limpo, 1 = erro de pipeline,
 2 = fonte perdida após esgotar as tentativas de reconexão. "Encerramento
 limpo" inclui `SIGTERM`/`SIGINT` (`docker stop`, Ctrl+C): o sinal entra pelo
@@ -51,6 +57,9 @@ from bus_classifier import (  # noqa: E402
 from graceful_shutdown import GracefulShutdown, signal_name  # noqa: E402
 from health_metrics import HealthMetricsCollector  # noqa: E402
 from source_budget import SourceReconnectBudget  # noqa: E402
+from source_reconnect import (  # noqa: E402  (puro: sem gi/pyds)
+    STEP_GIVE_UP, STEP_NONE, STEP_RESUMED, STEP_RETRY, STEP_START, STEP_STOP,
+    SourceReconnectMachine)
 from sources import (  # noqa: E402  (puro: sem gi/pyds)
     depay_factory, endpoint_parts, load_sources, mask_uri,
     resolve_active_source)
@@ -103,6 +112,25 @@ SOURCE_RECONNECT_MAX_ATTEMPTS = int(
 # esgotar as tentativas e nunca chegar ao exit 2 (Menor 8 da revisão).
 SOURCE_RECONNECT_RESET_S = float(
     os.environ.get("SOURCE_RECONNECT_RESET_S", "600"))
+# Ritmo e tetos do caminho de reconexão (`source_reconnect.py`). O trabalho é
+# feito em fatias curtas por um timer GLib: nada de `set_state`/`send_event`
+# no callback do bus, que roda no thread do loop (ver cabeçalho do módulo).
+SOURCE_RECONNECT_STEP_MS = int(os.environ.get("SOURCE_RECONNECT_STEP_MS", "250"))
+SOURCE_STOP_TIMEOUT_S = float(os.environ.get("SOURCE_STOP_TIMEOUT_S", "3"))
+SOURCE_FRAME_TIMEOUT_S = float(os.environ.get("SOURCE_FRAME_TIMEOUT_S", "15"))
+# Espera antes de cada nova tentativa: exponencial (10, 20, 40, 45 s...), com o
+# mesmo padrão do ramo de preview. Com 5 tentativas o processo passa ~2 min
+# reconectando **e publicando métricas** antes do exit 2: tempo para uma queda
+# de link voltar sem declarar a fonte perdida cedo demais, e ainda abaixo da
+# escalada de 180 s do watchdog (`scripts/watchdog.py`).
+SOURCE_RETRY_BASE_S = float(os.environ.get("SOURCE_RETRY_S", "10"))
+SOURCE_RETRY_MAX_S = float(os.environ.get("SOURCE_RETRY_MAX_S", "45"))
+# Teto do `set_state(NULL)` do pipeline no encerramento. O Docker mata por
+# `SIGKILL` na carência de 10 s (exit 137) e o contrato é `docker stop` em ≤ 2 s
+# mesmo com a fonte morta: se a parada travar num stream lock, o processo sai
+# assim mesmo, com o `exit_code` correto, em vez de virar 137.
+PIPELINE_STOP_TIMEOUT_S = float(
+    os.environ.get("PIPELINE_STOP_TIMEOUT_S", "1.5"))
 # Ramo de preview derrubado por erro: quando tentar religá-lo, com backoff.
 PREVIEW_RETRY_BASE_S = float(os.environ.get("PREVIEW_RETRY_S", "15"))
 PREVIEW_RETRY_MAX_S = float(os.environ.get("PREVIEW_RETRY_MAX_S", "300"))
@@ -192,10 +220,21 @@ class VisionPipeline:
         self.persons_detected_interval = 0
         self.persons_max_concurrent = 0
         self._last_input_frame_at = time.monotonic()
-        self._rtsp_reconnecting = False
         self._last_reconnect_at = 0.0
         self.source_budget = SourceReconnectBudget(
             SOURCE_RECONNECT_MAX_ATTEMPTS, SOURCE_RECONNECT_RESET_S)
+        # Caminho da reconexão da fonte: a máquina decide (puro), o timer
+        # `_reconnect_step` executa. Substituiu o `set_state(NULL)` +
+        # `send_event(flush_stop)` feitos dentro do callback do bus, que
+        # travavam o loop GLib (thread dump em `source_reconnect.py`).
+        self.reconnect = SourceReconnectMachine(
+            self.source_budget,
+            stop_timeout_s=SOURCE_STOP_TIMEOUT_S,
+            frame_timeout_s=SOURCE_FRAME_TIMEOUT_S,
+            retry_base_s=SOURCE_RETRY_BASE_S,
+            retry_max_s=SOURCE_RETRY_MAX_S)
+        # Uma exceção na fatia não pode inundar o log a cada 250 ms.
+        self._reconnect_error_logged = False
 
         # Ramo de preview (descartável): estado da queda e da retomada.
         self._preview_chain = ()
@@ -278,8 +317,6 @@ class VisionPipeline:
                 tee_src_analyze.link(self.queue_analyze.get_static_pad("sink")) \
                 != Gst.PadLinkReturn.OK:
             raise RuntimeError("Falha ao linkar tee -> queue análise")
-        # Guardado para o flush de recuperação de EOS (ver _flush_analysis_branch)
-        self.tee_src_analyze = tee_src_analyze
         if not self.queue_analyze.link(self.sink):
             raise RuntimeError("Falha ao linkar queue análise -> fakesink")
 
@@ -299,6 +336,12 @@ class VisionPipeline:
             Gst.PadProbeType.BUFFER, self._on_input_buffer, None)
         self.sink.get_static_pad("sink").add_probe(
             Gst.PadProbeType.BUFFER, self._on_processed_buffer, None)
+        # EOS da fonte morre no tee (ver `_on_source_eos_event`): sem isso os
+        # dois ramos ficam presos no estado de fim de stream e o pipeline
+        # continua "rodando" com `fps_processed = 0` depois de reconectar.
+        self.tee.get_static_pad("sink").add_probe(
+            Gst.PadProbeType.EVENT_DOWNSTREAM, self._on_source_eos_event, None)
+        self._source_eos_pending = False
 
         bus = self.pipeline.get_bus()
         bus.add_signal_watch()
@@ -336,6 +379,32 @@ class VisionPipeline:
     def _on_preview_buffer(self, _pad, info, _user_data):
         self.fps_preview.tick()
         return Gst.PadProbeReturn.OK
+
+    def _on_source_eos_event(self, _pad, info, _user_data):
+        """EOS da fonte **morre no tee**: os ramos não entram em fim de stream.
+
+        Por que o EOS não pode passar: um EOS deixa `queue`/`fakesink` (e o
+        ramo de preview) presos no estado de fim de stream — depois de
+        reconectar a fonte o pipeline continuava "rodando" com
+        `fps_processed = 0` / `fps_preview = 0` (medido em 2026-10-30: 30 fps
+        na entrada, zero processados). A limpeza usada antes era um
+        `flush_stop` no pad do tee, e era exatamente ela que travava o loop
+        GLib: evento serializado esperando stream lock de pad com a thread de
+        streaming do `nvstreammux` parada (thread dump em `source_reconnect.py`).
+
+        Contendo o EOS aqui o problema não existe: os ramos seguem vivos e
+        voltam a receber buffers quando o `rtspsrc` reconecta. Quem reconecta
+        é o timer `_reconnect_step` — este probe roda na thread de streaming e
+        não chama GStreamer.
+        """
+        event = info.get_event()
+        if event is None or event.type != Gst.EventType.EOS:
+            return Gst.PadProbeReturn.OK
+        self._source_eos_pending = True
+        log_event("eos", src="tee",
+                  action="EOS contido no tee: análise e preview seguem vivos; "
+                         "reconexão agendada")
+        return Gst.PadProbeReturn.DROP
 
     def _on_processed_buffer(self, _pad, info, _user_data):
         self.fps_proc.tick()
@@ -465,6 +534,7 @@ class VisionPipeline:
             action = classify_bus_message(MSG_EOS, src_name,
                                          preview_elements=self._preview_element_names)
             detail = "eos"
+            reason = "eos"
         else:
             err, debug = message.parse_error()
             log_event("pipeline_error", src=src_name, error=str(err),
@@ -472,11 +542,14 @@ class VisionPipeline:
             action = classify_bus_message(MSG_ERROR, src_name, str(err),
                                           self._preview_element_names)
             detail = str(err)
+            reason = "bus_error"
 
         if action == ACTION_DROP_PREVIEW:
             self._drop_preview_branch(element=src_name, error=detail)
         elif action == ACTION_RECONNECT:
-            self._on_source_eos(src=src_name)
+            # Fonte caiu: só agenda (o callback do bus roda no thread do loop
+            # GLib e não pode esperar GStreamer — ver `source_reconnect.py`).
+            self._on_source_failure(src=src_name, reason=reason, error=detail)
         elif action == ACTION_QUIT:
             self._fail("bus_error", EXIT_PIPELINE_ERROR, src=src_name,
                        error=detail)
@@ -683,80 +756,151 @@ class VisionPipeline:
         return True
 
     # -- fonte (rtspsrc) -----------------------------------------------------
-    def _reconnect_source(self, reason, **fields):
-        """Reseta apenas o rtspsrc (NULL -> PLAYING); o resto segue de pé.
+    def _on_source_failure(self, src="", reason="eos", error=""):
+        """Fonte caiu (EOS) ou o `rtspsrc` errou: agenda a reconexão.
 
-        Caminho único de reconexão, usado pela inatividade (regra 1 do
-        watchdog) e pelo EOS da fonte. O pad-added religa o fluxo quando a
-        câmera responder.
-        """
-        if self._rtsp_reconnecting:
-            return False
-        self._rtsp_reconnecting = True
-        log_event("rtsp_reconnect_started", reason=reason, **fields)
-        self.rtspsrc.set_state(Gst.State.NULL)
-        GLib.timeout_add_seconds(2, self._resume_rtsp)
-        return True
+        Roda no thread do loop GLib (callback do bus): **nenhuma** chamada de
+        GStreamer aqui. A causa raiz do congelamento de E2 estava exatamente
+        nisso — `set_state`/`send_event` no callback esperavam um stream lock
+        preso na thread do `nvstreammux` e o loop parava de despachar timers e
+        `SIGTERM` (thread dump em `source_reconnect.py`).
 
-    def _on_source_eos(self, src):
-        """EOS da fonte reconecta em vez de encerrar o processo (E-A/EOS).
-
-        Antes, `eos` chamava `loop.quit()`: o pipeline morria, o
+        Antes, EOS chamava `loop.quit()`: o pipeline morria, o
         `restart: unless-stopped` recriava o container e o incidente ficava
         mascarado como "reinício".
         """
-        attempt = self.source_budget.on_eos(time.monotonic())
-        if self.source_budget.exhausted(attempt):
-            self._fail("source_reconnect_exhausted", EXIT_SOURCE_LOST,
-                       src=src, attempts=self.source_budget.attempts,
-                       limit=SOURCE_RECONNECT_MAX_ATTEMPTS)
+        attempt = self.reconnect.fail(time.monotonic(), reason)
+        if attempt is None:
+            # já havia reconexão em curso (ou orçamento esgotado: o timer dá
+            # o desfecho na próxima fatia)
             return
-        if self._reconnect_source("eos", src=src, attempt=attempt,
-                                  limit=SOURCE_RECONNECT_MAX_ATTEMPTS):
-            self.source_budget.commit(attempt)
-        self._flush_analysis_branch()
+        log_event("rtsp_reconnect_started", reason=reason, src=src,
+                  error=error or None, attempt=attempt,
+                  limit=self.reconnect.max_attempts)
 
-    def _flush_analysis_branch(self):
-        """Limpa o EOS latente nos elementos a jusante do tee.
+    def _request_source_reconnect(self, reason, **fields):
+        """Pede a primeira tentativa de reconexão (só agenda e loga)."""
+        attempt = self.reconnect.begin(time.monotonic(), reason)
+        if attempt is None:
+            return False
+        log_event("rtsp_reconnect_started", reason=reason, attempt=attempt,
+                  limit=self.reconnect.max_attempts, **fields)
+        return True
 
-        Um EOS deixa `queue`/`fakesink` presos no estado de fim de stream: sem
-        o flush, religar só o `rtspsrc` devolveria o vídeo para um ramo que não
-        consome mais nada.
+    def _reconnect_step(self):
+        """Fatia curta do caminho de reconexão — única que toca GStreamer.
+
+        Timer GLib: o retorno `True` mantém o ciclo vivo. É de propósito um
+        timer **persistente** e não um `timeout_add` reagendado a cada passo:
+        um agendamento perdido no meio de uma exceção deixava a reconexão
+        pendurada para sempre (suspeita explícita da investigação de E2).
+
+        Cada fatia faz no máximo uma transição de estado, com teto de tempo
+        (`SOURCE_STOP_TIMEOUT_S`/`SOURCE_FRAME_TIMEOUT_S`). `get_state` sempre
+        com timeout zero: a fatia nunca espera.
         """
-        pad = getattr(self, "tee_src_analyze", None)
-        if pad is None:
-            return
         try:
-            pad.send_event(Gst.Event.new_flush_start())
-            pad.send_event(Gst.Event.new_flush_stop(True))
+            if self._source_eos_pending:
+                # EOS contido no tee (thread de streaming) -> agenda aqui.
+                self._source_eos_pending = False
+                self._on_source_failure(src="tee", reason="eos")
+            note = self.reconnect.note
+            if note:
+                self.reconnect.note = ""
+                log_event("source_reconnect_step_note", note=note,
+                          attempt=self.reconnect.attempt,
+                          phase=self.reconnect.phase)
+            action = self.reconnect.step(
+                time.monotonic(),
+                stopped=self._source_is_stopped(),
+                frames_total=self.fps_in.total)
+            self._run_reconnect_action(action)
+        except Exception:  # noqa: BLE001 — timer nunca morre calado
+            # Uma vez por sequência de falhas: logar a cada 250 ms esconderia
+            # o resto da telemetria.
+            if not self._reconnect_error_logged:
+                self._reconnect_error_logged = True
+                logger.exception("_reconnect_step falhou")
+        else:
+            self._reconnect_error_logged = False
+        return True
+
+    def _run_reconnect_action(self, action):
+        """Executa a decisão da máquina (fatia curta, uma transição)."""
+        if action == STEP_NONE:
+            return
+        if action == STEP_STOP:
+            log_event("source_reconnect_action", action=STEP_STOP,
+                      attempt=self.reconnect.attempt)
+            self._change_source_state(Gst.State.NULL)
+            return
+        if action == STEP_START:
+            log_event("source_reconnect_action", action=STEP_START,
+                      attempt=self.reconnect.attempt)
+            self._change_source_state(Gst.State.PLAYING)
+            # Carência de um ciclo antes de considerar travado de novo.
+            self._last_reconnect_at = time.monotonic()
+            return
+        if action == STEP_RESUMED:
+            log_event("rtsp_reconnect_resumed",
+                      attempt=self.reconnect.attempt,
+                      reason=self.reconnect.reason)
+            return
+        if action == STEP_RETRY:
+            log_event("rtsp_reconnect_started",
+                      reason=self.reconnect.reason,
+                      attempt=self.reconnect.attempt,
+                      limit=self.reconnect.max_attempts)
+            return
+        if action == STEP_GIVE_UP:
+            self._fail("source_reconnect_exhausted", EXIT_SOURCE_LOST,
+                       last_reason=self.reconnect.reason,
+                       attempts=self.reconnect.attempts,
+                       limit=self.reconnect.max_attempts)
+
+    def _change_source_state(self, state):
+        """Muda o estado do `rtspsrc` **sem prender o loop GLib**.
+
+        `gst_element_set_state` espera (`GST_CLOCK_TIME_NONE`) a transição
+        assíncrona terminar; com a fonte morta essa espera pode ficar presa no
+        stream lock do `nvstreammux`. A chamada roda numa thread própria e o
+        timer só *consulta* o estado (`get_state(0)`): se ela travar, métricas
+        e `SIGTERM` continuam sendo atendidos.
+        """
+        def worker():
+            try:
+                self.rtspsrc.set_state(state)
+            except Exception:  # noqa: BLE001
+                logger.exception("falha ao mudar o estado do rtspsrc")
+
+        threading.Thread(target=worker, name="source-state",
+                         daemon=True).start()
+
+    def _source_is_stopped(self):
+        """`rtspsrc` já está em NULL? Consulta sem espera (`get_state(0)`)."""
+        try:
+            state, _pending, _timeout = self.rtspsrc.get_state(0)
         except Exception:  # noqa: BLE001
-            logger.exception("falha ao limpar EOS do ramo de análise")
+            logger.exception("falha ao consultar o estado do rtspsrc")
+            return False
+        return state == Gst.State.NULL
 
     def _check_rtsp_alive(self):
         """Regra 1 do watchdog: sem frame por 30s -> reconectar o RTSP.
 
-        Reseta apenas o rtspsrc (NULL -> PLAYING); o resto do pipeline
-        continua de pé. O pad-added religa o fluxo quando a câmera
-        responder. Timer GLib: retorno True mantém o ciclo ativo.
+        Só pede a reconexão (`_request_source_reconnect`): o reset do rtspsrc
+        acontece nas fatias do timer `_reconnect_step`, nunca aqui. O
+        pad-added religa o fluxo quando a câmera responder. Timer GLib:
+        retorno True mantém o ciclo ativo.
         """
         now = time.monotonic()
         idle = now - self._last_input_frame_at
-        if idle < RTSP_IDLE_RECONNECT_S or self._rtsp_reconnecting:
+        if idle < RTSP_IDLE_RECONNECT_S or self.reconnect.active:
             return True
         if now - self._last_reconnect_at < RTSP_RECONNECT_COOLDOWN_S:
             return True
-        self._reconnect_source("no_frames", idle_s=round(idle, 1))
+        self._request_source_reconnect("no_frames", idle_s=round(idle, 1))
         return True
-
-    def _resume_rtsp(self):
-        self.rtspsrc.set_state(Gst.State.PLAYING)
-        # Carência de um ciclo antes de considerar travado de novo;
-        # se o frame voltar, _on_input_buffer atualiza o timestamp.
-        self._last_input_frame_at = time.monotonic()
-        self._last_reconnect_at = time.monotonic()
-        self._rtsp_reconnecting = False
-        log_event("rtsp_reconnect_resumed")
-        return False
 
     def periodic_metrics(self):
         # Lê o monitor sob lock e blinda exceções para o timer GLib
@@ -863,6 +1007,10 @@ class VisionPipeline:
                       uri=mask_uri(self.rtsp_uri))
         GLib.timeout_add_seconds(METRICS_INTERVAL_SECONDS, self.periodic_metrics)
         GLib.timeout_add_seconds(5, self._check_rtsp_alive)
+        # Fatias da reconexão da fonte. Timer persistente de propósito: é o
+        # único agendamento do caminho, e cada fatia tem teto de tempo (nada
+        # de trabalho de GStreamer no callback do bus ou no `_check_rtsp_alive`).
+        GLib.timeout_add(SOURCE_RECONNECT_STEP_MS, self._reconnect_step)
         if PREVIEW_ENABLED:
             GLib.timeout_add_seconds(5, self._check_preview_alive)
 
@@ -880,11 +1028,40 @@ class VisionPipeline:
             except Exception:
                 logger.exception("metrics de shutdown falharam")
             finally:
-                self.pipeline.set_state(Gst.State.NULL)
+                self._teardown()
                 log_event("pipeline_stopped", exit_code=self.exit_code,
                           signal=(self.shutdown.received_signal
                                   if self.shutdown is not None else None))
         return self.exit_code
+
+    def _teardown(self):
+        """`set_state(NULL)` do pipeline com teto de tempo.
+
+        O `docker stop` precisa voltar em ≤ 2 s mesmo com a fonte morta; se a
+        parada ficar presa num stream lock (a mesma classe de espera que
+        congelava o loop), o processo sai com o `exit_code` certo em vez de
+        esperar a carência do Docker e morrer por `SIGKILL` (exit 137).
+
+        A parada roda numa thread daemon: se o teto estourar, o `finally` do
+        `run()` continua e o interpretador encerra sem juntar a thread.
+        """
+        done = threading.Event()
+
+        def worker():
+            try:
+                self.pipeline.set_state(Gst.State.NULL)
+            except Exception:  # noqa: BLE001
+                logger.exception("falha ao parar o pipeline")
+            finally:
+                done.set()
+
+        threading.Thread(target=worker, name="pipeline-teardown",
+                         daemon=True).start()
+        if not done.wait(PIPELINE_STOP_TIMEOUT_S):
+            log_event("pipeline_stop_timeout",
+                      timeout_s=PIPELINE_STOP_TIMEOUT_S,
+                      action="set_state(NULL) não confirmou; processo sai "
+                             "assim mesmo para não virar exit 137")
 
     def _stop(self):
         log_event("test_duration_reached")
