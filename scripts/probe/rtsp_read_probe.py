@@ -7,18 +7,31 @@ buracos? e há quanto tempo o primeiro frame demorou?
 
 Contrato de saída (é o que `scripts/switch_source.sh` vai consumir, D7):
   - stdout: **uma** linha JSON com as métricas;
-  - stderr: resumo legível (suprimido com `--json`);
-  - exit code 0 = PASS, 1 = FAIL.
+  - stderr: resumo legível (suprimido com `--json`) e avisos de teardown;
+  - exit code **0 = PASS**, **1 = FAIL**, **2 = uso incorreto** (erro de
+    argumento, emitido pelo `argparse`). O `switch_source.sh` trata qualquer
+    código `!= 0` como falha do pré-check.
 
 PASS exige, simultaneamente: `frames >= --min-frames`, `fps >= --min-fps` e o
 primeiro frame chegou dentro de `--seconds`. Qualquer erro de GStreamer é
 capturado no bus e vira `result: FAIL` com `reason` — nunca traceback.
+
+Credencial: a URI da câmera tem usuário e senha, e esta sonda é chamada pelo
+`switch_source.sh` com essa URI. Toda saída (JSON, resumo, `--verbose`, texto de
+erro do GStreamer) passa por `sanitize_url()`, que troca o userinfo por `***` e
+preserva host, porta e path — o necessário para diagnosticar.
 
 Codec: o `rtspsrc` só entrega os pads quando o DESCRIBE volta, então o codec é
 descoberto no `pad-added` pelas caps do RTP (`encoding-name`) e o depayloader
 correspondente é criado na hora — H.264 (`rtph264depay`/`h264parse`) ou H.265
 (`rtph265depay`/`h265parse`). Isso aceita as três fontes do projeto sem
 parametrizar codec na linha de comando.
+
+Pads que **não** são vídeo são ignorados (a câmera do projeto publica áudio
+PCMA junto do vídeo, como em `deepstream/pipeline_real.py`): só o primeiro pad
+de vídeo é vinculado; codec fora de H.264/H.265 reprova apenas se estiver em um
+pad de vídeo; se nenhum pad de vídeo aparecer, o FAIL sai com
+`reason: no_video_pad`.
 
 Não decodifica: `fakesink` com `sync=false` conta frames de graça (sem
 `nvv4l2decoder`, então roda no host e dentro de container indistintamente).
@@ -64,30 +77,141 @@ ENCODING_TO_CODEC: Dict[str, str] = {
     "HEVC": "h265",
 }
 
+# `media` das caps de RTP que interessam à sonda.
+VIDEO_MEDIA = "video"
+
+# Classificação de um pad do rtspsrc (`classify_pad`).
+PAD_IGNORE = "ignore"          # não é vídeo: ignora sem erro (áudio, app...)
+PAD_LINK = "link"              # vídeo H.264/H.265: cria a cadeia depay ! parse
+PAD_UNSUPPORTED = "unsupported"  # vídeo com codec fora de H.264/H.265: falha
+
+# Máscara do userinfo nas URLs exibidas.
+MASKED_USERINFO = "***"
+
 
 # ---------------------------------------------------------------------------
 # Funções puras (testadas em scripts/tests/test_probe_logic.py)
 # ---------------------------------------------------------------------------
+def _split_authority(url: str) -> Optional[Tuple[str, str, str]]:
+    """Separa a URL em `(esquema, authority, resto)`.
+
+    `resto` começa no primeiro `/`, `?` ou `#` (vazio quando a URL acaba na
+    authority). `None` quando não há `esquema://`.
+    """
+    candidate = (url or "").strip()
+    if "://" not in candidate:
+        return None
+    scheme, rest = candidate.split("://", 1)
+    authority_end = len(rest)
+    for separator in ("/", "?", "#"):
+        index = rest.find(separator)
+        if index != -1:
+            authority_end = min(authority_end, index)
+    return scheme, rest[:authority_end], rest[authority_end:]
+
+
+def split_userinfo(url: str) -> Optional[str]:
+    """Devolve o trecho `usuario:senha` da URL, ou `None` quando não há.
+
+    Considera só a authority (antes do primeiro `/`, `?` ou `#`): o `@` de um
+    path não é userinfo. Usa o **último** `@` da authority porque a senha pode
+    conter `@` sem escape.
+    """
+    parts = _split_authority(url)
+    if parts is None:
+        return None
+    _scheme, authority, _tail = parts
+    if "@" not in authority:
+        return None
+    userinfo = authority.rsplit("@", 1)[0]
+    return userinfo or None
+
+
+def sanitize_url(url: str) -> str:
+    """Mascara a credencial da URL, preservando host, porta e path.
+
+    `rtsp://USUARIO:SENHA@host:8554/drone` -> `rtsp://***@host:8554/drone`.
+    É a forma usada em **toda** saída da sonda (JSON, resumo, `--verbose`):
+    host/porta/path continuam visíveis para diagnóstico; usuário e senha não.
+    URL sem userinfo volta inalterada.
+    """
+    candidate = (url or "").strip()
+    parts = _split_authority(candidate)
+    userinfo = split_userinfo(candidate)
+    if parts is None or userinfo is None:
+        return candidate
+    scheme, authority, tail = parts
+    masked = MASKED_USERINFO + "@" + authority.rsplit("@", 1)[1]
+    return f"{scheme}://{masked}{tail}"
+
+
+def scrub_text(text: str, url: str) -> str:
+    """Remove userinfo e senha de um texto livre (mensagens do GStreamer).
+
+    O `rtspsrc` ecoa a `location` em algumas falhas; sem isso a senha voltaria
+    pela porta dos fundos do `reason`. Sem credencial na URL, o texto não muda.
+    """
+    if not text:
+        return text
+    userinfo = split_userinfo(url)
+    if not userinfo:
+        return text
+    scrubbed = text.replace(f"{userinfo}@", f"{MASKED_USERINFO}@")
+    password = userinfo.split(":", 1)[1] if ":" in userinfo else ""
+    # A senha sozinha também é segredo: aparece em mensagens de autenticação.
+    if len(password) >= 4:
+        scrubbed = scrubbed.replace(password, MASKED_USERINFO)
+    if len(userinfo) >= 4:
+        scrubbed = scrubbed.replace(userinfo, MASKED_USERINFO)
+    return scrubbed
+
+
+def classify_pad(
+    media: Optional[str], encoding_name: Optional[str]
+) -> Tuple[str, Optional[str]]:
+    """Decide o que fazer com um pad do `rtspsrc`, a partir das caps de RTP.
+
+    Retorna `(ação, codec)`:
+      - `PAD_IGNORE` para pad que não é de vídeo (áudio PCMA da câmera, por
+        exemplo) — ignorar sem erro é o que evita reprovar uma fonte saudável
+        só porque o áudio veio primeiro;
+      - `PAD_UNSUPPORTED` para pad **de vídeo** com codec fora de H.264/H.265
+        (o pipeline também não consumiria);
+      - `PAD_LINK` + codec normalizado para vídeo H.264/H.265.
+    """
+    if (media or "").strip().lower() != VIDEO_MEDIA:
+        return PAD_IGNORE, None
+    codec = ENCODING_TO_CODEC.get((encoding_name or "").strip().upper())
+    if codec is None or codec_factories(encoding_name) is None:
+        return PAD_UNSUPPORTED, None
+    return PAD_LINK, codec
+
+
 def validate_url(url: str) -> str:
     """Valida a URL de leitura e a devolve normalizada.
 
     Só aceita RTSP: a sonda mede paths do MediaMTX. Levanta `ValueError` com
-    mensagem acionável para entrada vazia, esquema errado ou host ausente.
+    mensagem acionável para entrada vazia, esquema errado ou host ausente. As
+    mensagens usam a URL sanitizada — o erro vai para stderr e não pode vazar
+    a credencial.
     """
     candidate = (url or "").strip()
     if not candidate:
         raise ValueError("--url vazia: informe rtsp://host:porta/path")
     if "://" not in candidate:
         raise ValueError(
-            f"--url inválida ({candidate!r}): falta o esquema rtsp://"
+            f"--url inválida ({sanitize_url(candidate)!r}): falta o esquema rtsp://"
         )
     scheme, rest = candidate.split("://", 1)
     if scheme.lower() not in ("rtsp", "rtsps"):
         raise ValueError(
-            f"--url inválida ({candidate!r}): esquema {scheme!r} não é rtsp/rtsps"
+            f"--url inválida ({sanitize_url(candidate)!r}): esquema {scheme!r} "
+            "não é rtsp/rtsps"
         )
     if not rest or rest.startswith("/"):
-        raise ValueError(f"--url inválida ({candidate!r}): host ausente")
+        raise ValueError(
+            f"--url inválida ({sanitize_url(candidate)!r}): host ausente"
+        )
     return candidate
 
 
@@ -152,14 +276,20 @@ def decide(
     min_fps: float,
     seconds: float,
     error: Optional[str] = None,
+    no_video_pad: bool = False,
 ) -> Tuple[str, str]:
     """Decide PASS/FAIL e o motivo, na ordem em que faz diferença para operação.
 
     Retorna `(result, reason)`. O motivo do primeiro critério violado é o que
     aparece — é ele que o `switch_source.sh` vai imprimir.
+
+    `no_video_pad` cobre o caso em que o `rtspsrc` entregou pads, mas nenhum de
+    vídeo — distinto de codec não suportado (que só vale para pad de vídeo).
     """
     if error:
         return "FAIL", f"pipeline_error: {error}"
+    if no_video_pad:
+        return "FAIL", "no_video_pad"
     if frames <= 0:
         return "FAIL", "no_frames"
     if first_frame_s is None or first_frame_s > seconds:
@@ -174,6 +304,16 @@ def decide(
 # ---------------------------------------------------------------------------
 # Leitura via GStreamer
 # ---------------------------------------------------------------------------
+def _caps_string(structure: Any, field: str) -> Optional[str]:
+    """Lê um campo textual das caps (`media`, `encoding-name`) como `str`."""
+    if structure is None or not structure.has_field(field):
+        return None
+    value = structure.get_value(field)
+    if value is None:
+        return None
+    return value if isinstance(value, str) else str(value)
+
+
 @dataclass
 class ProbeResult:
     """Acumulador do que a sonda observou em uma execução."""
@@ -183,6 +323,8 @@ class ProbeResult:
     error: Optional[str] = None
     eos: bool = False
     hard_timeout: bool = False
+    # True quando o rtspsrc só entregou pads que não são de vídeo (ou nenhum).
+    no_video_pad: bool = False
 
     def add_frame(self, offset_s: float) -> None:
         self.timestamps.append(offset_s)
@@ -209,7 +351,7 @@ class RtspReadProbe:
     # -- log ---------------------------------------------------------------
     def _log(self, message: str) -> None:
         if self.verbose:
-            print(f"[probe] {message}", file=sys.stderr)
+            print(f"[probe] {scrub_text(message, self.url)}", file=sys.stderr)
 
     # -- construção --------------------------------------------------------
     def _build(self) -> None:
@@ -243,7 +385,13 @@ class RtspReadProbe:
         self.sink = sink
 
     def _on_pad_added(self, _src: Gst.Element, pad: Gst.Pad) -> None:
-        """Religa o pad do rtspsrc ao depayloader do codec anunciado no SDP."""
+        """Religa o pad **de vídeo** do rtspsrc ao depayloader do codec do SDP.
+
+        Pads que não são de vídeo (áudio PCMA da câmera, por exemplo) são
+        ignorados: o pipeline (`deepstream/pipeline_real.py`) também filtra por
+        `media == "video"`, e reprovar a fonte por causa do áudio derrubaria o
+        pré-check de uma câmera saudável.
+        """
         if self._linked:
             return
         caps = pad.query_caps(None)
@@ -252,15 +400,27 @@ class RtspReadProbe:
         structure = caps.get_structure(0)
         if structure.get_name() != "application/x-rtp":
             return
-        encoding = structure.get_string("encoding-name")
-        factories = codec_factories(encoding)
-        if factories is None:
+
+        media = _caps_string(structure, "media")
+        encoding = _caps_string(structure, "encoding-name")
+        action, codec = classify_pad(media, encoding)
+        if action == PAD_IGNORE:
+            self._log(
+                f"pad ignorado: media={media!r} encoding={encoding!r} "
+                "(não é vídeo; só o primeiro pad de vídeo é vinculado)"
+            )
+            return
+        if action == PAD_UNSUPPORTED:
             self.result.error = f"codec não suportado: {encoding!r}"
             self._quit()
             return
+
+        assert codec is not None  # PAD_LINK sempre traz o codec normalizado
+        factories = codec_factories(encoding)
+        assert factories is not None
         depay_name, parse_name = factories
-        self.result.codec = ENCODING_TO_CODEC.get((encoding or "").upper())
-        self._log(f"codec={self.result.codec} ({depay_name} ! {parse_name})")
+        self.result.codec = codec
+        self._log(f"codec={codec} ({depay_name} ! {parse_name})")
 
         assert self.pipeline is not None and self.sink is not None
         depay = Gst.ElementFactory.make(depay_name, None)
@@ -297,7 +457,8 @@ class RtspReadProbe:
             detail = error.message
             if debug:
                 detail = f"{detail} ({str(debug).splitlines()[0]})" if self.verbose else detail
-            self.result.error = detail
+            # Alguns erros do rtspsrc ecoam a `location`: não pode vazar senha.
+            self.result.error = scrub_text(detail, self.url)
             self._quit()
         elif kind == Gst.MessageType.EOS:
             self.result.eos = True
@@ -344,7 +505,7 @@ class RtspReadProbe:
             int((seconds + HARD_TIMEOUT_SLACK_S) * 1000), self._on_hard_deadline
         )
 
-        self._log(f"abrindo {self.url} transport={self.transport} por {seconds}s")
+        self._log(f"abrindo {sanitize_url(self.url)} transport={self.transport} por {seconds}s")
         self._start_t = time.monotonic()
         self.pipeline.set_state(Gst.State.PLAYING)
 
@@ -366,8 +527,12 @@ class RtspReadProbe:
                     GLib.source_remove(source_id)
             bus.remove_signal_watch()
 
-        return self.result
+        # Nenhum pad de vídeo apareceu: motivo próprio, distinto de "codec não
+        # suportado" (que só vale para pad de vídeo) e de "sem frames".
+        if not self._linked and self.result.error is None:
+            self.result.no_video_pad = True
 
+        return self.result
 
 # ---------------------------------------------------------------------------
 # Relatório
@@ -382,7 +547,11 @@ def build_report(
     elapsed_s: float,
     container: str = "rtsp",
 ) -> Dict[str, Any]:
-    """Consolida o observado no JSON de saída (uma linha em stdout)."""
+    """Consolida o observado no JSON de saída (uma linha em stdout).
+
+    A URL sai sanitizada: o JSON é consumido e logado pelo `switch_source.sh`,
+    e a URI da câmera tem usuário e senha.
+    """
     gaps = compute_gaps(result.timestamps)
     frames = len(result.timestamps)
     fps = measure_fps(result.timestamps)
@@ -397,9 +566,10 @@ def build_report(
         min_fps=min_fps,
         seconds=seconds,
         error=result.error,
+        no_video_pad=result.no_video_pad,
     )
     return {
-        "url": url,
+        "url": sanitize_url(url),
         "codec": result.codec or "unknown",
         "container": container,
         "first_frame_s": first_frame_s,
@@ -435,16 +605,24 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         prog="rtsp_read_probe.py",
         description=(
             "Lê um path RTSP do MediaMTX e mede saúde do stream. "
-            "Exit 0 = PASS, exit 1 = FAIL (contrato de pré-check de troca de fonte)."
+            "Exit 0 = PASS, exit 1 = FAIL, exit 2 = uso incorreto "
+            "(contrato de pré-check de troca de fonte)."
         ),
         epilog=(
+            "Exit codes: 0 = PASS, 1 = FAIL (stream reprovado ou erro de "
+            "pipeline), 2 = uso incorreto (argumento inválido, emitido pelo "
+            "argparse). O switch_source.sh trata qualquer código != 0 como falha "
+            "do pré-check.\n\n"
             "Exemplo: rtsp_read_probe.py --url rtsp://192.168.59.102:8554/drone "
             "--seconds 5 --json    # pré-check do switch_source.sh\n\n"
+            "Credencial: a URL é mascarada em toda saída (usuário e senha viram "
+            "'***'); host, porta e path continuam visíveis.\n\n"
             "Atenção: as portas do MediaMTX são publicadas no IP da LAN "
             "(E0-T2); rtsp://127.0.0.1:8554/... só funciona se o MediaMTX "
             "estiver publicado em loopback.\n\n"
-            "O codec (H.264/H.265) é descoberto nas caps do pad do rtspsrc e o "
-            "depayloader é criado em tempo de execução; não há flag de codec."
+            "O codec (H.264/H.265) é descoberto nas caps do pad de vídeo do "
+            "rtspsrc e o depayloader é criado em tempo de execução; não há flag "
+            "de codec. Pads de áudio são ignorados."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -491,6 +669,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Roda a sonda e devolve o exit code do contrato (0 = PASS, 1 = FAIL)."""
     args = parse_args(argv)
     Gst.init([])
 
@@ -509,7 +688,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
     except Exception as exc:  # erro de construção/execução do pipeline
         report = {
-            "url": args.url,
+            "url": sanitize_url(args.url),
             "codec": "unknown",
             "container": "rtsp",
             "first_frame_s": None,
@@ -520,7 +699,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "avg_gap_ms": 0.0,
             "duration_s": 0.0,
             "result": "FAIL",
-            "reason": f"probe_error: {exc}",
+            "reason": f"probe_error: {scrub_text(str(exc), args.url)}",
         }
 
     if not args.json:
