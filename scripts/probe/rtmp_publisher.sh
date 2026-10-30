@@ -30,6 +30,10 @@ FPS=30
 HOST="192.168.59.102"
 PORT=1935
 PATTERN="smpte"
+# Padrões válidos do videotestsrc (`gst-inspect-1.0 videotestsrc`, enum
+# GstVideoTestSrcPattern). Lista versionada de propósito: `--pattern` errado só
+# falharia no meio do pipeline, com mensagem genérica do gst-launch.
+KNOWN_PATTERNS="smpte snow black white red green blue checkers-1 checkers-2 checkers-4 checkers-8 circular blink smpte75 zone-plate gamut chroma-zone-plate solid-color ball smpte100 bar pinwheel spokes gradient colors smpte-rp-219"
 
 usage() {
     cat <<'EOF'
@@ -48,7 +52,11 @@ Opções:
   --host <ip>         host do MediaMTX (default: 192.168.59.102)
                       use 127.0.0.1 só se o MediaMTX estiver publicado em loopback
   --port <n>          porta RTMP do MediaMTX (default: 1935)
-  --pattern <nome>    padrão do videotestsrc: smpte, ball, snow, ... (default: smpte)
+  --pattern <nome>    padrão do videotestsrc (default: smpte).
+                      válidos: smpte, snow, black, white, red, green, blue,
+                      checkers-1..8, circular, blink, smpte75, zone-plate,
+                      gamut, chroma-zone-plate, solid-color, ball, smpte100,
+                      bar, pinwheel, spokes, gradient, colors, smpte-rp-219
   -h, --help          esta ajuda
 
 Publica em rtmp://<host>:<porta>/<path>. Roda em foreground; use `timeout` ou
@@ -66,6 +74,18 @@ need_value() {
     if [ "$2" -lt 2 ]; then
         die "a flag $1 exige um valor"
     fi
+}
+
+# `--pattern` vai direto para o videotestsrc: validar aqui evita que o erro
+# apareça só quando o gst-launch já montou metade do pipeline.
+known_pattern() {
+    local candidate="$1" known
+    for known in $KNOWN_PATTERNS; do
+        if [ "$candidate" = "$known" ]; then
+            return 0
+        fi
+    done
+    return 1
 }
 
 while [ "$#" -gt 0 ]; do
@@ -99,6 +119,9 @@ done
 [ "$FPS" -gt 0 ] || die "--fps precisa ser maior que zero"
 [ "$PORT" -gt 0 ] || die "--port precisa ser maior que zero"
 [ -n "$PATH_NAME" ] || die "--path não pode ser vazio"
+if ! known_pattern "$PATTERN"; then
+    die "--pattern desconhecido: '$PATTERN' (use --help; válidos: $KNOWN_PATTERNS)"
+fi
 
 command -v gst-launch-1.0 >/dev/null 2>&1 \
     || die "gst-launch-1.0 não encontrado no PATH"
@@ -148,7 +171,9 @@ stop_pipeline() {
     fi
 }
 
-trap stop_pipeline INT TERM
+# INT/TERM: `pkill -f rtmp_publisher.sh` e Ctrl-C. HUP: fechar o terminal — sem
+# ele o gst-launch ficaria órfão publicando no MediaMTX.
+trap stop_pipeline INT TERM HUP
 
 "${CMD[@]}" &
 CHILD_PID=$!

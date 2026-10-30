@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "probe"))
 
 import rtsp_read_probe as probe  # noqa: E402
+import whip_probe  # noqa: E402
 
 # Credencial fictícia montada por partes: a guarda da DIV-001
 # (`deepstream/tests/test_no_hardcoded_secrets.py`) procura `usuario:senha@`
@@ -538,6 +539,54 @@ class TestBuildReport(unittest.TestCase):
         self.assertEqual(report["result"], "FAIL")
         self.assertEqual(report["reason"], "no_frames")
         self.assertIsNone(report["first_frame_s"])
+
+
+class TestWhipProbe(unittest.TestCase):
+    """M3/M4: `whip_probe` é importável e o SDP de resposta é parseado limpo."""
+
+    ANSWER = (
+        "v=0\r\n"
+        "o=- 0 0 IN IP4 127.0.0.1\r\n"
+        "s=-\r\n"
+        "t=0 0\r\n"
+        "m=video 9 UDP/TLS/RTP/SAVPF 96 97\r\n"
+        "c=IN IP4 0.0.0.0\r\n"
+        "a=ice-ufrag:ufrag\r\n"
+        "a=candidate:1 1 UDP 2130706431 192.168.59.102 8189 typ host\r\n"
+        "a=candidate:2 1 TCP 2130706431 192.168.59.102 8189 typ host tcptype passive\r\n"
+        "a=rtpmap:96 H264/90000\r\n"
+        "a=rtpmap:97 H265/90000\r\n"
+        "a=fmtp:96 packetization-mode=1\r\n"
+        "a=end-of-candidates\r\n"
+    )
+
+    def test_offer_e_importavel_e_tem_m_video(self):
+        sdp = whip_probe.offer()
+        self.assertIn("m=video", sdp)
+        self.assertIn("a=fingerprint:sha-256", sdp)
+
+    def test_candidatos_sem_cr_colado(self):
+        parsed = whip_probe.parse_answer_sdp(self.ANSWER)
+        self.assertEqual(parsed["candidate_count"], 2)
+        for candidate in parsed["candidates"]:
+            self.assertNotIn("\r", candidate)
+            self.assertIn("typ host", candidate)
+        self.assertEqual(parsed["candidate_hosts"], ["192.168.59.102"])
+
+    def test_codecs_da_resposta_preenchidos(self):
+        parsed = whip_probe.parse_answer_sdp(self.ANSWER)
+        self.assertEqual(parsed["answer_codecs"], ["96 H264/90000", "97 H265/90000"])
+
+    def test_mline_da_resposta(self):
+        parsed = whip_probe.parse_answer_sdp(self.ANSWER)
+        self.assertEqual(parsed["answer_media"], "video")
+        self.assertTrue(parsed["answer_mline"].startswith("m=video 9"))
+
+    def test_resposta_vazia_nao_quebra(self):
+        parsed = whip_probe.parse_answer_sdp("")
+        self.assertEqual(parsed["candidates"], [])
+        self.assertEqual(parsed["answer_codecs"], [])
+        self.assertIsNone(parsed["answer_mline"])
 
 
 if __name__ == "__main__":
