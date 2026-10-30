@@ -41,6 +41,7 @@ from bus_classifier import (  # noqa: E402
     classify_bus_message)
 from health_metrics import HealthMetricsCollector  # noqa: E402
 from rtsp_env import require_rtsp_uri  # noqa: E402
+from source_budget import SourceReconnectBudget  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("VisionPipelineReal")
@@ -74,6 +75,11 @@ RTSP_RECONNECT_COOLDOWN_S = float(
 # perceber uma fonte morta).
 SOURCE_RECONNECT_MAX_ATTEMPTS = int(
     os.environ.get("SOURCE_RECONNECT_MAX_ATTEMPTS", "5"))
+# Quanto tempo sem EOS para devolver o orçamento de reconexões. Zerar a cada
+# frame recebido fazia fonte oscilante (frame + EOS + frame + EOS) nunca
+# esgotar as tentativas e nunca chegar ao exit 2 (Menor 8 da revisão).
+SOURCE_RECONNECT_RESET_S = float(
+    os.environ.get("SOURCE_RECONNECT_RESET_S", "600"))
 # Ramo de preview derrubado por erro: quando tentar religá-lo, com backoff.
 PREVIEW_RETRY_BASE_S = float(os.environ.get("PREVIEW_RETRY_S", "15"))
 PREVIEW_RETRY_MAX_S = float(os.environ.get("PREVIEW_RETRY_MAX_S", "300"))
@@ -155,7 +161,8 @@ class VisionPipeline:
         self._last_input_frame_at = time.monotonic()
         self._rtsp_reconnecting = False
         self._last_reconnect_at = 0.0
-        self._source_reconnect_attempts = 0
+        self.source_budget = SourceReconnectBudget(
+            SOURCE_RECONNECT_MAX_ATTEMPTS, SOURCE_RECONNECT_RESET_S)
 
         # Ramo de preview (descartável): estado da queda e da retomada.
         self._preview_chain = ()
@@ -277,9 +284,13 @@ class VisionPipeline:
     def _on_input_buffer(self, _pad, info, _user_data):
         self.fps_in.tick()
         self._last_input_frame_at = time.monotonic()
-        if self._source_reconnect_attempts:
-            # frame voltou: a fonte está de pé, zera o orçamento de reconexões
-            self._source_reconnect_attempts = 0
+        # Frame voltou, mas o orçamento de reconexões só é devolvido depois de
+        # SOURCE_RECONNECT_RESET_S sem EOS: zerar a cada frame fazia fonte
+        # oscilante nunca esgotar as tentativas (exit 2 nunca acontecia).
+        if self.source_budget.on_frame(self._last_input_frame_at):
+            log_event("source_reconnect_budget_reset",
+                      attempts_cleared=True,
+                      stable_s=SOURCE_RECONNECT_RESET_S)
         return Gst.PadProbeReturn.OK
 
     def _on_preview_buffer(self, _pad, info, _user_data):
@@ -637,15 +648,15 @@ class VisionPipeline:
         `restart: unless-stopped` recriava o container e o incidente ficava
         mascarado como "reinício".
         """
-        attempt = self._source_reconnect_attempts + 1
-        if attempt > SOURCE_RECONNECT_MAX_ATTEMPTS:
+        attempt = self.source_budget.on_eos(time.monotonic())
+        if self.source_budget.exhausted(attempt):
             self._fail("source_reconnect_exhausted", EXIT_SOURCE_LOST,
-                       src=src, attempts=self._source_reconnect_attempts,
+                       src=src, attempts=self.source_budget.attempts,
                        limit=SOURCE_RECONNECT_MAX_ATTEMPTS)
             return
         if self._reconnect_source("eos", src=src, attempt=attempt,
                                   limit=SOURCE_RECONNECT_MAX_ATTEMPTS):
-            self._source_reconnect_attempts = attempt
+            self.source_budget.commit(attempt)
         self._flush_analysis_branch()
 
     def _flush_analysis_branch(self):
