@@ -129,7 +129,7 @@
       <button id="btn-stop" class="btn" type="button" disabled>Encerrar</button>
     </div>
     <p class="note" id="path-help">
-      O pipeline lê o mesmo path por RTSP (<code>rtsp://192.168.59.102:8554/phone</code>).
+      O pipeline lê o mesmo path por RTSP (<code id="rtsp-hint">rtsp://&lt;host&gt;:8554/phone</code>).
       Encerrar aqui faz <code>DELETE</code> na sessão — é o que libera o path.
     </p>
     <div class="video-strip">
@@ -168,7 +168,9 @@
 
 <footer class="footbar">
   <span>fase 0 · E0-T4 · android apenas (D6: iOS fora de escopo)</span>
-  <span>https://192.168.59.102:8443 · whip em :8889</span>
+  <!-- Host derivado de `location.hostname` no `capture.js` (M6): a página vale
+       por IP da LAN e por `vsl.local`, que está no SAN do certificado. -->
+  <span id="origin-line">https://&lt;host&gt;:8443 · whip em :8889</span>
 </footer>
 
 <script src="/codec-gate.js"></script>

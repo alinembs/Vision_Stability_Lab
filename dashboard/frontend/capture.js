@@ -49,6 +49,15 @@
   /** Path padrão: o mesmo que o pipeline lê por RTSP. */
   var DEFAULT_PATH = "phone";
 
+  /**
+   * Formato de path aceito na URL do WHIP.
+   *
+   * Sem validação, `phone/whip` (ou um path colado de outro lugar) vira
+   * `…/phone%2Fwhip/whip` depois do `encodeURIComponent` e o MediaMTX
+   * responde 404 — sintoma que parece servidor fora do ar.
+   */
+  var PATH_RE = /^[A-Za-z0-9_-]+$/;
+
   /** Intervalo de leitura de `getStats()`. */
   var STATS_INTERVAL_MS = 1000;
 
@@ -117,20 +126,42 @@
    * ---------------------------------------------------------------- */
 
   /**
+   * Path pedido: o campo da tela, `?path=` ou `phone`.
+   *
+   * É o único que vale para a URL do WHIP e para o `rtsp://` mostrado ao
+   * operador — os dois não podem divergir.
+   */
+  function currentPath() {
+    var params = new URLSearchParams(window.location.search);
+    var pathInput = $("path");
+    var typed = pathInput && pathInput.value ? pathInput.value.trim() : "";
+    return typed || params.get("path") || DEFAULT_PATH;
+  }
+
+  /**
    * URL do recurso WHIP.
    *
    * Default: `https://<hostname da página>:8889/<path>/whip` — o mesmo IP que o
    * celular usou para abrir a página, que é o único que o JavaScript conhece e
    * que está no SAN do certificado. `?whip=` sobrescreve para debug; `?path=`
    * troca o path (o pipeline lê `phone`).
+   *
+   * Devolve `null` quando o path não é válido: quem chama mostra o erro na tela
+   * em vez de publicar num endpoint que não existe (404 enganoso).
    */
   function whipUrl() {
     var params = new URLSearchParams(window.location.search);
     var override = params.get("whip");
-    if (override) return override;
-    var pathInput = $("path");
-    var typed = pathInput && pathInput.value ? pathInput.value.trim() : "";
-    var path = typed || params.get("path") || DEFAULT_PATH;
+    if (override) {
+      // `?whip=` é atalho de depuração e a sinalização do E0-T4 é HTTPS:
+      // `http://` aqui seria bloqueado como mixed content, e qualquer esquema
+      // aceito faria a câmera publicar em outra máquina. Esquema errado é
+      // ignorado (com aviso no console), não aceito.
+      if (/^https:\/\//i.test(override)) return override;
+      console.warn("?whip= ignorado: exige https:// — recebido:", override);
+    }
+    var path = currentPath();
+    if (!PATH_RE.test(path)) return null;
     return "https://" + window.location.hostname + ":" + WHIP_PORT + "/" +
       encodeURIComponent(path) + "/whip";
   }
@@ -355,8 +386,12 @@
     return navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
-        width: { ideal: TARGET_WIDTH },
-        height: { ideal: TARGET_HEIGHT },
+        // `ideal` sozinho não é teto: o aparelho podia entregar 1080p e o
+        // encoder gastar banda à toa (o pedido tem de ser cumprido como
+        // limite). `max` fecha o teto sem exigir o valor exato — `exact`
+        // derrubaria aparelhos que não têm 720p.
+        width: { ideal: TARGET_WIDTH, max: TARGET_WIDTH },
+        height: { ideal: TARGET_HEIGHT, max: TARGET_HEIGHT },
         frameRate: { ideal: TARGET_FPS },
       },
     });
@@ -439,6 +474,11 @@
     }
     setStatus("negociando com o MediaMTX…", "busy");
     var url = whipUrl();
+    if (!url) {
+      throw new Error("Path inválido: \"" + currentPath() + "\". Use apenas " +
+        "letras, dígitos, hífen e _ (sem barras nem espaço) — é o nome do " +
+        "path no MediaMTX, ex.: phone.");
+    }
     setText("r-whip", url);
 
     return send(url, "POST", {
@@ -586,11 +626,17 @@
     el.btnStop = $("btn-stop");
     el.preview = $("preview");
 
-    setText("r-whip", whipUrl());
+    setText("r-whip", whipUrl() || "path inválido — verifique o campo");
+    // Host derivado da origem (M6): a página vale por IP da LAN e por
+    // `vsl.local` (que está no SAN); IP fixo no HTML quebraria o segundo caso.
+    var host = window.location.hostname;
+    setText("rtsp-hint", "rtsp://" + host + ":8554/" + currentPath());
+    setText("origin-line", "https://" + host + ":8443 · whip em :8889");
     var pathInput = $("path");
     if (pathInput) {
       pathInput.addEventListener("input", function () {
-        setText("r-whip", whipUrl());
+        setText("r-whip", whipUrl() || "path inválido — verifique o campo");
+        setText("rtsp-hint", "rtsp://" + host + ":8554/" + currentPath());
       });
     }
     setText("r-secure", window.isSecureContext
@@ -602,7 +648,7 @@
         "com a CA instalada no aparelho.");
     }
     setText("r-req", formatRes(TARGET_WIDTH, TARGET_HEIGHT) + " · " +
-      formatFps(TARGET_FPS) + " (ideal)");
+      formatFps(TARGET_FPS) + " (ideal, com teto)");
 
     var capabilities = window.CodecGate.defaultGetCapabilities();
     if (!capabilities) {

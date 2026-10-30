@@ -33,6 +33,18 @@ codec roda no navegador antes do `POST`.
 
 ## 1. Gerar a CA e o certificado (uma vez por deployment)
 
+> **Pré-requisito duro de subida, não passo opcional (I3).** Sem
+> `deploy/certs/server.crt` **e** `server.key`, os dois serviços que fazem a
+> captura existirem entram em **loop de restart com exit 0** e nem a página de
+> captura nem o preview do dashboard sobem:
+> `open /certs/server.crt: no such file or directory` (MediaMTX, que por isso
+> não republica o `live` e derruba o `rtspclientsink` do pipeline) e
+> `cannot load certificate "/certs/server.crt"` (nginx da 8443). O sintoma
+> engana porque o resto do stack fica `healthy`; desde 2026-10-30 o
+> `capture-web` tem `healthcheck` que bate na própria 8443, justamente para
+> não repetir "tudo saudável, nada funcionando".
+> Rode este script **antes** do primeiro `docker compose up`.
+
 ```bash
 deploy/certs/generate-certs.sh                  # IP da LAN 192.168.59.102
 VSL_LAN_IP=<ip-do-campo> deploy/certs/generate-certs.sh --force
@@ -42,6 +54,14 @@ Saída em `deploy/certs/`: `ca.crt` (vai para o celular) e `server.crt` /
 `server.key` (montados em `/certs`, read-only, no **MediaMTX** e no **nginx da
 8443**). **Nada disso entra no Git** — a pasta é ignorada por inteiro, exceto o
 `.gitignore` dela.
+
+`VSL_LAN_IP` é validado antes de qualquer arquivo ser escrito: precisa ser um
+IPv4 com cada octeto entre 0 e 255 (o valor entra no `subjectAltName`, e sem
+validação `1.2.3.4,DNS:x` injetaria uma entrada no certificado). O mesmo vale
+para `VSL_LOCAL_DOMAIN` (só letras, dígitos, ponto e hífen). Valor inválido sai
+com código 2 e **não deixa arquivo no diretório de saída** — a geração acontece
+num diretório temporário e só o conjunto completo é movido no fim, então uma
+falha no meio não exige `--force` (que invalidaria a CA já instalada).
 
 `--force` regera tudo e **invalida a CA já instalada nos celulares**. Se o IP da
 LAN mudar, é esse o caminho (e todo device precisa receber o novo `ca.crt`).
@@ -59,6 +79,13 @@ openssl x509 -in deploy/certs/server.crt -noout -text | grep -A1 'Subject Altern
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d mediamtx capture-web
 docker ps --filter name=vision- --format '{{.Names}}\t{{.Status}}'
 ```
+
+A 8443 publica **só** a página de captura e o que ela carrega
+(`capture.html`, `capture.js`, `codec-gate.js`, `codec-gate-selftest.html`,
+`style.css`). `https://<ip>:8443/` e `…/index.html` respondem **404** de
+propósito: o dashboard (SPA do FastAPI, com `/ws` e `/api/history`) não existe
+nesta origem, e servi-lo aqui abria uma cópia quebrada em silêncio. O dashboard
+continua em `http://<ip>:8081`.
 
 Recriar o `vision-mediamtx` derruba o preview do dashboard por alguns segundos.
 **Efeito colateral medido em 2026-10-30 (não é preciso intervir, mas é bom
@@ -123,6 +150,9 @@ docker logs -f vision-mediamtx | grep -E '\[path phone\]|\[WebRTC\]'
 # 1) TLS das duas portas com a CA interna
 curl --cacert deploy/certs/ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.102:8889/   # 404 = serviço no ar
 curl --cacert deploy/certs/ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.102:8443/capture.html  # 200
+curl --cacert deploy/certs/ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.102:8443/index.html    # 404 (whitelist)
+curl --cacert deploy/certs/ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.102:8443/             # 404 (whitelist)
+curl --cacert deploy/certs/ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.102:8443/certs/server.key  # 404
 openssl s_client -connect 192.168.59.102:8889 -CAfile deploy/certs/ca.crt -servername vsl.local \
   </dev/null 2>/dev/null | grep 'Verify return code'   # 0 (ok)
 openssl s_client -connect 192.168.59.102:8443 -CAfile deploy/certs/ca.crt \
@@ -135,6 +165,9 @@ python3 scripts/probe/whip_probe.py --cacert deploy/certs/ca.crt --path phone
 O relatório tem de trazer:
 
 - `status: 201` e `location`/`session_url` (e `delete.ok: true` no fim);
+- exit code **0** — a sonda sai **4** quando o POST é aceito mas o `DELETE`
+  falha (o path pode continuar publicado) e **2** quando o servidor recusa ou
+  está inacessível. Script que só olha "rodou" precisa olhar o código;
 - `tls: verify:deploy/certs/ca.crt` — se estiver `verify:sistema`, faltou
   `--cacert` e a sonda está falhando fechada de propósito;
 - `candidate_hosts: ["192.168.59.102"]` — **nenhum** `127.0.0.1` nem `172.x`;
@@ -181,7 +214,7 @@ cobre as duas portas.
 | **`POST` responde `409`** | o path ainda está publicado por uma sessão anterior (aba fechada sem `DELETE`, ou celular dormiu) | `docker logs vision-mediamtx` (`[path phone] stream is already available`); aguarde o ICE expirar (~30 s) ou reinicie o `vision-mediamtx`; confira se a aba antiga segue aberta |
 | **Conecta, mostra "publicando", mas o pipeline não recebe** | mídia não chega: UDP 8189 bloqueado na rede, ou ICE incompleto | `ss -lntup \| grep 8189` (tem de estar em `192.168.59.102`); `ffprobe`/`rtspsrc` no path; no log do MediaMTX, `[path phone] is publishing` |
 | **Banda acima de ~2,5 Mbps ou resolução acima de 720p** | o teto de banda **não** foi aplicado (o Chrome recusa `setParameters` antes do offer; a segunda tentativa é depois do answer) | linha "teto de banda": se disser "recusado — transmitindo no default", a rodada **não** testou o teto. A captura vale, a qualidade é a de chamada de vídeo |
-| **Resolução enviada abaixo de 1280×720** | o encoder adaptou (o pedido é `ideal`, não `exact`) | leia `capture` pela **resolução enviada**, não por `getSettings()`. Aproxime o aparelho e melhore a luz |
+| **Resolução enviada abaixo de 1280×720** | o encoder adaptou (1280×720 é `ideal` **e** `max`: teto, não exigência — o aparelho que não tem 720p entrega o que tem) | leia a **resolução enviada**, não `getSettings()`. Aproxime o aparelho e melhore a luz |
 | **fps enviado baixo (< 24)** | quase sempre luz baixa; o Chrome derruba a taxa | "fps enviado" (`outbound-rtp`) e "limitação do encoder" (`cpu` vs `bandwidth`) |
 | **`curl --cacert` passa mas `curl` sem ele falha** | esperado: a CA interna não está no store do sistema | é o comportamento correto (fail closed). Sempre passe `--cacert deploy/certs/ca.crt` |
 | **`docker ps` mostra tudo `healthy` e nada funciona** | os healthchecks validam config/telemetria, não o caminho de mídia | `whip_probe.py --path phone` + `docker logs vision-mediamtx`; "healthy" não é prova de vídeo |
