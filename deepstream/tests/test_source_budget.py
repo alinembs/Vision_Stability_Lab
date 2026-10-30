@@ -90,7 +90,11 @@ class SourceReconnectBudgetTest(unittest.TestCase):
         self.assertEqual(self.budget.attempts, 3)
 
     def test_eos_com_reconexao_em_curso_nao_conta(self) -> None:
-        """Reconexão recusada (`_reconnect_source` False) não gasta tentativa."""
+        """Reconexão recusada não gasta tentativa.
+
+        Quem recusa é `SourceReconnectMachine.begin`/`fail`, que devolvem
+        `None` quando já há um ciclo em curso e por isso não chamam `commit`.
+        """
         attempt = self.budget.on_eos(0.0)
         self.assertEqual(attempt, 1)        # sem `commit`
         self.assertEqual(self.budget.attempts, 0)
