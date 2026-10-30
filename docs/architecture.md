@@ -38,8 +38,9 @@ pipeline_real.py ── JSONL stdout + data/logs/live.jsonl (TELEMETRY_FILE)
                        └── WS   /ws (snapshot inicial + push por registro)
 
 navegador ──► http://192.168.59.102:8081        (dashboard: player WHEP + cards + gráficos canvas + log de eventos)
-navegador ──► http://192.168.59.102:8889/live/whep (WebRTC, sinalização WHEP do MediaMTX)
+navegador ──► https://192.168.59.102:8889/live/whep (WebRTC, sinalização WHEP do MediaMTX — TLS desde o E0-T4)
 navegador ──► http://192.168.59.102:8888/live/     (HLS fallback, latência maior)
+celular   ──► https://192.168.59.102:8443/capture.html (página de captura; WHIP em https://…:8889/phone/whip)
 ```
 
 > **Acesse o dashboard pelo IP da LAN** (`http://192.168.59.102:8081`), não por
@@ -49,6 +50,11 @@ navegador ──► http://192.168.59.102:8888/live/     (HLS fallback, latênci
 > responde; (2) `dashboard/frontend/app.js` deriva a URL do WHEP do hostname da
 > página (`location.hostname:8889`), logo abrir o dashboard em `localhost` faz o
 > player apontar para `localhost:8889` e o vídeo fica morto, sem erro na tela.
+>
+> Desde o E0-T4 a porta 8889 é **TLS** (`webrtcEncryption: yes`, certificado de
+> `deploy/certs/`): o navegador que abre o dashboard precisa confiar na CA
+> interna (`deploy/certs/ca.crt`), senão o `fetch` do WHEP falha por
+> certificado. A página de captura do celular usa a 8443 pelo mesmo motivo.
 
 - **Saúde derivada** no backend: `healthy` se `interval_metrics` fresco (<90 s) com `fps_processed > 0`; `stale` se telemetria velha; `down` sem telemetria.
 - **Sem persistência além do JSONL**: o histórico dos gráficos é reconstruído replayando o arquivo na partida do backend; SQLite fica para fase futura.

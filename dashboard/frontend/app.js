@@ -51,7 +51,12 @@ const player = {
     this.playing = true;  // habilita reconexão automática desde a 1ª tentativa
     const whepUrl =
       localStorage.getItem("whep_url") ||
-      `${location.protocol}//${location.hostname}:8889/live/whep`;
+      // HTTPS desde o E0-T4: o MediaMTX subiu com `webrtcEncryption: yes` e a
+      // 8889 não fala mais HTTP puro. Se o navegador que abre este dashboard
+      // não confiar na CA interna, o `fetch` falha com erro de certificado —
+      // instale `deploy/certs/ca.crt` na máquina (ou use o atalho
+      // `localStorage.whep_url` com uma origem já confiável).
+      `https://${location.hostname}:8889/live/whep`;
     setVideoStatus("negociando webrtc…");
     try {
       this.pc = new RTCPeerConnection();

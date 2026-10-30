@@ -21,6 +21,17 @@ webrtcAdditionalHosts: [192.168.59.102]
 # (deepstream/pipeline_real.py).
 rtspTransports: [tcp]
 
+# TLS do WHIP (E0-T4). Fora de `localhost`, o navegador só entrega a câmera
+# (`getUserMedia`) em contexto seguro, e o POST do WHIP também precisa sair em
+# HTTPS. O material vem de `deploy/certs/generate-certs.sh`, montado read-only
+# em `/certs` pelo compose; a CA gerada ali é a que se instala no celular.
+#
+# Isto **não** torna a página segura: a origem do documento é outra (8443,
+# serviço `capture-web`). Ver `deploy/nginx/capture-web.conf`.
+webrtcEncryption: yes
+webrtcServerCert: /certs/server.crt
+webrtcServerKey: /certs/server.key
+
 api: no
 
 paths:

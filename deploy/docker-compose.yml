@@ -21,6 +21,31 @@ services:
       - "${LAN_IP:-192.168.59.102}:8189:8189/tcp"
     volumes:
       - ../mediamtx/mediamtx.yml:/mediamtx.yml
+      # Certificado e chave do WHIP (E0-T4). Gerados por
+      # `deploy/certs/generate-certs.sh`; a pasta é gitignored por inteiro.
+      # Sem este mount o MediaMTX sobe e cai na primeira conexão WebRTC:
+      # `webrtcEncryption: yes` sem `webrtcServerCert/Key` legíveis não tem
+      # como servir TLS.
+      - ../deploy/certs:/certs:ro
+
+  capture-web:
+    # Origem HTTPS da página de captura do celular (E0-T4). O TLS da 8889 não
+    # empresta contexto seguro ao documento: `getUserMedia` depende da origem
+    # que serviu a página, não do destino do `fetch`. Sem imagem customizada —
+    # nginx serve `dashboard/frontend/` direto dos arquivos versionados.
+    image: nginx:1.27-alpine
+    container_name: vision-capture-web
+    restart: unless-stopped
+    ports:
+      # Amarrado ao IP da LAN, como as portas do MediaMTX (DIV-003): a página
+      # entrega a câmera de quem a abrir, não é serviço para a internet.
+      - "${LAN_IP:-192.168.59.102}:8443:8443"
+    volumes:
+      - ../deploy/nginx/capture-web.conf:/etc/nginx/conf.d/default.conf:ro
+      # Mesmo diretório que o backend do dashboard serve em /static.
+      - ../dashboard/frontend:/usr/share/nginx/html:ro
+      # O MESMO certificado do WHIP — um `ca.crt` no celular cobre as duas portas.
+      - ../deploy/certs:/certs:ro
 
   vision-app:
     build:
