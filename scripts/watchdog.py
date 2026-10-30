@@ -7,9 +7,12 @@ travamentos nativos, erros de driver ou deadlocks — este processo sim,
 pois observa o sistema por fora e pode reiniciar o container.
 
 Regras implementadas (spec Fase 6):
-  1. Sem frame por 30s            -> evento no_frames_detected
+  1. Sem frame por 60s            -> evento no_frames_detected
      (a reconexão RTSP em si acontece dentro do pipeline; se o quadro
       não voltar em NO_FRAME_ESCALATE_S, reinicia o container)
+     Crash-loop (>= CRASH_LOOP_MIN_RESTARTS restarts em
+     CRASH_LOOP_WINDOW_S) -> evento crash_loop_detected + restart: a
+     carência de startup deixaria o watchdog cego nesse estado.
   2. FPS < 30% do alvo por 2 min  -> registra degradação
   3. RSS > 15% acima da baseline  -> emite alerta
   4. RAM do sistema > 90%         -> reinicia o pipeline (docker restart)
@@ -30,6 +33,7 @@ import re
 import socket
 import sys
 import time
+from collections import deque
 
 # ---------------------------------------------------------------------------
 # Configuração (env)
@@ -45,8 +49,28 @@ DOCKER_SOCK = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
 CHECK_INTERVAL_S = float(os.environ.get("WATCHDOG_INTERVAL_S", "10"))
 STARTUP_GRACE_S = float(os.environ.get("WATCHDOG_GRACE_S", "120"))
 
-RULE1_FRAME_TIMEOUT_S = float(os.environ.get("FRAME_TIMEOUT_S", "30"))
+# 60 s, não 30 s: o pipeline publica `interval_metrics` a cada
+# METRICS_INTERVAL_S=30 s (`deepstream/pipeline_real.py`) e o watchdog só vê
+# frame por essa amostra. Com timeout igual ao intervalo, a margem era zero:
+# medido em 4.025 intervalos reais do laboratório, 1.367 chegaram com >30 s
+# entre publicações **com frames fluindo** -> ~41 `no_frames_detected`
+# espúrios na série histórica. Dois intervalos de folga cobrem o atraso do
+# timer GLib e o poll de 10 s sem afrouxar a detecção (a escalada em
+# NO_FRAME_ESCALATE_S continua em 180 s).
+RULE1_FRAME_TIMEOUT_S = float(os.environ.get("FRAME_TIMEOUT_S", "60"))
 RULE1_ESCALATE_S = float(os.environ.get("NO_FRAME_ESCALATE_S", "180"))
+
+# Crash-loop: abaixo disso o container nunca vive STARTUP_GRACE_S, então a
+# carência de startup vira portão absoluto e cega `_rule1_idle` para sempre
+# (medido no duplo de Docker dos testes: 30 min de fonte morta -> 0
+# `no_frames_detected`, 0 `restart_triggered`, 29 `container_restarted`).
+CRASH_LOOP_WINDOW_S = float(os.environ.get("CRASH_LOOP_WINDOW_S", "900"))
+CRASH_LOOP_MIN_RESTARTS = int(os.environ.get("CRASH_LOOP_MIN_RESTARTS", "5"))
+# Sem restart novo por este tempo, o ciclo acabou: a Regra 1 volta a valer
+# mesmo que a janela ainda tenha histórico de 5 restarts. Sem isso, um
+# container que estabilizou ficaria sem `no_frames_detected` até a janela
+# esvaziar (até 15 min).
+CRASH_LOOP_ACTIVE_S = float(os.environ.get("CRASH_LOOP_ACTIVE_S", "240"))
 
 RULE2_FPS_RATIO = float(os.environ.get("FPS_DEGRADE_RATIO", "0.30"))
 RULE2_WINDOW_S = float(os.environ.get("FPS_DEGRADE_WINDOW_S", "120"))
@@ -183,7 +207,15 @@ class DockerAPI:
         except (json.JSONDecodeError, AttributeError):
             return None, None, None
         started = state.get("StartedAt") or ""
-        return bool(state.get("Running")), started or None, _age_seconds(started)
+        try:
+            # `StartedAt` fora do formato ISO (`nada`, `2026-13-45T99:99:99Z`)
+            # levantava ValueError daqui: escapava de `container_state`, caía
+            # no `except Exception` do loop (`watchdog_error` a cada poll) e
+            # engolia `_rule4_ram()`/`_rule5_cuda_logs()` daquele ciclo.
+            uptime = _age_seconds(started)
+        except (ValueError, OverflowError):
+            uptime = None
+        return bool(state.get("Running")), started or None, uptime
 
     def restart(self, container, timeout_s=10):
         status, _ = self.request(
@@ -274,16 +306,25 @@ def _age_seconds(iso_ts, now_epoch=None):
 
     O Docker devolve nanossegundos (`...16:59:23.123456789Z`) e `strptime`
     só aceita microssegundos — daí o parse manual da fração.
+
+    Nunca levanta: `StartedAt` malformado devolve None (o watchdog volta ao
+    comportamento antigo, sem carência) e idade negativa — relógio do host
+    andou para trás depois do start do container — é tratada como 0, o que dá
+    a mesma carência de um processo recém-subido.
     """
     match = DOCKER_TS_RE.match(iso_ts or "")
     if not match:
         return None
-    base = datetime.datetime.strptime(
-        match.group(1), "%Y-%m-%dT%H:%M:%S").replace(
-            tzinfo=datetime.timezone.utc).timestamp()
-    fracao = float("0." + (match.group(2) or "0")[:6])
+    try:
+        base = datetime.datetime.strptime(
+            match.group(1), "%Y-%m-%dT%H:%M:%S").replace(
+                tzinfo=datetime.timezone.utc).timestamp()
+        fracao = float("0." + (match.group(2) or "0")[:6])
+    except (ValueError, OverflowError, OSError):
+        return None
     agora = time.time() if now_epoch is None else now_epoch
-    return round(agora - base - fracao, 1)
+    idade = agora - base - fracao
+    return round(idade, 1) if idade > 0 else 0.0
 
 
 def system_ram_used_pct():
@@ -314,6 +355,13 @@ class Watchdog:
         # StartedAt do processo observado: quando muda, o pipeline reiniciou
         # por fora (docker restart, crash, recriação do compose).
         self._app_started_at = None
+        # Crash-loop: instantes dos restarts observados dentro da janela.
+        # Sem isso, `uptime < STARTUP_GRACE_S` faz `_rule1_idle` retornar antes
+        # de qualquer detecção enquanto o container reiniciar rápido — o
+        # watchdog fica cego (e sem escalada) para sempre.
+        self._restart_events = deque()
+        self._restart_event_emitted_at = None
+        self._crash_loop_reported_at = None
         # Última leitura de frames_total_in, que é cumulativo POR PROCESSO do
         # pipeline. None = ainda não há base (primeira amostra ou logo após
         # um restart). Nunca guardar high-water entre processos: era a causa
@@ -467,17 +515,70 @@ class Watchdog:
         self.last_frame_at = now
         self.no_frame_reported = False
         self._prev_frames_total = None
+        self._register_restart_event(now, started_at, uptime, running)
+        return uptime
+
+    def _register_restart_event(self, now, started_at, uptime, running):
+        """Anota o restart na janela e emite `container_restarted` no máximo 1x.
+
+        Em crash-loop o processo troca a cada poll de 10 s: emitir uma linha
+        por troca enchia o log de ruído e escondia o evento que importa
+        (`crash_loop_detected`). Os restarts continuam contados no deque.
+        """
+        events = self._restart_events
+        events.append(now)
+        while events and now - events[0] > CRASH_LOOP_WINDOW_S:
+            events.popleft()
+        emitida = self._restart_event_emitted_at
+        if emitida is not None and now - emitida < CRASH_LOOP_WINDOW_S:
+            return
+        self._restart_event_emitted_at = now
         emit("container_restarted", started_at=started_at,
              uptime_s=uptime, running=running,
+             restarts_in_window=len(events),
+             window_s=CRASH_LOOP_WINDOW_S,
              action="nova carência; base do contador zerada",
              grace_s=STARTUP_GRACE_S)
-        return uptime
+
+    def _crash_loop_check(self, now):
+        """True quando o container está em crash-loop (>= N restarts na janela).
+
+        A carência de startup é legítima para um restart isolado, mas em
+        crash-loop ela é um portão absoluto: o processo nunca vive
+        STARTUP_GRACE_S, então `_rule1_idle` retornaria antes de
+        `no_frames_detected` **e** de `_restart()` para sempre. Por isso esta
+        checagem vem antes da carência e escala pelo `_restart()` existente
+        (respeitando cooldown/supressão).
+        """
+        events = self._restart_events
+        while events and now - events[0] > CRASH_LOOP_WINDOW_S:
+            events.popleft()
+        restarts = len(events)
+        if restarts < CRASH_LOOP_MIN_RESTARTS:
+            return False
+        if now - events[-1] > CRASH_LOOP_ACTIVE_S:
+            # o container parou de reiniciar: o ciclo acabou e a vigilância
+            # normal (Regra 1) volta a ser dona do caso.
+            return False
+        anterior = self._crash_loop_reported_at
+        if anterior is not None and now - anterior < CRASH_LOOP_WINDOW_S:
+            return True                      # já reportado nesta janela
+        self._crash_loop_reported_at = now
+        emit("crash_loop_detected", restarts=restarts,
+             window_s=CRASH_LOOP_WINDOW_S,
+             min_restarts=CRASH_LOOP_MIN_RESTARTS,
+             action="carência de startup ignorada; escalando restart")
+        self._restart("crash_loop", restarts=restarts,
+                      window_s=CRASH_LOOP_WINDOW_S)
+        return True
 
     def _rule1_idle(self):
         now = time.monotonic()
         # Antes da carência: o StartedAt do processo precisa ser observado
         # mesmo durante ela, senão um crash-loop passaria invisível.
         uptime = self._observe_container_start()
+        if self._crash_loop_check(now):
+            return
         if now - self.started_at < STARTUP_GRACE_S:
             return
         if uptime is not None and uptime < STARTUP_GRACE_S:
@@ -525,6 +626,8 @@ class Watchdog:
              rules={
                  "frame_timeout_s": RULE1_FRAME_TIMEOUT_S,
                  "escalate_s": RULE1_ESCALATE_S,
+                 "crash_loop_window_s": CRASH_LOOP_WINDOW_S,
+                 "crash_loop_min_restarts": CRASH_LOOP_MIN_RESTARTS,
                  "fps_degrade_ratio": RULE2_FPS_RATIO,
                  "fps_degrade_window_s": RULE2_WINDOW_S,
                  "rss_growth_ratio": RULE3_RSS_RATIO,

@@ -17,6 +17,7 @@ Nota: `scripts/tests` não tem `__init__.py` de propósito (ver
 """
 
 import datetime
+import json
 import sys
 import tempfile
 import unittest
@@ -314,8 +315,8 @@ class WatchdogSourcesTest(unittest.TestCase):
         triggers = [f for name, f in self.events if name == "restart_triggered"]
         self.assertTrue(triggers)
 
-    def test_crash_loop_fica_visivel(self) -> None:
-        """Startups repetidos aparecem no log (ação é do Docker, não nossa)."""
+    def test_restart_isolado_aparece_no_log(self) -> None:
+        """3 restarts isolados: o log mostra o restart (1 linha por janela)."""
         self.run_loop(150)
         self.events.clear()
 
@@ -323,7 +324,111 @@ class WatchdogSourcesTest(unittest.TestCase):
             self.dog.docker.simulate_restart(f"2026-10-30T17:0{n}:00.000000000Z")
             self.run_loop(20, freeze_counter=True)
 
-        self.assertEqual(self.count("container_restarted"), 3)
+        self.assertEqual(self.count("container_restarted"), 1)
+
+    # -- crash-loop (I1) -----------------------------------------------------
+    def _crash_loop(self, reinicios: int, intervalo_s: float = 60.0) -> None:
+        """Reproduz o backoff do Docker: um restart a cada `intervalo_s`."""
+        for n in range(reinicios):
+            self.dog.docker.simulate_restart(
+                f"2026-10-30T17:{n:02d}:00.000000000Z")
+            self.run_loop(intervalo_s, freeze_counter=True)
+
+    def test_crash_loop_escala_e_emite_evento(self) -> None:
+        """I1: 5 restarts em 15 min não podem manter o watchdog cego.
+
+        Antes do fix, com fonte morta e restart a cada ~60 s, o uptime era
+        sempre < STARTUP_GRACE_S: `_rule1_idle` retornava antes de
+        `no_frames_detected` e de `_restart()` para sempre.
+        """
+        self.run_loop(150)
+        self.events.clear()
+        self.fps_in = 0.0
+        self.fps_processed = 0.0
+
+        self._crash_loop(wd.CRASH_LOOP_MIN_RESTARTS + 1)
+
+        detectado = self.first("crash_loop_detected")
+        self.assertGreaterEqual(detectado["restarts"],
+                                wd.CRASH_LOOP_MIN_RESTARTS)
+        self.assertEqual(detectado["window_s"], wd.CRASH_LOOP_WINDOW_S)
+
+        triggers = [f for name, f in self.events if name == "restart_triggered"]
+        self.assertTrue(triggers, "crash-loop precisa escalar restart")
+        self.assertEqual(triggers[0]["reason"], "crash_loop")
+        self.assertGreaterEqual(triggers[0]["restarts"],
+                               wd.CRASH_LOOP_MIN_RESTARTS)
+
+    def test_crash_loop_abaixo_do_limiar_nao_escala(self) -> None:
+        """4 restarts em 15 min ainda são restart isolado: carência vale."""
+        self.run_loop(150)
+        self.events.clear()
+        self.fps_in = 0.0
+        self.fps_processed = 0.0
+
+        self._crash_loop(wd.CRASH_LOOP_MIN_RESTARTS - 1)
+
+        self.assertNotIn("crash_loop_detected", self.names())
+        self.assertNotIn("restart_triggered", self.names())
+
+    def test_crash_loop_detectado_uma_vez_por_janela(self) -> None:
+        """A escalada é uma por janela: nada de `crash_loop_detected` a cada 10 s."""
+        self.run_loop(150)
+        self.events.clear()
+        self.fps_in = 0.0
+
+        self._crash_loop(wd.CRASH_LOOP_MIN_RESTARTS + 4)
+
+        self.assertEqual(self.count("crash_loop_detected"), 1)
+
+    def test_crash_loop_que_estabiliza_volta_a_vigiar(self) -> None:
+        """Parou de reiniciar: a Regra 1 volta a cobrar frames."""
+        self.run_loop(150)
+        self.events.clear()
+        self.fps_in = 0.0
+        self.fps_processed = 0.0
+
+        self._crash_loop(wd.CRASH_LOOP_MIN_RESTARTS)
+        self.assertIn("crash_loop_detected", self.names())
+        self.events.clear()
+
+        # container estável (sem restart novo) e fonte morta
+        self.run_loop(wd.CRASH_LOOP_ACTIVE_S + wd.STARTUP_GRACE_S
+                      + wd.RULE1_ESCALATE_S + 60, freeze_counter=True)
+
+        self.assertIn("no_frames_detected", self.names())
+        self.assertNotIn("crash_loop_detected", self.names())
+
+    def test_container_restarted_nao_vira_spam(self) -> None:
+        """10 restarts em ~3 min: no máximo uma linha `container_restarted`."""
+        self.run_loop(150)
+        self.events.clear()
+
+        for n in range(10):
+            self.dog.docker.simulate_restart(
+                f"2026-10-30T17:{n:02d}:00.000000000Z")
+            self.run_loop(20, freeze_counter=True)
+
+        self.assertEqual(self.count("container_restarted"), 1)
+
+    def test_uptime_desconhecido_nao_impede_a_regra_1(self) -> None:
+        """I2: `uptime` None (parse ruim) não pode suspender a Regra 1."""
+        self.run_loop(150)
+        self.events.clear()
+
+        started = self.dog.docker.started_at
+        # mesmo StartedAt (sem restart) e uptime desconhecida: o caminho que
+        # um `StartedAt` malformado produz no DockerAPI real.
+        self.dog.docker.container_state = lambda _c: (True, started, None)
+        self.fps_in = 0.0
+        self.run_loop(wd.RULE1_ESCALATE_S + 120, freeze_counter=True)
+
+        self.assertIn("no_frames_detected", self.names())
+        # Regra 1 inteira: detecta E escala (comportamento antigo preservado)
+        triggers = [f for name, f in self.events if name == "restart_triggered"]
+        self.assertTrue(triggers)
+        self.assertEqual(triggers[0]["reason"], "no_frames_escalation")
+        self.assertNotIn("watchdog_error", self.names())
 
     def test_api_do_docker_fora_volta_ao_comportamento_antigo(self) -> None:
         self.run_loop(150)
@@ -352,6 +457,48 @@ class AgeSecondsTest(unittest.TestCase):
         self.assertIsNone(wd._age_seconds(""))
         self.assertIsNone(wd._age_seconds("nada"))
         self.assertIsNone(wd._age_seconds(None))
+
+    def test_timestamp_com_data_impossivel_devolve_none(self) -> None:
+        """I2: o regex casa `13-45T99:99:99`; o `strptime` levanta ValueError."""
+        self.assertIsNone(wd._age_seconds("2026-13-45T99:99:99.123456789Z"))
+        self.assertIsNone(wd._age_seconds("2026-02-30T10:00:00.000000000Z"))
+
+    def test_uptime_negativo_vira_zero(self) -> None:
+        """Relógio do host atrás do StartedAt: idade negativa é descartada."""
+        base = datetime.datetime(
+            2026, 10, 30, 17, 0, 0,
+            tzinfo=datetime.timezone.utc).timestamp()
+        ts = "2026-10-30T17:00:00.000000000Z"
+        self.assertEqual(wd._age_seconds(ts, now_epoch=base - 60), 0.0)
+
+
+class ContainerStateTest(unittest.TestCase):
+    """I2: nada na leitura de estado pode levantar para o loop do watchdog."""
+
+    @staticmethod
+    def _api(payload: dict) -> wd.DockerAPI:
+        api = wd.DockerAPI("/var/run/docker.sock")
+        api.request = lambda *a, **k: (200, json.dumps(payload).encode())
+        return api
+
+    def test_started_at_impossivel_devolve_uptime_none(self) -> None:
+        started = "2026-13-45T99:99:99.123456789Z"
+        api = self._api({"State": {"Running": True, "StartedAt": started}})
+        # não levanta — é o que mantém `_rule4_ram`/`_rule5_cuda_logs` no ciclo
+        self.assertEqual(api.container_state("c"), (True, started, None))
+
+    def test_started_at_texto_livre_devolve_uptime_none(self) -> None:
+        api = self._api({"State": {"Running": True, "StartedAt": "nada"}})
+        self.assertEqual(api.container_state("c"), (True, "nada", None))
+
+    def test_started_at_valido_continua_calculando(self) -> None:
+        api = self._api({"State": {
+            "Running": True,
+            "StartedAt": "2026-10-30T16:59:23.123456789Z"}})
+        running, started, uptime = api.container_state("c")
+        self.assertTrue(running)
+        self.assertEqual(started, "2026-10-30T16:59:23.123456789Z")
+        self.assertIsNotNone(uptime)
 
 
 class JsonlTailTest(unittest.TestCase):
