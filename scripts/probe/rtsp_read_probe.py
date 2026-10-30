@@ -12,9 +12,11 @@ Contrato de saída (é o que `scripts/switch_source.sh` vai consumir, D7):
     argumento, emitido pelo `argparse`). O `switch_source.sh` trata qualquer
     código `!= 0` como falha do pré-check.
 
-PASS exige, simultaneamente: `frames >= --min-frames`, `fps >= --min-fps` e o
-primeiro frame chegou dentro de `--seconds`. Qualquer erro de GStreamer é
-capturado no bus e vira `result: FAIL` com `reason` — nunca traceback.
+PASS exige, simultaneamente: `frames >= --min-frames`, `fps >= --min-fps`, o
+primeiro frame chegou dentro de `--seconds` e a contagem de gaps > 500 ms não
+passa de `--max-gaps` (default 0; `-1` desliga o gate). Qualquer erro de
+GStreamer é capturado no bus e vira `result: FAIL` com `reason` — nunca
+traceback.
 
 Credencial: a URI da câmera tem usuário e senha, e esta sonda é chamada pelo
 `switch_source.sh` com essa URI. Toda saída (JSON, resumo, `--verbose`, texto de
@@ -59,6 +61,14 @@ GAP_THRESHOLD_MS = 500.0
 
 # Folga acima de --seconds antes do timeout duro (pipeline travado).
 HARD_TIMEOUT_SLACK_S = 5
+
+# Limite de espera do teardown (`set_state(NULL)`); acima disso a sonda segue
+# com o resultado já calculado em vez de travar além de --seconds + 5.
+TEARDOWN_TIMEOUT_S = 5
+
+# O mesmo limite em nanossegundos, unidade de `get_state()`. Literal porque o
+# `gi` deste host não expõe `Gst.SECOND`/`Gst.SECONDS`.
+TEARDOWN_TIMEOUT_NS = TEARDOWN_TIMEOUT_S * 1_000_000_000
 
 # rtspsrc `protocols` é uma máscara de flags (GstRtsp.RTSPLowerTrans):
 # UDP unicast = 1, TCP = 4. Valores literais para não exigir o typelib GstRtsp.
@@ -276,6 +286,8 @@ def decide(
     min_fps: float,
     seconds: float,
     error: Optional[str] = None,
+    gaps_over_500ms: int = 0,
+    max_gaps: int = 0,
     no_video_pad: bool = False,
 ) -> Tuple[str, str]:
     """Decide PASS/FAIL e o motivo, na ordem em que faz diferença para operação.
@@ -283,8 +295,10 @@ def decide(
     Retorna `(result, reason)`. O motivo do primeiro critério violado é o que
     aparece — é ele que o `switch_source.sh` vai imprimir.
 
-    `no_video_pad` cobre o caso em que o `rtspsrc` entregou pads, mas nenhum de
-    vídeo — distinto de codec não suportado (que só vale para pad de vídeo).
+    `max_gaps` é o gate de estabilidade (D3): default 0 exige zero gaps acima de
+    `GAP_THRESHOLD_MS`; `-1` desliga o gate. `no_video_pad` cobre o caso em que
+    o `rtspsrc` entregou pads, mas nenhum de vídeo — distinto de codec não
+    suportado (que só vale para pad de vídeo).
     """
     if error:
         return "FAIL", f"pipeline_error: {error}"
@@ -298,6 +312,8 @@ def decide(
         return "FAIL", f"frames_below_min ({frames} < {min_frames})"
     if fps < min_fps:
         return "FAIL", f"fps_below_min ({fps} < {min_fps})"
+    if max_gaps >= 0 and gaps_over_500ms > max_gaps:
+        return "FAIL", f"too_many_gaps ({gaps_over_500ms} > {max_gaps})"
     return "PASS", "ok"
 
 
@@ -352,6 +368,14 @@ class RtspReadProbe:
     def _log(self, message: str) -> None:
         if self.verbose:
             print(f"[probe] {scrub_text(message, self.url)}", file=sys.stderr)
+
+    def _warn(self, message: str) -> None:
+        """Aviso operacional: sai sempre em stderr, mesmo com `--json`.
+
+        Não vai para stdout (o contrato é uma linha JSON) e não altera o
+        resultado já calculado.
+        """
+        print(f"[probe] aviso: {scrub_text(message, self.url)}", file=sys.stderr)
 
     # -- construção --------------------------------------------------------
     def _build(self) -> None:
@@ -514,8 +538,7 @@ class RtspReadProbe:
         except KeyboardInterrupt:  # pragma: no cover - fallback fora do GLib
             self.result.error = self.result.error or "interrompido pelo usuário"
         finally:
-            self.pipeline.set_state(Gst.State.NULL)
-            self.pipeline.get_state(Gst.CLOCK_TIME_NONE)  # espera soltar os sockets
+            self._teardown()
             for source_id, fired in (
                 (soft_id, self._soft_fired),
                 (hard_id, self._hard_fired),
@@ -534,6 +557,27 @@ class RtspReadProbe:
 
         return self.result
 
+    def _teardown(self) -> None:
+        """Solta o pipeline com espera limitada, sem mascarar o resultado.
+
+        `set_state(NULL)` + `get_state(CLOCK_TIME_NONE)` esperaria para sempre um
+        pipeline travado. Aqui a espera é de `TEARDOWN_TIMEOUT_S`; se estourar,
+        sai um aviso em stderr e a sonda continua com as métricas já coletadas.
+        """
+        assert self.pipeline is not None
+        ret = self.pipeline.set_state(Gst.State.NULL)
+        if ret == Gst.StateChangeReturn.FAILURE:
+            self._warn("teardown: pipeline recusou a transição para NULL")
+            return
+        _ret, state, _pending = self.pipeline.get_state(TEARDOWN_TIMEOUT_NS)
+        if state != Gst.State.NULL:
+            self._warn(
+                "teardown: pipeline não chegou a NULL em "
+                f"{TEARDOWN_TIMEOUT_S}s (estado={state.value_nick}); "
+                "seguindo com o resultado já calculado"
+            )
+
+
 # ---------------------------------------------------------------------------
 # Relatório
 # ---------------------------------------------------------------------------
@@ -545,6 +589,7 @@ def build_report(
     min_frames: int,
     min_fps: float,
     elapsed_s: float,
+    max_gaps: int = 0,
     container: str = "rtsp",
 ) -> Dict[str, Any]:
     """Consolida o observado no JSON de saída (uma linha em stdout).
@@ -566,6 +611,8 @@ def build_report(
         min_fps=min_fps,
         seconds=seconds,
         error=result.error,
+        gaps_over_500ms=gaps["gaps_over_500ms"],
+        max_gaps=max_gaps,
         no_video_pad=result.no_video_pad,
     )
     return {
@@ -576,6 +623,7 @@ def build_report(
         "frames": frames,
         "fps": fps,
         "gaps_over_500ms": gaps["gaps_over_500ms"],
+        "max_gaps": max_gaps,
         "max_gap_ms": gaps["max_gap_ms"],
         "avg_gap_ms": gaps["avg_gap_ms"],
         "duration_s": round(elapsed_s, 3),
@@ -591,7 +639,8 @@ def format_human(report: Dict[str, Any]) -> str:
     return (
         f"{report['result']} {report['reason']} | codec={report['codec']} "
         f"frames={report['frames']} fps={report['fps']} "
-        f"first_frame={first_txt} gaps>500ms={report['gaps_over_500ms']} "
+        f"first_frame={first_txt} gaps>500ms={report['gaps_over_500ms']}"
+        f"/{report['max_gaps']} "
         f"max_gap={report['max_gap_ms']:.0f}ms dur={report['duration_s']:.1f}s"
     )
 
@@ -613,6 +662,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
             "pipeline), 2 = uso incorreto (argumento inválido, emitido pelo "
             "argparse). O switch_source.sh trata qualquer código != 0 como falha "
             "do pré-check.\n\n"
+            "Estabilidade: por padrão PASS exige **zero** gaps acima de 500 ms "
+            "(--max-gaps 0), o critério do drone (D3). --max-gaps -1 desliga o "
+            "gate; --max-gaps N tolera até N gaps.\n\n"
             "Exemplo: rtsp_read_probe.py --url rtsp://192.168.59.102:8554/drone "
             "--seconds 5 --json    # pré-check do switch_source.sh\n\n"
             "Credencial: a URL é mascarada em toda saída (usuário e senha viram "
@@ -645,6 +697,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="frames mínimos recebidos para PASS (default: 10)",
     )
     parser.add_argument(
+        "--max-gaps",
+        type=int,
+        default=0,
+        help=(
+            "gaps acima de 500 ms tolerados para PASS (default: 0 = nenhum); "
+            "-1 desliga o gate"
+        ),
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="não imprime o resumo legível em stderr (só a linha JSON em stdout)",
@@ -665,6 +726,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         parser.error("--min-fps não pode ser negativo")
     if args.min_frames < 0:
         parser.error("--min-frames não pode ser negativo")
+    if args.max_gaps < -1:
+        parser.error("--max-gaps aceita -1 (desliga o gate) ou inteiro >= 0")
     return args
 
 
@@ -685,6 +748,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             min_frames=args.min_frames,
             min_fps=args.min_fps,
             elapsed_s=time.monotonic() - started,
+            max_gaps=args.max_gaps,
         )
     except Exception as exc:  # erro de construção/execução do pipeline
         report = {
@@ -695,6 +759,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "frames": 0,
             "fps": 0.0,
             "gaps_over_500ms": 0,
+            "max_gaps": args.max_gaps,
             "max_gap_ms": 0.0,
             "avg_gap_ms": 0.0,
             "duration_s": 0.0,

@@ -127,6 +127,62 @@ class TestDecide(unittest.TestCase):
         )
 
 
+class TestDecideGaps(unittest.TestCase):
+    """I1: gaps > 500 ms gateiam o PASS (critério de estabilidade do drone)."""
+
+    def _decide(self, **kwargs):
+        base = dict(
+            frames=300, fps=30.0, first_frame_s=0.4, min_frames=10,
+            min_fps=5.0, seconds=10.0, error=None,
+        )
+        base.update(kwargs)
+        return probe.decide(**base)
+
+    def test_zero_gaps_default_e_pass(self):
+        self.assertEqual(self._decide(gaps_over_500ms=0), ("PASS", "ok"))
+
+    def test_default_reprova_qualquer_gap(self):
+        result, reason = self._decide(gaps_over_500ms=1)
+        self.assertEqual(result, "FAIL")
+        self.assertEqual(reason, "too_many_gaps (1 > 0)")
+
+    def test_no_limiar_e_pass(self):
+        self.assertEqual(
+            self._decide(gaps_over_500ms=4, max_gaps=4), ("PASS", "ok")
+        )
+
+    def test_acima_do_limiar_e_fail(self):
+        result, reason = self._decide(gaps_over_500ms=5, max_gaps=4)
+        self.assertEqual(result, "FAIL")
+        self.assertIn("too_many_gaps", reason)
+        self.assertIn("5 > 4", reason)
+
+    def test_gate_desligado_com_menos_um(self):
+        self.assertEqual(
+            self._decide(gaps_over_500ms=99, max_gaps=-1), ("PASS", "ok")
+        )
+
+    def test_gap_do_publisher_a_2fps_reprova_com_gate_ligado(self):
+        # 2 fps por 10 s: gaps de 500 ms + buracos -> reprova no gate default.
+        stamps = [0.0, 0.5, 1.0, 2.6, 3.1, 4.9]
+        gaps = probe.compute_gaps(stamps)
+        self.assertEqual(gaps["gaps_over_500ms"], 2)
+        self.assertEqual(self._decide(gaps_over_500ms=gaps["gaps_over_500ms"])[0], "FAIL")
+        self.assertEqual(
+            self._decide(gaps_over_500ms=gaps["gaps_over_500ms"], max_gaps=-1)[0],
+            "PASS",
+        )
+
+    def test_no_video_pad_tem_motivo_proprio(self):
+        result, reason = self._decide(no_video_pad=True)
+        self.assertEqual((result, reason), ("FAIL", "no_video_pad"))
+
+    def test_erro_de_pipeline_tem_prioridade_sobre_no_video_pad(self):
+        result, reason = self._decide(error="boom", no_video_pad=True)
+        self.assertEqual(result, "FAIL")
+        self.assertTrue(reason.startswith("pipeline_error: "))
+
+
 class TestSanitizeUrl(unittest.TestCase):
     """B1: a credencial da câmera não pode aparecer em nenhuma saída."""
 
@@ -330,6 +386,7 @@ class TestArgsEUrl(unittest.TestCase):
         self.assertEqual(args.transport, "tcp")
         self.assertEqual(args.min_fps, 5.0)
         self.assertEqual(args.min_frames, 10)
+        self.assertEqual(args.max_gaps, 0)
         self.assertFalse(args.json)
         self.assertEqual(args.protocols, 4)
 
@@ -342,13 +399,20 @@ class TestArgsEUrl(unittest.TestCase):
                 "--min-fps", "12.5",
                 "--min-frames", "3",
                 "--json",
+                "--max-gaps", "-1",
             ]
         )
         self.assertEqual(args.seconds, 5.0)
         self.assertEqual(args.protocols, 1)
         self.assertEqual(args.min_fps, 12.5)
         self.assertEqual(args.min_frames, 3)
+        self.assertEqual(args.max_gaps, -1)
         self.assertTrue(args.json)
+
+    def test_parse_args_rejeita_max_gaps_invalido(self):
+        with self.assertRaises(SystemExit) as ctx:
+            probe.parse_args(["--url", "rtsp://h/p", "--max-gaps", "-2"])
+        self.assertEqual(ctx.exception.code, 2)  # 2 = uso incorreto (M2)
 
     def test_parse_args_rejeita_url_invalida(self):
         with self.assertRaises(SystemExit) as ctx:
@@ -393,6 +457,7 @@ class TestBuildReport(unittest.TestCase):
         self.assertEqual(report["gaps_over_500ms"], 0)
         for chave in (
             "url", "codec", "container", "first_frame_s", "frames", "fps",
+            "gaps_over_500ms", "max_gaps", "max_gap_ms", "avg_gap_ms",
             "duration_s", "result", "reason",
         ):
             self.assertIn(chave, report)
@@ -412,6 +477,40 @@ class TestBuildReport(unittest.TestCase):
         )
         self.assertEqual(report["url"], "rtsp://***@192.168.59.102:8555/drone")
         self.assertNotIn(SENHA_FALSA, str(report))
+
+    def test_relatorio_reprova_por_gaps(self):
+        # I1: 2 fps com buracos > 500 ms passa no fps mínimo e reprova nos gaps.
+        result = probe.ProbeResult(codec="h264")
+        for stamp in (0.0, 0.5, 1.0, 2.6, 3.1, 4.9):
+            result.add_frame(stamp)
+        report = probe.build_report(
+            url="rtsp://host:8554/drone",
+            result=result,
+            seconds=5.0,
+            min_frames=5,
+            min_fps=1.0,
+            elapsed_s=5.0,
+        )
+        self.assertEqual(report["result"], "FAIL")
+        self.assertIn("too_many_gaps", report["reason"])
+        self.assertEqual(report["gaps_over_500ms"], 2)
+        self.assertEqual(report["max_gaps"], 0)
+
+    def test_relatorio_aceita_gaps_com_limite(self):
+        result = probe.ProbeResult(codec="h264")
+        for stamp in (0.0, 0.5, 1.0, 2.6, 3.1, 4.9):
+            result.add_frame(stamp)
+        report = probe.build_report(
+            url="rtsp://host:8554/drone",
+            result=result,
+            seconds=5.0,
+            min_frames=5,
+            min_fps=1.0,
+            elapsed_s=5.0,
+            max_gaps=-1,
+        )
+        self.assertEqual(report["result"], "PASS")
+        self.assertEqual(report["max_gaps"], -1)
 
     def test_relatorio_de_pad_sem_video(self):
         result = probe.ProbeResult(no_video_pad=True)
