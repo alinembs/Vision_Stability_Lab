@@ -21,6 +21,10 @@ Regras implementadas (spec Fase 6):
   4. RAM do sistema > 90%         -> reinicia o pipeline (docker restart)
   5. Erro CUDA fatal nos logs     -> encerra/reinicia o processo
 
+Evento fora das regras: `container_missing` — a API do Docker devolveu 404
+para o container observado (o stack sumiu). Distinto de `api_down`; não
+escala restart (reiniciar container inexistente falha calado).
+
 Fontes de dados:
   - data/logs/live.jsonl  (telemetria JSONL do pipeline, seguida em tail)
   - /proc/meminfo         (RAM do sistema)
@@ -136,6 +140,9 @@ def _dechunk(body):
 class DockerAPI:
     def __init__(self, sock_path):
         self.sock_path = sock_path
+        # Código HTTP da última `container_state`: 404 = container não existe,
+        # None = API inalcançável (ou nenhuma leitura ainda).
+        self.last_status = None
 
     def request(self, method, path, timeout=20):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -197,12 +204,17 @@ class DockerAPI:
         recriação) não há frame porque o processo está subindo, e o watchdog
         não deve cobrar isso como fonte morta. Qualquer falha na API devolve
         None e o watchdog volta ao comportamento antigo.
+
+        O código HTTP fica em `last_status` para o chamador distinguir
+        container ausente (404) de API fora do ar (None).
         """
         try:
             status, body = self.request(
                 "GET", f"/containers/{container}/json", timeout=5)
         except OSError:
+            self.last_status = None
             return None, None, None
+        self.last_status = status
         if status != 200:
             return None, None, None
         try:
@@ -361,6 +373,11 @@ class Watchdog:
         # de verdade mexe aqui.
         self.last_frame_evidence_at = time.monotonic()
         self.no_frame_reported = False
+        # Container ausente (404 em /containers/<x>/json): distinto de API fora
+        # do ar. Sem ele, o único rastro em teste não assistido era
+        # `no_frames_detected` + `restart_result ok:false` repetidos.
+        self._container_missing = False
+        self._container_missing_reported_at = None
         # StartedAt do processo observado: quando muda, o pipeline reiniciou
         # por fora (docker restart, crash, recriação do compose).
         self._app_started_at = None
@@ -518,6 +535,7 @@ class Watchdog:
         primeira leitura, quando ainda não há monotônico para comparar.
         """
         running, started_at, uptime = self.docker.container_state(APP_CONTAINER)
+        self._check_container_missing()
         if started_at is None:
             return None                      # API indisponível: regra antiga
         if started_at == self._app_started_at:
@@ -534,6 +552,28 @@ class Watchdog:
         self._prev_frames_total = None
         self._register_restart_event(now, started_at, uptime, running)
         return None                          # carência do processo novo é monotônica
+
+    def _check_container_missing(self):
+        """Emite `container_missing` quando o Docker devolve 404 para o app.
+
+        404 é o container não existir mais (stack removido, `docker compose
+        down`, rename) — não é fonte morta e não é API fora do ar (nesse caso
+        `last_status` é None e o watchdog segue no comportamento antigo).
+        Reiniciar um container inexistente só produz `restart_result ok:false`
+        repetido, que em teste não assistido parece defeito de pipeline.
+        """
+        self._container_missing = getattr(
+            self.docker, "last_status", None) == 404
+        if not self._container_missing:
+            self._container_missing_reported_at = None
+            return
+        now = time.monotonic()
+        anterior = self._container_missing_reported_at
+        if anterior is not None and now - anterior < ALERT_COOLDOWN_S:
+            return
+        self._container_missing_reported_at = now
+        emit("container_missing", container=APP_CONTAINER, status=404,
+             action="container não existe; restart não é acionado")
 
     def _register_restart_event(self, now, started_at, uptime, running):
         """Anota o restart na janela e emite `container_restarted` no máximo 1x.
@@ -629,6 +669,11 @@ class Watchdog:
                  action="pipeline tenta reconectar RTSP internamente")
             self.no_frame_reported = True
         if idle >= RULE1_ESCALATE_S:
+            if self._container_missing:
+                # Reiniciar container inexistente falha calado e consome o
+                # cooldown: `container_missing` já é o sinal do caso.
+                self.last_frame_at = now
+                return
             self._restart("no_frames_escalation", idle_s=round(idle, 1))
             self.last_frame_at = now  # evita reinício imediato repetido
 

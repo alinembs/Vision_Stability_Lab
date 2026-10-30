@@ -61,9 +61,13 @@ class FakeDocker:
         self.started_at: str | None = "2026-10-30T00:00:00.000000000Z"
         self.started_epoch = clock.now
         self.api_down = False
+        # Container inexistente (Docker devolve 404 em /containers/<x>/json).
+        self.missing = False
         # Uptime fixo devolvido pela API: reproduz o relógio de parede atrás do
         # `StartedAt` (passo de NTP para trás), em que a idade é sempre 0.0.
         self.uptime_override: float | None = None
+        # Como no DockerAPI real: código HTTP da última leitura de estado.
+        self.last_status: int | None = None
         # Chamado a cada restart simulado: um processo novo tem contador
         # cumulativo próprio. Sem isso o duplo fingia frame na primeira amostra
         # de todo processo novo (`prev is None` + contador herdado > 0).
@@ -76,7 +80,14 @@ class FakeDocker:
             self.on_process_reset()
 
     def container_state(self, container: str):
-        if self.api_down or self.started_at is None:
+        if self.api_down:
+            self.last_status = None
+            return None, None, None
+        if self.missing:
+            self.last_status = 404
+            return None, None, None
+        self.last_status = 200
+        if self.started_at is None:
             return None, None, None
         uptime = (self.uptime_override if self.uptime_override is not None
                   else round(self.clock.now - self.started_epoch, 1))
@@ -455,6 +466,8 @@ class WatchdogSourcesTest(unittest.TestCase):
         self.run_loop(wd.RULE1_ESCALATE_S + 120, freeze_counter=True)
 
         self.assertIn("no_frames_detected", self.names())
+        # API fora do ar não é "container ausente" (D3): sem 404 não há evento
+        self.assertNotIn("container_missing", self.names())
 
     # -- crash-loop: corroboração por frames (D1) ----------------------------
     def _crash_loop_cadence(self, reinicios: int, intervalo_s: float,
@@ -613,6 +626,33 @@ class WatchdogSourcesTest(unittest.TestCase):
         self.assertIn("no_frames_escalation", self._restart_reasons())
         self.assertEqual(len(restarts), 1)
         self.assertNotIn("watchdog_error", self.names())
+
+    # -- container ausente (D3) ----------------------------------------------
+    def test_container_ausente_emite_evento_proprio_sem_restart(self) -> None:
+        """D3: 404 do `container_state` é o stack sumido, não fonte morta.
+
+        Antes, o único rastro em teste não assistido era `no_frames_detected`
+        + `restart_result ok:false` repetidos, que parece defeito de pipeline.
+        """
+        self.run_loop(150)
+        self.events.clear()
+
+        api, restarts = self._docker_api(None, status=404)
+        self.dog.docker = api
+        self.fps_in = 0.0
+        self.fps_processed = 0.0
+        self.run_loop(wd.STARTUP_GRACE_S + wd.RULE1_ESCALATE_S + 60,
+                      freeze_counter=True)
+
+        self.assertIn("container_missing", self.names())
+        self.assertEqual(self.first("container_missing")["status"], 404)
+        # evento próprio, sem restart de container inexistente
+        self.assertEqual(self._restart_reasons(), [])
+        self.assertEqual(restarts, [])
+        self.assertNotIn("restart_result", self.names())
+        # e sem spam: no máximo uma linha por ALERT_COOLDOWN_S
+        self.assertLessEqual(self.count("container_missing"),
+                             int(360 / wd.ALERT_COOLDOWN_S) + 1)
 
 
 class AgeSecondsTest(unittest.TestCase):
