@@ -1,0 +1,13 @@
+# Fonte ativa do laboratório (E2-T1) — exemplo do arquivo de estado.
+#
+# O arquivo real é `data/config/active_source`: uma linha, o `id` de uma fonte
+# declarada em `deepstream/config/sources.yaml` (`camera`, `drone`, `phone`).
+# NÃO é versionado (o valor é estado local da bancada).
+#
+# Precedência na escolha da fonte ativa:
+#   ACTIVE_SOURCE (ambiente) > data/config/active_source > default_source > 1ª enabled
+#
+# Quem escreve este arquivo é `scripts/switch_source.sh` (E2-T3), de forma
+# atômica. Editar à mão funciona, mas exige `docker restart vision-stability-app`
+# para o pipeline reler (D4: troca de fonte = restart, não runtime).
+camera
