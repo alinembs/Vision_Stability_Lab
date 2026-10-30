@@ -10,6 +10,7 @@ já é importado pelo pytest como pacote `tests` (o avô `deepstream/` não tem
 ("import file mismatch"). Por isso o import abaixo usa o caminho do diretório.
 """
 
+import ssl
 import sys
 import unittest
 from pathlib import Path
@@ -587,6 +588,65 @@ class TestWhipProbe(unittest.TestCase):
         self.assertEqual(parsed["candidates"], [])
         self.assertEqual(parsed["answer_codecs"], [])
         self.assertIsNone(parsed["answer_mline"])
+
+
+class TestWhipProbeTls(unittest.TestCase):
+    """E0-T4: a sonda fala HTTPS e o default não é confiar em qualquer host."""
+
+    def test_default_e_https_no_ip_da_lan(self):
+        args = whip_probe.parse_args([])
+        self.assertEqual(args.base, "https://192.168.59.102:8889")
+        self.assertEqual(args.path, "phone")
+        self.assertFalse(args.insecure)
+        self.assertIsNone(args.cacert)
+
+    def test_base_http_nao_monta_contexto(self):
+        # Instalação sem `webrtcEncryption`: nada de TLS no caminho.
+        self.assertIsNone(whip_probe.build_ssl_context("http://192.168.59.102:8889"))
+
+    def test_cacert_verifica_o_servidor(self):
+        contexto = whip_probe.build_ssl_context(
+            "https://192.168.59.102:8889", cacert="deploy/certs/ca.crt"
+        )
+        self.assertIsNotNone(contexto)
+        self.assertEqual(contexto.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(contexto.check_hostname)
+
+    def test_insecure_desliga_verificacao(self):
+        contexto = whip_probe.build_ssl_context(
+            "https://192.168.59.102:8889", insecure=True
+        )
+        self.assertEqual(contexto.verify_mode, ssl.CERT_NONE)
+        self.assertFalse(contexto.check_hostname)
+
+    def test_sem_cacert_usa_o_store_do_sistema(self):
+        # Fail closed: a CA interna do VSL não está no store, então a sonda
+        # recusa o servidor em vez de "quase" validar.
+        contexto = whip_probe.build_ssl_context("https://192.168.59.102:8889")
+        self.assertEqual(contexto.verify_mode, ssl.CERT_REQUIRED)
+
+    def test_cacert_inexistente_levanta_em_vez_de_passar(self):
+        with self.assertRaises((OSError, ssl.SSLError)):
+            whip_probe.build_ssl_context(
+                "https://192.168.59.102:8889", cacert="/caminho/que/nao/existe.crt"
+            )
+
+    def test_tls_label_distingue_os_modos(self):
+        self.assertEqual(whip_probe.tls_label("http://x:8889"), "off")
+        self.assertEqual(whip_probe.tls_label("https://x:8889"), "verify:sistema")
+        self.assertEqual(
+            whip_probe.tls_label("https://x:8889", cacert="deploy/certs/ca.crt"),
+            "verify:deploy/certs/ca.crt",
+        )
+        self.assertEqual(whip_probe.tls_label("https://x:8889", insecure=True), "insecure")
+
+    def test_cacert_e_insecure_sao_excludentes(self):
+        with self.assertRaises(SystemExit):
+            whip_probe.parse_args(["--cacert", "x.crt", "--insecure"])
+
+    def test_base_sobrescreve_o_default(self):
+        args = whip_probe.parse_args(["--base", "https://10.0.0.5:8889"])
+        self.assertEqual(args.base, "https://10.0.0.5:8889")
 
 
 if __name__ == "__main__":
