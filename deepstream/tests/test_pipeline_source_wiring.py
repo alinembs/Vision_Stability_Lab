@@ -13,6 +13,7 @@ Isso é o caso de integração leve previsto no plano: o caminho de mídia real
 
 from __future__ import annotations
 
+import ast
 import re
 import unittest
 from pathlib import Path
@@ -106,6 +107,67 @@ class PipelineConsomeFonteAtivaTest(unittest.TestCase):
         """D1: uma fonte ativa por vez, sem tiler."""
         self.assertIn("batch_size=1", self.codigo)
         self.assertIn('"sink_0"', self.codigo)
+
+
+class EncerramentoLimpoTest(unittest.TestCase):
+    """F3 do E2-T3: `SIGTERM`/`SIGINT` precisam encerrar limpo e rápido.
+
+    Sem handler, `docker stop` levava a carência inteira (10 s) e terminava em
+    `SIGKILL`: exit 143 e nenhum `pipeline_stopped` na telemetria — o
+    `docker stop vision-stability-app` era observável em `docker events` como
+    `kill` -> `kill` 10 s depois -> `stop/die`.
+    """
+
+    def setUp(self) -> None:
+        self.codigo = PIPELINE.read_text(encoding="utf-8")
+
+    def test_usa_o_handler_do_glib(self) -> None:
+        """`signal.signal` não roda com o thread principal dentro do loop."""
+        self.assertIn("from graceful_shutdown import GracefulShutdown", self.codigo)
+        self.assertIn("self.shutdown = GracefulShutdown(GLib, "
+                      "self._request_shutdown)", self.codigo)
+        self.assertIn("self.shutdown.install()", self.codigo)
+
+    def test_instala_antes_de_rodar_o_loop(self) -> None:
+        self.assertLess(self.codigo.index("self.shutdown.install()"),
+                        self.codigo.index("self.loop.run()"),
+                        "sinal instalado depois de loop.run() nunca é entregue")
+
+    def test_parada_limpa_sai_com_zero_e_registra_pipeline_stopped(self) -> None:
+        self.assertIn("self._quit_loop()", self._corpo("_request_shutdown"))
+        self.assertIn('log_event("shutdown_requested"',
+                      self._corpo("_request_shutdown"))
+        # O `set_state(NULL)` + `pipeline_stopped` continuam no finally do run().
+        self.assertIn("self.pipeline.set_state(Gst.State.NULL)", self.codigo)
+        self.assertIn("log_event(\"pipeline_stopped\", exit_code=self.exit_code",
+                      self.codigo)
+
+    def test_handler_nao_chama_gstreamer(self) -> None:
+        """Só `loop.quit()` no handler; o resto é o `finally` do `run()`."""
+        corpo = self._corpo("_request_shutdown")
+        for proibido in ("set_state", "send_event", "Gst."):
+            self.assertNotIn(proibido, corpo,
+                             f"`_request_shutdown` chama {proibido}")
+
+    def test_sinal_nao_sobrescreve_codigo_de_erro(self) -> None:
+        corpo = self._corpo("_request_shutdown")
+        self.assertNotIn("self.exit_code =", corpo,
+                         "o sinal não pode transformar erro em exit 0")
+
+    def _corpo(self, nome: str) -> str:
+        """Código do método, **sem** docstring (o texto dela não é o handler)."""
+        arvore = ast.parse(self.codigo)
+        for no in ast.walk(arvore):
+            if isinstance(no, ast.FunctionDef) and no.name == nome:
+                corpo = no.body
+                if (corpo and isinstance(corpo[0], ast.Expr)
+                        and isinstance(corpo[0].value, ast.Constant)
+                        and isinstance(corpo[0].value.value, str)):
+                    corpo = corpo[1:]
+                return "\n".join(
+                    ast.get_source_segment(self.codigo, stmt) or ""
+                    for stmt in corpo)
+        raise AssertionError(f"método {nome} não encontrado em pipeline_real.py")
 
 
 if __name__ == "__main__":

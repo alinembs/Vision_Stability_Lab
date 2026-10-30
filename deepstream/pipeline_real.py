@@ -20,7 +20,11 @@ religá-lo com backoff; a análise segue. A classificação dessa decisão está
 em `bus_classifier.py` (puro, testável sem DeepStream).
 EOS do `rtspsrc` também não encerra o processo: reconecta a fonte.
 Códigos de saída (`main`): 0 = encerramento limpo, 1 = erro de pipeline,
-2 = fonte perdida após esgotar as tentativas de reconexão.
+2 = fonte perdida após esgotar as tentativas de reconexão. "Encerramento
+limpo" inclui `SIGTERM`/`SIGINT` (`docker stop`, Ctrl+C): o sinal entra pelo
+loop GLib (`graceful_shutdown.py`), a telemetria recebe `shutdown_requested` e
+`pipeline_stopped exit_code=0` e o processo sai antes da carência do Docker —
+sem isso o `docker stop` sempre terminava em `SIGKILL` (exit 143, sem evento).
 Métricas: FPS de entrada/processado/preview, contagem de objetos,
 estado da área (EMPTY/OCCUPIED) e RSS do processo, em logs JSON.
 """
@@ -44,6 +48,7 @@ from area_monitor import AreaMonitor  # noqa: E402
 from bus_classifier import (  # noqa: E402
     ACTION_DROP_PREVIEW, ACTION_QUIT, ACTION_RECONNECT, MSG_ERROR, MSG_EOS,
     classify_bus_message)
+from graceful_shutdown import GracefulShutdown, signal_name  # noqa: E402
 from health_metrics import HealthMetricsCollector  # noqa: E402
 from source_budget import SourceReconnectBudget  # noqa: E402
 from sources import (  # noqa: E402  (puro: sem gi/pyds)
@@ -206,6 +211,9 @@ class VisionPipeline:
         # Código de saída do processo (0 só para encerramento limpo).
         self.exit_code = EXIT_OK
         self.loop = None
+        # `SIGTERM`/`SIGINT` -> parada limpa (F3 do E2-T3). Instalado em
+        # `run()`, antes de `loop.run()`, porque é o loop que entrega o sinal.
+        self.shutdown = None
 
         self.pipeline = Gst.Pipeline.new("vision-phase1")
 
@@ -406,6 +414,23 @@ class VisionPipeline:
     def _quit_loop(self):
         if self.loop is not None:
             self.loop.quit()
+
+    def _request_shutdown(self, signum=None):
+        """Parada limpa pedida por `SIGTERM`/`SIGINT` (roda no thread do loop).
+
+        Roda no thread do `GLib.MainLoop` (a callback do sinal é uma fonte do
+        loop), então `loop.quit()` é seguro; o `set_state(NULL)` e a linha
+        `pipeline_stopped` ficam no `finally` de `run()` — nada de GStreamer
+        dentro do handler de sinal.
+
+        `exit_code` não é sobrescrito: se o pipeline já falhou (`_fail`), o
+        processo continua saindo != 0 mesmo que o sinal chegasse depois.
+        """
+        log_event("shutdown_requested",
+                  signal=signal_name(signum),
+                  exit_code=self.exit_code,
+                  source_id=self.source.id)
+        self._quit_loop()
 
     def _fail(self, reason, exit_code, **fields):
         """Encerra o processo por erro real, com código de saída != 0."""
@@ -807,6 +832,12 @@ class VisionPipeline:
         """Roda o pipeline até o fim. Retorna o código de saída do processo."""
         self.loop = GLib.MainLoop()
 
+        # `docker stop` (SIGTERM) e Ctrl+C (SIGINT): registrados como fonte do
+        # loop GLib, antes de `loop.run()`, para a parada acontecer no thread
+        # certo (~1 s em vez da carência de 10 s do Docker e do SIGKILL).
+        self.shutdown = GracefulShutdown(GLib, self._request_shutdown)
+        self.shutdown.install()
+
         # Evento de startup da fonte (E2-T2): identifica a fonte e o caminho de
         # mídia escolhido sem expor credencial — `mask_uri` troca o userinfo da
         # câmera por `***` e mantém host/porta/path para diagnóstico (DIV-001).
@@ -850,7 +881,9 @@ class VisionPipeline:
                 logger.exception("metrics de shutdown falharam")
             finally:
                 self.pipeline.set_state(Gst.State.NULL)
-                log_event("pipeline_stopped", exit_code=self.exit_code)
+                log_event("pipeline_stopped", exit_code=self.exit_code,
+                          signal=(self.shutdown.received_signal
+                                  if self.shutdown is not None else None))
         return self.exit_code
 
     def _stop(self):
