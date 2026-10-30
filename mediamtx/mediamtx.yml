@@ -16,3 +16,5 @@ api: no
 
 paths:
   live:
+  # HEIMDALL (teste de preview Fase B) — aceita qualquer outro path
+  all_others:
