@@ -31,14 +31,20 @@ while [[ $# -gt 0 ]]; do
 done
 
 _amostra() {
-    local rss_mb="null" oom="null" exit_code="null"
+    local rss_mb="null" oom="null" exit_code="null" restarts="null" started_at="null"
     if docker inspect "$APP_CONTAINER" >/dev/null 2>&1; then
         oom=$(docker inspect --format '{{.State.OOMKilled}}' "$APP_CONTAINER" 2>/dev/null || echo null)
         exit_code=$(docker inspect --format '{{.State.ExitCode}}' "$APP_CONTAINER" 2>/dev/null || echo null)
+        restarts=$(docker inspect --format '{{.RestartCount}}' "$APP_CONTAINER" 2>/dev/null || echo null)
+        started_at=$(docker inspect --format '{{.State.StartedAt}}' "$APP_CONTAINER" 2>/dev/null || echo null)
         if [[ "$(docker inspect --format '{{.State.Running}}' "$APP_CONTAINER" 2>/dev/null)" == "true" ]]; then
-            # VmRSS do PID 1 do container, em MB
+            # VmRSS do PID 1 do container, em MB. Valor abaixo de 100 MB indica
+            # leitura durante reinício do processo (PID 1 recém-criado): reporta null
+            # em vez de envenenar a série — o campo `restarts` denuncia o ciclo.
             rss_mb=$(docker exec "$APP_CONTAINER" awk '/^VmRSS:/{printf "%.0f", $2/1024}' /proc/1/status 2>/dev/null || echo null)
-            [[ -z "$rss_mb" ]] && rss_mb="null"
+            if [[ -z "$rss_mb" ]] || ! [[ "$rss_mb" =~ ^[0-9]+$ ]] || (( rss_mb < 100 )); then
+                rss_mb="null"
+            fi
         fi
     fi
 
@@ -64,13 +70,15 @@ _amostra() {
     local ds_containers
     ds_containers=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -ciE 'deepstream|vision-stability-app' || true)
 
-    printf '{"ts":"%s","app":"%s","running":%s,"rss_mb":%s,"ram_used_mb":%s,"ram_total_mb":%s,"ram_used_pct":%s,"lfb_total_mb":%s,"oom_killed":%s,"exit_code":%s,"ds_containers":%s,"metrics_log_age_s":%s}\n' \
+    printf '{"ts":"%s","app":"%s","running":%s,"rss_mb":%s,"ram_used_mb":%s,"ram_total_mb":%s,"ram_used_pct":%s,"lfb_total_mb":%s,"oom_killed":%s,"exit_code":%s,"restarts":%s,"started_at":"%s","ds_containers":%s,"metrics_log_age_s":%s}\n' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         "$APP_CONTAINER" \
         "$([[ "$rss_mb" != "null" ]] && echo true || echo false)" \
         "$rss_mb" "$ram_used" "$ram_total" "$pct" "$lfb_mb" \
         "$([[ "$oom" == "null" ]] && echo null || echo "$oom")" \
         "$([[ "$exit_code" == "null" ]] && echo null || echo "$exit_code")" \
+        "$([[ "$restarts" == "null" ]] && echo null || echo "$restarts")" \
+        "$([[ "$started_at" == "null" ]] && echo "" || echo "$started_at")" \
         "$ds_containers" \
         "$([[ -f "$NOFRAME_LOG" ]] && echo $(( $(date +%s) - $(stat -c %Y "$NOFRAME_LOG") )) || echo null)"
 }
