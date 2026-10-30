@@ -1,0 +1,10 @@
+# Material de TLS gerado localmente por `generate-certs.sh` (E0-T4).
+#
+# Ignora TUDO nesta pasta — chaves privadas, certificados, o `ca.srl` do
+# openssl — e libera apenas o que é código e regra, para que o material de
+# chave nunca apareça em `git status`. Chave privada de CA no Git é o
+# incidente, não o risco:
+#   `deploy/certs/*.key` e `deploy/certs/*.crt` NÃO podem ser versionados.
+*
+!.gitignore
+!generate-certs.sh
