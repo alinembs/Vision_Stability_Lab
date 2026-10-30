@@ -1,12 +1,17 @@
 """Vision Stability Lab — Fases 2 e 3.
 
-Pipeline: RTSP (H.265) -> decode HW (nvv4l2decoder) -> nvstreammux ->
-nvinfer (YOLO11 person) -> nvtracker (IOU) -> probe de metadados pyds
--> nvdsosd -> tee:
+Pipeline: RTSP (fonte ativa, H.265 ou H.264) -> decode HW (nvv4l2decoder) ->
+nvstreammux -> nvinfer (YOLO11 person) -> nvtracker (IOU) -> probe de metadados
+pyds -> nvdsosd -> tee:
   ramo análise:  queue -> fakesink (probes de métricas)
   ramo preview:  queue leaky(downstream, max-size-buffers=1)
                  -> nvvideoconvert -> NV12(NVMM) -> nvv4l2h264enc
                  -> h264parse -> rtph264pay -> udpsink
+
+A fonte (câmera fixa, drone ou celular — uma por vez, D1/ADR-0006) e o codec
+vêm de `sources.yaml` + `data/config/active_source`, resolvidos por
+`sources.py` no boot (`source_active` na telemetria). Trocar de fonte reinicia
+o processo (D4); `batch_size=1` e o ramo único de análise continuam valendo.
 
 O ramo de preview é descartável: o vídeo anotado nunca bloqueia a
 inferência (queue leaky com 1 buffer de folga). Falha nele — erro de bus ou
@@ -40,11 +45,19 @@ from bus_classifier import (  # noqa: E402
     ACTION_DROP_PREVIEW, ACTION_QUIT, ACTION_RECONNECT, MSG_ERROR, MSG_EOS,
     classify_bus_message)
 from health_metrics import HealthMetricsCollector  # noqa: E402
-from rtsp_env import require_rtsp_uri  # noqa: E402
 from source_budget import SourceReconnectBudget  # noqa: E402
+from sources import (  # noqa: E402  (puro: sem gi/pyds)
+    depay_factory, endpoint_parts, load_sources, mask_uri,
+    resolve_active_source)
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("VisionPipelineReal")
+
+# Identificador desta execução (E2-T2; E3-T1 troca por `SessionState`). É o
+# relógio de início do processo: único por execução, comparável com
+# `docker inspect .State.StartedAt` e suficiente para separar sessões de
+# fontes diferentes no JSONL append-only.
+SESSION_EPOCH = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 PERSON_CLASS_ID = 0
 METRICS_INTERVAL_SECONDS = int(os.environ.get("METRICS_INTERVAL_S", "30"))
@@ -142,9 +155,19 @@ class FpsCounter:
 
 class VisionPipeline:
     def __init__(self):
-        # Credencial nunca embutida no código (DIV-001).
-        self.rtsp_uri = require_rtsp_uri()
-        self.codec = os.environ.get("RTSP_CODEC", "h265").lower()  # câmera confirmada H.265
+        # Fonte ativa por configuração (E2-T1/T2): `ACTIVE_SOURCE` (env) >
+        # `data/config/active_source` > `default_source` do sources.yaml > 1ª
+        # habilitada. Credencial nunca embutida no código (DIV-001): a URI da
+        # câmera vem de `RTSP_URI` via `uri_env` no YAML, ou do fallback legado
+        # de `sources.py` quando não há YAML (`VSL_SOURCE_SELECTION=off`).
+        # Trocar de fonte reinicia o processo (D4): nada de reconfiguração em
+        # runtime, nenhum estado atravessa fontes.
+        self.source = resolve_active_source(load_sources())
+        self.rtsp_uri = self.source.uri
+        # Codec é da fonte, não do container (D5): câmera H.265, drone/celular
+        # H.264. `RTSP_CODEC` continua existindo só no fallback legado.
+        self.codec = self.source.codec
+        self.depay_factory, self.parser_factory = depay_factory(self.codec)
         self.monitor = AreaMonitor(ttl_seconds=TRACK_TTL_SECONDS,
                                    max_events=MAX_EVENTS_BUFFERED)
         self.entries_interval = 0
@@ -181,10 +204,14 @@ class VisionPipeline:
 
         self.pipeline = Gst.Pipeline.new("vision-phase1")
 
-        self.rtspsrc = self._make("rtspsrc", location=self.rtsp_uri, latency=200,
-                                  drop_on_latency=True, protocols=4)  # 4 = TCP
-        self.depay = self._make("rtph265depay" if self.codec == "h265" else "rtph264depay")
-        self.parser = self._make("h265parse" if self.codec == "h265" else "h264parse")
+        # `location`/`latency`/`protocols` vêm da fonte ativa: a câmera usa
+        # 200 ms e TCP (4), como antes; o valor fica no YAML por fonte.
+        self.rtspsrc = self._make("rtspsrc", location=self.rtsp_uri,
+                                  latency=self.source.latency_ms,
+                                  drop_on_latency=True,
+                                  protocols=self.source.protocols)
+        self.depay = self._make(self.depay_factory)
+        self.parser = self._make(self.parser_factory)
         self.decoder = self._make("nvv4l2decoder")
 
         self.mux = self._make("nvstreammux", batch_size=1, width=1280, height=720,
@@ -734,6 +761,14 @@ class VisionPipeline:
 
         log_event("interval_metrics",
                   interval_s=METRICS_INTERVAL_SECONDS,
+                  # Namespace da sessão (E2-T2; E3-T1 evolui para estado por
+                  # sessão): qual fonte produziu esta amostra e desde quando.
+                  source_id=self.source.id,
+                  source_name=self.source.name,
+                  source_target_fps=self.source.target_fps,
+                  session_epoch=SESSION_EPOCH,
+                  last_frame_age_s=round(
+                      time.monotonic() - self._last_input_frame_at, 2),
                   fps_in=fps_in,
                   fps_processed=fps_proc,
                   fps_preview=fps_preview,
@@ -767,17 +802,37 @@ class VisionPipeline:
         """Roda o pipeline até o fim. Retorna o código de saída do processo."""
         self.loop = GLib.MainLoop()
 
+        # Evento de startup da fonte (E2-T2): identifica a fonte e o caminho de
+        # mídia escolhido sem expor credencial — `mask_uri` troca o userinfo da
+        # câmera por `***` e mantém host/porta/path para diagnóstico (DIV-001).
+        endpoint = endpoint_parts(self.rtsp_uri)
+        log_event("source_active",
+                  source_id=self.source.id,
+                  source_name=self.source.name,
+                  codec=self.codec,
+                  depay=self.depay_factory,
+                  parser=self.parser_factory,
+                  transport=self.source.transport,
+                  target_fps=self.source.target_fps,
+                  session_epoch=SESSION_EPOCH,
+                  uri=mask_uri(self.rtsp_uri),
+                  host=endpoint["host"],
+                  port=endpoint["port"],
+                  path=endpoint["path"])
+
         if TEST_DURATION_SECONDS > 0:
             GLib.timeout_add_seconds(TEST_DURATION_SECONDS, self._stop)
-            log_event("test_started", duration_s=TEST_DURATION_SECONDS, codec=self.codec,
-                      uri=self.rtsp_uri.split("@")[-1])
+            log_event("test_started", duration_s=TEST_DURATION_SECONDS,
+                      codec=self.codec, source_id=self.source.id,
+                      uri=mask_uri(self.rtsp_uri))
         GLib.timeout_add_seconds(METRICS_INTERVAL_SECONDS, self.periodic_metrics)
         GLib.timeout_add_seconds(5, self._check_rtsp_alive)
         if PREVIEW_ENABLED:
             GLib.timeout_add_seconds(5, self._check_preview_alive)
 
         self.pipeline.set_state(Gst.State.PLAYING)
-        log_event("pipeline_playing", codec=self.codec)
+        log_event("pipeline_playing", codec=self.codec,
+                  source_id=self.source.id)
 
         try:
             self.loop.run()
@@ -808,6 +863,10 @@ def main():
     try:
         app = VisionPipeline()
     except Exception as exc:  # noqa: BLE001
+        # Erro de configuração de fonte (id inexistente em `ACTIVE_SOURCE`,
+        # `uri_env` ausente, codec inválido) precisa ser legível no
+        # `docker logs`: uma linha "ERRO: ...", nunca um traceback cru.
+        logger.error("ERRO: %s", exc)
         log_event("startup_failed", error=str(exc))
         return EXIT_PIPELINE_ERROR
     exit_code = app.run()

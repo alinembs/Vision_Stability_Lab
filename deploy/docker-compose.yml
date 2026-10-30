@@ -72,6 +72,20 @@ services:
       # Codec da fonte (h264/h265): escolhe rtph265depay/h265parse vs H.264 em
       # pipeline_real.py. Modelo em deploy/.env.example.
       - RTSP_CODEC=${RTSP_CODEC:-h265}
+      # Fonte ativa por configuração (E2-T1/T2). Vazio = usa
+      # `data/config/active_source` e, na ausência dele, `default_source` do
+      # `deepstream/config/sources.yaml` — o compose sobe sem `.env` e sem
+      # `ACTIVE_SOURCE` (nada quebra por variável ausente).
+      - ACTIVE_SOURCE=${ACTIVE_SOURCE:-}
+      # Caminho alternativo do YAML de fontes (vazio = o versionado).
+      - SOURCES_CONFIG=${SOURCES_CONFIG:-}
+      # Rollback nível 1 (seção 9 do plano): `VSL_SOURCE_SELECTION=off` volta ao
+      # comportamento de antes do E2 (RTSP_URI + RTSP_CODEC). Precisa chegar ao
+      # container, senão a flag não faz nada.
+      - VSL_SOURCE_SELECTION=${VSL_SOURCE_SELECTION:-}
+      # Host do MediaMTX nas URIs de drone/celular; vazio = `mediamtx`, o DNS
+      # do serviço dentro da rede do compose.
+      - MTX_HOST=${MTX_HOST:-}
       - LOG_LEVEL=INFO
       - PREVIEW_ENABLED=${PREVIEW_ENABLED:-1}
       - PREVIEW_TRANSPORT=${PREVIEW_TRANSPORT:-rtsp}
