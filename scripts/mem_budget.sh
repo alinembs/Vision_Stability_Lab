@@ -38,10 +38,15 @@ _amostra() {
         restarts=$(docker inspect --format '{{.RestartCount}}' "$APP_CONTAINER" 2>/dev/null || echo null)
         started_at=$(docker inspect --format '{{.State.StartedAt}}' "$APP_CONTAINER" 2>/dev/null || echo null)
         if [[ "$(docker inspect --format '{{.State.Running}}' "$APP_CONTAINER" 2>/dev/null)" == "true" ]]; then
-            # VmRSS do PID 1 do container, em MB. Valor abaixo de 100 MB indica
-            # leitura durante reinício do processo (PID 1 recém-criado): reporta null
-            # em vez de envenenar a série — o campo `restarts` denuncia o ciclo.
-            rss_mb=$(docker exec "$APP_CONTAINER" awk '/^VmRSS:/{printf "%.0f", $2/1024}' /proc/1/status 2>/dev/null || echo null)
+            # VmRSS do processo do pipeline, em MB. Não é `/proc/1`: com
+            # `init: true` no compose o PID 1 é o `docker-init` (tini), e ler o
+            # init daria ~1 MB — sempre abaixo do piso abaixo, RSS sempre null.
+            # Valor abaixo de 100 MB indica leitura durante reinício do processo
+            # (pipeline recém-criado): reporta null em vez de envenenar a série
+            # — o campo `restarts` denuncia o ciclo.
+            local pip_pid
+            pip_pid=$(docker exec "$APP_CONTAINER" pgrep -f "^python3 .*pipeline_real" 2>/dev/null | head -1)
+            rss_mb=$(docker exec "$APP_CONTAINER" awk '/^VmRSS:/{printf "%.0f", $2/1024}' "/proc/${pip_pid:-1}/status" 2>/dev/null || echo null)
             if [[ -z "$rss_mb" ]] || ! [[ "$rss_mb" =~ ^[0-9]+$ ]] || (( rss_mb < 100 )); then
                 rss_mb="null"
             fi

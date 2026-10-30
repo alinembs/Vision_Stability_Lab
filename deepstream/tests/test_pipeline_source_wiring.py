@@ -20,6 +20,8 @@ from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[2]
 PIPELINE = RAIZ / "deepstream" / "pipeline_real.py"
+COMPOSE = RAIZ / "deploy" / "docker-compose.yml"
+MEM_BUDGET = RAIZ / "scripts" / "mem_budget.sh"
 
 
 class PipelineConsomeFonteAtivaTest(unittest.TestCase):
@@ -263,6 +265,36 @@ class EncerramentoLimpoTest(unittest.TestCase):
                         self.codigo.index("self.loop.run()"),
                         "sinal instalado depois de loop.run() nunca é entregue")
 
+    def test_instala_antes_de_construir_o_pipeline(self) -> None:
+        """PID 1 ignora `SIGTERM` de ação default: instalar depois é tarde.
+
+        O kernel não entrega sinais de ação default ao processo init do
+        container. Com o `install()` só no `run()` (depois do carregamento do
+        engine TensorRT, que leva segundos), um `SIGTERM` que chega durante o
+        boot não derruba nem é atendido: o Docker espera a carência e mata com
+        `SIGKILL` (exit 137, observado em 2026-10-30 num restart do watchdog
+        durante o boot).
+        """
+        self.assertLess(
+            self.codigo.index("self.shutdown.install()"),
+            self.codigo.index("Gst.Pipeline.new"),
+            "handler de sinal instalado depois de construir o pipeline")
+
+    def test_sigterm_durante_o_boot_tem_handler(self) -> None:
+        """Antes de `gi`/`pyds` (a parte lenta do boot) já existe handler."""
+        self.assertLess(
+            self.codigo.index("signal.signal(signal.SIGTERM, _boot_stop)"),
+            self.codigo.index("import gi"),
+            "handler de boot instalado depois dos imports pesados")
+        corpo = self._corpo("_boot_stop")
+        self.assertIn("os._exit(0)", corpo)
+        self.assertIn("shutdown_before_startup", corpo)
+
+    def test_sinal_antes_do_loop_nao_roda_para_sempre(self) -> None:
+        """`loop.quit()` sem loop não faz nada: `run()` precisa da bandeira."""
+        self.assertIn("self._shutdown_pending = True", self._corpo("_quit_loop"))
+        self.assertIn("_shutdown_pending", self._corpo("run"))
+
     def test_parada_limpa_sai_com_zero_e_registra_pipeline_stopped(self) -> None:
         self.assertIn("self._quit_loop()", self._corpo("_request_shutdown"))
         self.assertIn('log_event("shutdown_requested"',
@@ -298,6 +330,36 @@ class EncerramentoLimpoTest(unittest.TestCase):
                     ast.get_source_segment(self.codigo, stmt) or ""
                     for stmt in corpo)
         raise AssertionError(f"método {nome} não encontrado em pipeline_real.py")
+
+
+class InitDoContainerTest(unittest.TestCase):
+    """`init: true` no compose: sem ele o `SIGTERM` de boot é ignorado.
+
+    O kernel ignora sinais de ação default no PID 1. Com o pipeline como PID 1,
+    um `SIGTERM` durante o boot (entrypoint da NVIDIA + imports, ~3 s medidos)
+    não é atendido: o Docker espera a carência e mata com `SIGKILL` — exit 137,
+    observado em 2026-10-30 (INC-006). Com o `docker-init` como PID 1 o sinal
+    derruba o processo na hora (exit 143, sem 137 e sem espera).
+    """
+
+    def setUp(self) -> None:
+        import yaml  # dependência de teste: pyyaml
+
+        with open(COMPOSE, encoding="utf-8") as fh:
+            self.compose = yaml.safe_load(fh)
+
+    def test_vision_app_usa_init(self) -> None:
+        servico = self.compose["services"]["vision-app"]
+        self.assertIs(servico.get("init"), True,
+                      "`init: true` removido: SIGTERM no boot volta a virar "
+                      "SIGKILL (exit 137)")
+
+    def test_mem_budget_nao_le_mais_o_pid_1(self) -> None:
+        """Com `init`, o PID 1 é o tini (~1 MB): RSS sempre null."""
+        script = MEM_BUDGET.read_text(encoding="utf-8")
+        self.assertNotIn("/proc/1/status", script,
+                         "mem_budget.sh voltou a ler o PID 1 (init do container)")
+        self.assertIn("pipeline_real", script)
 
 
 if __name__ == "__main__":

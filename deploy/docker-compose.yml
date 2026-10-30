@@ -63,6 +63,12 @@ services:
       dockerfile: deploy/Dockerfile
     container_name: vision-stability-app
     restart: unless-stopped
+    # `docker-init` (tini) como PID 1. Sem ele o processo do pipeline **é** o
+    # PID 1 e o kernel ignora sinais de ação default no init: um `SIGTERM` que
+    # chega no boot (entrypoint da NVIDIA + imports, ~3 s medidos) não é
+    # atendido, o Docker espera a carência e mata com `SIGKILL` (exit 137 —
+    # INC-006). Com o init, o sinal derruba o processo na hora.
+    init: true
     privileged: true
     runtime: nvidia
     environment:

@@ -38,10 +38,40 @@ estado da área (EMPTY/OCCUPIED) e RSS do processo, em logs JSON.
 import json
 import logging
 import os
+import signal
 import sys
 import threading
 import time
 from datetime import datetime, timezone
+
+
+def _boot_stop(signum, _frame):
+    """`SIGTERM` durante o boot: sai limpo em vez de ser `SIGKILL`ado.
+
+    O processo é PID 1 no container e **o kernel ignora sinais de ação default
+    no init**. Com o handler só no `GracefulShutdown` (que precisa do loop
+    GLib), um `SIGTERM` que chega enquanto o TensorRT carrega o engine não
+    derruba nem é atendido: o Docker espera a carência e mata com `SIGKILL`
+    (exit 137 — medido em 2026-10-30 num restart do watchdog durante o boot).
+    Este handler cobre a janela entre o start do processo e o `install()`:
+    nada do pipeline existe ainda, então não há o que desmontar.
+    """
+    try:
+        line = json.dumps({
+            "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+            "event": "shutdown_before_startup",
+            "signal": signal.Signals(int(signum)).name,
+            "exit_code": 0,
+        })
+        sys.stderr.write(line + "\n")
+    except Exception:  # noqa: BLE001 — sair é o que importa
+        pass
+    os._exit(0)
+
+
+# Instalado **antes** de `gi`/`pyds`/TensorRT por construção (o import deles é
+# a parte lenta do boot); o `GracefulShutdown` troca este handler depois.
+signal.signal(signal.SIGTERM, _boot_stop)
 
 import gi
 
@@ -193,6 +223,21 @@ class FpsCounter:
 
 class VisionPipeline:
     def __init__(self):
+        # Código de saída e loop existem antes de tudo: o handler de sinal é
+        # instalado logo abaixo e pode rodar com o resto do objeto ainda em
+        # construção (não há mais nada de GStreamer criado nesse ponto).
+        self.exit_code = EXIT_OK
+        self.loop = None
+        self._shutdown_pending = False
+        # `SIGTERM`/`SIGINT` o mais cedo possível. O processo é PID 1 no
+        # container e **o kernel ignora sinais de ação default no init**: um
+        # `SIGTERM` que chega antes deste `install()` (carregamento do engine
+        # TensorRT leva segundos) não derruba nem é atendido — o Docker espera
+        # a carência e mata com `SIGKILL` (exit 137). Medido em 2026-10-30 num
+        # restart do watchdog durante o boot do pipeline.
+        self.shutdown = GracefulShutdown(GLib, self._request_shutdown)
+        self.shutdown.install()
+
         # Fonte ativa por configuração (E2-T1/T2): `ACTIVE_SOURCE` (env) >
         # `data/config/active_source` > `default_source` do sources.yaml > 1ª
         # habilitada. Credencial nunca embutida no código (DIV-001): a URI da
@@ -246,13 +291,6 @@ class VisionPipeline:
         self._preview_retry_attempt = 0
         self._preview_retry_at = 0.0
         self._preview_total_at_retry = 0
-
-        # Código de saída do processo (0 só para encerramento limpo).
-        self.exit_code = EXIT_OK
-        self.loop = None
-        # `SIGTERM`/`SIGINT` -> parada limpa (F3 do E2-T3). Instalado em
-        # `run()`, antes de `loop.run()`, porque é o loop que entrega o sinal.
-        self.shutdown = None
 
         self.pipeline = Gst.Pipeline.new("vision-phase1")
 
@@ -483,6 +521,10 @@ class VisionPipeline:
     def _quit_loop(self):
         if self.loop is not None:
             self.loop.quit()
+        else:
+            # Sinal/falha antes de o loop existir: `run()` respeita a bandeira
+            # em vez de rodar para sempre (o `loop.quit()` não teria efeito).
+            self._shutdown_pending = True
 
     def _request_shutdown(self, signum=None):
         """Parada limpa pedida por `SIGTERM`/`SIGINT` (roda no thread do loop).
@@ -975,12 +1017,9 @@ class VisionPipeline:
     def run(self):
         """Roda o pipeline até o fim. Retorna o código de saída do processo."""
         self.loop = GLib.MainLoop()
-
-        # `docker stop` (SIGTERM) e Ctrl+C (SIGINT): registrados como fonte do
-        # loop GLib, antes de `loop.run()`, para a parada acontecer no thread
-        # certo (~1 s em vez da carência de 10 s do Docker e do SIGKILL).
-        self.shutdown = GracefulShutdown(GLib, self._request_shutdown)
-        self.shutdown.install()
+        # O handler de `SIGTERM`/`SIGINT` já foi instalado no `__init__` (antes
+        # de qualquer elemento): aqui só falta o loop existir. A fonte do sinal
+        # é despachada na primeira iteração de `loop.run()`, no thread certo.
 
         # Evento de startup da fonte (E2-T2): identifica a fonte e o caminho de
         # mídia escolhido sem expor credencial — `mask_uri` troca o userinfo da
@@ -1019,7 +1058,12 @@ class VisionPipeline:
                   source_id=self.source.id)
 
         try:
-            self.loop.run()
+            if self._shutdown_pending:
+                # Sinal chegou durante o boot (antes de o loop existir).
+                log_event("shutdown_before_loop",
+                          source_id=self.source.id)
+            else:
+                self.loop.run()
         except KeyboardInterrupt:
             log_event("interrupted_by_user")
         finally:
