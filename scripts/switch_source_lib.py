@@ -13,6 +13,16 @@ contra o YAML, montagem da URI do pré-check (o host `mediamtx` do compose não
 resolve no host), espera da linha `interval_metrics` sobre um JSONL de fixture e
 a decisão de rollback. Nenhum teste chama `docker`.
 
+**Prova de qual processo escreveu a métrica.** `interval_metrics` é
+append-only: numa troca para a **mesma** fonte (câmera -> câmera) a métrica do
+processo anterior tem o `source_id` pedido e aprovaria a troca antes de o
+container novo existir. Por isso a espera exige que a amostra seja do processo
+novo (`process_boundary` + `sample_is_from_process`): `session_epoch` da
+telemetria >= `StartedAt` do container recriado, com tolerância de 2 s. O
+`--timeout` também conta a partir daí, não do início do script — o custo fixo
+(pré-check + parada do container) é justamente o que não diz nada sobre o
+pipeline novo.
+
 Contrato de saída: cada subcomando imprime linhas `chave=valor` em stdout (é o
 que o bash lê) e mensagens legíveis em stderr; o exit code diz o que aconteceu:
 
@@ -28,9 +38,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlsplit, urlunsplit
@@ -46,6 +58,11 @@ DEFAULT_TELEMETRY = REPO_ROOT / "data" / "logs" / "live.jsonl"
 DEFAULT_TIMEOUT_S = 90.0
 DEFAULT_POLL_S = 0.5
 DEFAULT_LAN_IP = "192.168.59.102"
+# Folga entre o `StartedAt` do Docker e o `session_epoch` do pipeline (que é o
+# instante do import do módulo, ~3 s depois do start do container). 2 s cobre
+# jitter de relógio sem deixar passar amostra de um processo encerrado há
+# segundos — os processos do pipeline vivem minutos.
+DEFAULT_SESSION_TOLERANCE_S = 2.0
 
 # Exit codes (documentados no `--help` do switch_source.sh).
 EXIT_OK = 0
@@ -216,6 +233,79 @@ def active_source_conflict(container_value: str,
 # ---------------------------------------------------------------------------
 # Espera da telemetria
 # ---------------------------------------------------------------------------
+# Timestamp ISO-8601 truncado até a fração: o pipeline escreve
+# `2026-10-30T21:07:23.703+00:00` e o Docker devolve
+# `2026-10-30T21:07:20.664208041Z` (nanossegundos, que `strptime` não aceita).
+_ISO_TS_RE = re.compile(r"(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)(?:\.(\d+))?")
+_ISO_OFFSET_RE = re.compile(r"([+-])(\d\d):?(\d\d)(?::?\d\d)?$")
+
+
+def parse_iso_epoch(value: Any) -> Optional[float]:
+    """Epoch (UTC) de um timestamp ISO-8601, ou `None` se não for parseável.
+
+    Cobre os dois formatos que o switch compara: `session_epoch`/`ts` da
+    telemetria (UTC com `+00:00`) e `StartedAt` do Docker (UTC com `Z` e
+    nanossegundos). Offset numérico (`-03:00`) é respeitado; timestamp sem
+    fuso é tratado como UTC, como os dois produtores fazem.
+    """
+    text = str(value or "").strip()
+    match = _ISO_TS_RE.match(text)
+    if not match:
+        return None
+    try:
+        base = datetime(*(int(match.group(index)) for index in range(1, 7)),
+                        tzinfo=timezone.utc)
+        fraction = float("0." + (match.group(7) or "0")[:6])
+    except (ValueError, OverflowError):
+        return None
+    offset_s = 0.0
+    offset = _ISO_OFFSET_RE.search(text[match.end():])
+    if offset is not None:
+        sinal = -1.0 if offset.group(1) == "-" else 1.0
+        offset_s = sinal * (int(offset.group(2)) * 3600 + int(offset.group(3)) * 60)
+    try:
+        return base.timestamp() + fraction - offset_s
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def process_boundary(started_at: Optional[str] = None,
+                     recreated_at: Optional[float] = None) -> Optional[float]:
+    """Instante a partir do qual uma amostra é do processo **novo**.
+
+    Preferência ao `StartedAt` do container recriado: é o dado do Docker, não
+    depende do relógio de quem chamou. `recreated_at` (epoch medido pelo script
+    logo depois do `up -d`) é o fallback quando o `docker inspect` falha.
+
+    `None` significa "não há como provar qual processo escreveu": a espera cai
+    no comportamento antigo (só `offset`), nunca aprova por ausência de prova.
+    """
+    boundary = parse_iso_epoch(started_at)
+    if boundary is not None:
+        return boundary
+    return recreated_at
+
+
+def sample_is_from_process(record: Mapping[str, Any], boundary_epoch: Optional[float],
+                           tolerance_s: float = DEFAULT_SESSION_TOLERANCE_S) -> bool:
+    """True só quando a amostra foi escrita pelo processo que nasceu em `boundary_epoch`.
+
+    O critério é o `session_epoch` (E2-T2: único por processo do pipeline e
+    igual em todas as linhas dele). Sem `session_epoch` — JSONL antigo, ou
+    linha de outra ferramenta — o `ts` da própria amostra serve de prova; sem
+    nenhum dos dois a amostra é recusada, porque aprovar sem prova é
+    exatamente o "PASS na fonte errada" que este módulo existe para impedir.
+    """
+    if boundary_epoch is None:
+        return True
+    for field in ("session_epoch", "ts"):
+        epoch = parse_iso_epoch(record.get(field))
+        if epoch is None:
+            continue
+        return epoch >= boundary_epoch - tolerance_s
+    return False
+
+
 @dataclass(frozen=True)
 class WaitOutcome:
     """Resultado da espera por uma linha `interval_metrics` da fonte pedida."""
@@ -227,6 +317,9 @@ class WaitOutcome:
     fps_in: Optional[float]
     last_error: Optional[str]
     reason: str
+    # `session_epoch` da amostra aceita: é o que prova, na saída do switch,
+    # que a métrica é do processo novo (comparável com o `StartedAt`).
+    session_epoch: Optional[str] = None
 
     def as_lines(self) -> Dict[str, str]:
         return {
@@ -238,6 +331,7 @@ class WaitOutcome:
             "fps_in": "" if self.fps_in is None else f"{self.fps_in:g}",
             "reason": self.reason,
             "last_error": (self.last_error or "").replace("\n", " "),
+            "session_epoch": self.session_epoch or "",
         }
 
 
@@ -294,19 +388,41 @@ def wait_for_source(telemetry_path: os.PathLike | str, source_id: str,
                     timeout_s: float = DEFAULT_TIMEOUT_S, *,
                     offset: int = 0, poll_s: float = DEFAULT_POLL_S,
                     since: Optional[float] = None,
+                    started_at: Optional[str] = None,
+                    recreated_at: Optional[float] = None,
+                    tolerance_s: float = DEFAULT_SESSION_TOLERANCE_S,
                     now=time.time, sleep=time.sleep) -> WaitOutcome:
-    """Espera um `interval_metrics` com `source_id` pedido e `fps_in > 0`.
+    """Espera um `interval_metrics` do processo novo com a fonte pedida e fps > 0.
 
     É o pós-check do D7: só PASS se a fonte **pedida** está entregando frames de
-    verdade. `offset` é o tamanho do JSONL antes da recriação — sem ele o
-    primeiro registro lido seria o da fonte anterior, e a troca que não pegou
-    passaria (o caso que o revisor apontou). `since`/`now` são injetáveis para
-    testar o timeout sem dormir.
+    verdade, **escritos pelo processo que a recriação subiu**. Três guardas, cada
+    uma cobrindo um PASS falso distinto:
+
+    - `offset` (tamanho do JSONL antes da recriação): a linha da fonte anterior
+      não vale, mesmo com `source_id` igual (troca câmera -> câmera);
+    - `started_at`/`recreated_at` (`process_boundary`): a linha tem de ser do
+      processo novo — o `offset` sozinho não basta se o processo antigo ainda
+      escreveu depois dele, durante o `docker stop`;
+    - `fps_in > 0`: `source_id` certo com path mudo não é troca bem-sucedida.
+
+    `since` (epoch do início da contagem) é sobreposto pelo boundary: o
+    orçamento do `--timeout` conta da recriação do container, não do início do
+    script (pré-check + parada não dizem nada sobre o pipeline novo).
+    `now`/`sleep` são injetáveis para testar o timeout sem dormir.
     """
-    started = now() if since is None else since
+    boundary = process_boundary(started_at, recreated_at)
+    if since is None:
+        started = now() if boundary is None else boundary
+    elif boundary is None:
+        started = since
+    else:
+        started = max(since, boundary)
     position = offset
     last_source: Optional[str] = None
     last_error: Optional[str] = None
+    # Amostra da fonte certa recusada por ser do processo anterior: é o
+    # diagnóstico do "PASS na fonte errada" que não aconteceu.
+    stale_epoch: Optional[str] = None
     while True:
         records, position = read_new_records(telemetry_path, position)
         for record in records:
@@ -325,18 +441,25 @@ def wait_for_source(telemetry_path: os.PathLike | str, source_id: str,
                 continue
             if fps_in <= 0:
                 continue
-            elapsed = round(now() - started, 1)
+            if not sample_is_from_process(record, boundary, tolerance_s):
+                stale_epoch = str(record.get("session_epoch")
+                                  or record.get("ts") or "?")
+                continue
+            elapsed = round(max(0.0, now() - started), 1)
             return WaitOutcome(True, elapsed, elapsed, source_id, fps_in,
-                               last_error, "ok")
+                               last_error, "ok",
+                               record.get("session_epoch"))
         elapsed = now() - started
         if elapsed >= timeout_s:
             break
         sleep(poll_s)
-    elapsed = round(now() - started, 1)
+    elapsed = round(max(0.0, now() - started), 1)
     if last_source and last_source != source_id:
         reason = f"source_id_inesperado ({last_source})"
     elif last_error:
         reason = f"startup_sem_metricas ({last_error})"
+    elif stale_epoch is not None:
+        reason = f"sem_amostra_do_processo_novo (session_epoch={stale_epoch})"
     elif last_source == source_id:
         reason = "sem_frames (fps_in = 0)"
     else:
@@ -402,8 +525,6 @@ def switch_record(*, source_id: str, previous: str, result: str, reason: str,
     `failed`. O histórico de trocas é o que permite responder "quando o drone
     entrou e por quê" sem vasculhar `live.jsonl`.
     """
-    from datetime import datetime, timezone
-
     record: Dict[str, Any] = {
         "ts": timestamp or datetime.now(timezone.utc).isoformat(
             timespec="milliseconds"),
@@ -457,6 +578,17 @@ def build_arg_parser(prog: str = "switch_source.sh") -> argparse.ArgumentParser:
             "2 = uso incorreto ou id inválido, "
             "3 = ACTIVE_SOURCE no ambiente vence o arquivo (nada foi escrito), "
             "4 = pré-check reprovado (nada foi escrito, container intacto).\n\n"
+            "Orçamento do --timeout: conta a partir da recriação do container "
+            "(StartedAt do processo novo), não do início do script. Ficam FORA "
+            "da conta o pré-check (~5 s de sonda) e a parada/recriação do "
+            "container (~1 s). O primeiro interval_metrics chega 33-35 s depois "
+            "da recriação (import do DeepStream + METRICS_INTERVAL_S=30 s): "
+            "--timeout 40 cobre o caminho feliz, e abaixo disso a troca falha "
+            "mesmo funcionando.\n\n"
+            "Pós-check: a métrica aprovada tem de vir do processo NOVO "
+            "(session_epoch >= StartedAt do container recriado). Sem isso uma "
+            "troca para a mesma fonte já ativa passaria com a métrica do "
+            "processo anterior.\n\n"
             "Pré-requisito: a fonte precisa estar publicando. Drone/celular usam "
             "'mediamtx' no sources.yaml (DNS do compose); no host o pré-check "
             "troca por MTX_HOST/LAN_IP.\n\n"
@@ -469,7 +601,10 @@ def build_arg_parser(prog: str = "switch_source.sh") -> argparse.ArgumentParser:
     parser.add_argument("--skip-precheck", action="store_true",
                         help="não roda a sonda RTSP antes de trocar (registra precheck_skipped)")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S,
-                        help=f"segundos esperando o pós-check (default: {DEFAULT_TIMEOUT_S:g})")
+                        help="segundos esperando o pós-check, contados a partir "
+                             "da recriação do container — não do início do "
+                             f"script (default: {DEFAULT_TIMEOUT_S:g}; o "
+                             "caminho feliz precisa de ~35 s)")
     parser.add_argument("-h", "--help", action="store_true",
                         help="esta ajuda")
     return parser
@@ -535,6 +670,11 @@ def build_cli_parser() -> argparse.ArgumentParser:
     wait_cmd.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S)
     wait_cmd.add_argument("--offset", type=int, default=0)
     wait_cmd.add_argument("--since", type=float, default=None)
+    wait_cmd.add_argument("--started-at", default=None,
+                          help="StartedAt do container recriado (prova de "
+                               "processo novo e início do orçamento)")
+    wait_cmd.add_argument("--recreated-at", type=float, default=None,
+                          help="epoch do script logo após o up -d (fallback)")
     wait_cmd.add_argument("--telemetry", default=str(DEFAULT_TELEMETRY))
 
     probe_cmd = sub.add_parser("probe-reason",
@@ -606,7 +746,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if namespace.command == "wait":
         outcome = wait_for_source(namespace.telemetry, namespace.source_id,
                                   namespace.timeout, offset=namespace.offset,
-                                  since=namespace.since)
+                                  since=namespace.since,
+                                  started_at=namespace.started_at,
+                                  recreated_at=namespace.recreated_at)
         _emit(outcome.as_lines())
         return EXIT_OK if outcome.ok else EXIT_FAIL
 

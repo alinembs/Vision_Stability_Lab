@@ -25,6 +25,7 @@ Nota: `scripts/tests` não tem `__init__.py` de propósito (ver
 `test_probe_logic.py`); o import abaixo usa o caminho do diretório.
 """
 
+import datetime
 import json
 import sys
 import tempfile
@@ -38,6 +39,12 @@ import switch_source_lib as lib  # noqa: E402
 RAIZ = Path(__file__).resolve().parents[2]
 URI_DRONE_MEDIA = "rtsp://mediamtx:8554/drone"
 URI_DRONE_HOST = "rtsp://192.168.59.102:8554/drone"
+
+
+def _iso(epoch: float) -> str:
+    """Timestamp UTC no formato que `pipeline_real.py` grava na telemetria."""
+    return datetime.datetime.fromtimestamp(
+        epoch, datetime.timezone.utc).isoformat(timespec="milliseconds")
 
 # Credencial de mentira montada em runtime: a guarda da DIV-001
 # (`deepstream/tests/test_no_hardcoded_secrets.py`) varre os arquivos
@@ -365,6 +372,160 @@ class EsperaDaTelemetriaTest(BaseTest):
         self.assertTrue(self.esperar("drone").ok)
 
 
+# ---------------------------------------------------------------------------
+# Prova de qual processo escreveu a métrica (F1)
+# ---------------------------------------------------------------------------
+class ParseIsoEpochTest(unittest.TestCase):
+    def test_formato_da_telemetria(self) -> None:
+        """`ts`/`session_epoch` do pipeline: UTC com `+00:00` e ms."""
+        epoch = lib.parse_iso_epoch("2026-10-30T21:07:23.703+00:00")
+        self.assertAlmostEqual(epoch, 1793394443.703, places=3)
+
+    def test_started_at_do_docker_com_nanossegundos(self) -> None:
+        epoch = lib.parse_iso_epoch("2026-10-30T21:07:20.664208041Z")
+        self.assertAlmostEqual(epoch, 1793394440.664208, places=3)
+
+    def test_offset_numerico_e_respeitado(self) -> None:
+        """Sem tratar o offset, um fuso `-03:00` deslocaria a comparação em 3 h."""
+        self.assertAlmostEqual(
+            lib.parse_iso_epoch("2026-10-30T18:07:23.703-03:00"),
+            lib.parse_iso_epoch("2026-10-30T21:07:23.703+00:00"), places=3)
+
+    def test_lixo_devolve_none(self) -> None:
+        for invalido in (None, "", "nada", "2026-13-45T99:99:99Z", 1234):
+            self.assertIsNone(lib.parse_iso_epoch(invalido))
+
+
+class ProcessoNovoTest(unittest.TestCase):
+    """`session_epoch` >= `StartedAt` é o que prova o processo novo."""
+
+    STARTED_AT = "2026-10-30T20:54:25.890000000Z"
+    EPOCH_ANTIGO = "2026-10-30T20:49:16.000+00:00"   # processo que já morreu
+    EPOCH_NOVO = "2026-10-30T20:54:29.786+00:00"
+
+    def test_boundary_prefere_o_started_at_do_docker(self) -> None:
+        boundary = lib.process_boundary(self.STARTED_AT, 1_700_000_000.0)
+        self.assertAlmostEqual(boundary,
+                               lib.parse_iso_epoch(self.STARTED_AT), places=3)
+
+    def test_sem_started_at_usa_o_epoch_da_recriacao(self) -> None:
+        self.assertEqual(lib.process_boundary("nada", 1_700_000_000.0),
+                         1_700_000_000.0)
+        self.assertIsNone(lib.process_boundary(None, None))
+
+    def test_amostra_do_processo_antigo_e_recusada(self) -> None:
+        """O caso medido: troca câmera -> câmera, `source_id` igual."""
+        boundary = lib.process_boundary(self.STARTED_AT)
+        self.assertFalse(lib.sample_is_from_process(
+            {"source_id": "camera", "session_epoch": self.EPOCH_ANTIGO},
+            boundary))
+
+    def test_amostra_do_processo_novo_e_aceita(self) -> None:
+        boundary = lib.process_boundary(self.STARTED_AT)
+        self.assertTrue(lib.sample_is_from_process(
+            {"session_epoch": self.EPOCH_NOVO}, boundary))
+
+    def test_tolerancia_cobre_o_jitter_entre_docker_e_pipeline(self) -> None:
+        boundary = lib.process_boundary(self.STARTED_AT)
+        # `session_epoch` é o instante do import: sempre DEPOIS do StartedAt.
+        self.assertGreater(lib.parse_iso_epoch(self.EPOCH_NOVO), boundary)
+        # 1 s antes do StartedAt (relógio do Docker x do processo)
+        self.assertTrue(lib.sample_is_from_process(
+            {"session_epoch": _iso(boundary - 1.0)}, boundary))
+        # fora da tolerância: é de outro processo
+        self.assertFalse(lib.sample_is_from_process(
+            {"session_epoch": _iso(boundary - 5.0)}, boundary))
+
+    def test_sem_session_epoch_o_ts_da_amostra_serve(self) -> None:
+        """JSONL antigo, sem `session_epoch`: o `ts` ainda separa os processos."""
+        boundary = lib.process_boundary(self.STARTED_AT)
+        self.assertTrue(lib.sample_is_from_process(
+            {"ts": self.EPOCH_NOVO}, boundary))
+        self.assertFalse(lib.sample_is_from_process(
+            {"ts": self.EPOCH_ANTIGO}, boundary))
+
+    def test_sem_nenhum_timestamp_e_recusada(self) -> None:
+        """Sem prova, não aprova: silêncio aqui é "PASS na fonte errada"."""
+        boundary = lib.process_boundary(self.STARTED_AT)
+        self.assertFalse(lib.sample_is_from_process({"source_id": "camera"},
+                                                   boundary))
+
+    def test_sem_boundary_mantem_o_comportamento_antigo(self) -> None:
+        self.assertTrue(lib.sample_is_from_process(
+            {"session_epoch": self.EPOCH_ANTIGO}, None))
+
+
+class EsperaDoProcessoNovoTest(BaseTest):
+    """A espera do pós-check amarrada ao processo, não só ao `source_id`."""
+
+    def esperar_novo(self, source_id: str, timeout_s: float = 5.0,
+                     started_at: str | None = None, since: float | None = None,
+                     sleep=None) -> lib.WaitOutcome:
+        return lib.wait_for_source(
+            self.jsonl.path, source_id, timeout_s, poll_s=1.0,
+            since=since, started_at=started_at,
+            now=self.clock.now, sleep=sleep or self.clock.sleep)
+
+    def test_troca_para_a_mesma_fonte_nao_passa_com_a_metrica_antiga(self) -> None:
+        """F1 medido em bancada: `camera -> camera` PASSava às 18,6 s.
+
+        A métrica usada era do processo anterior (`session_epoch` 20:49:16,
+        `StartedAt` do container novo 20:54:25). Agora ela é recusada e o
+        motivo aparece na saída.
+        """
+        self.jsonl.metric("camera", 19.9, session_epoch=_iso(
+            self.clock.now() - 120))
+        outcome = self.esperar_novo("camera", timeout_s=3.0,
+                                    started_at=_iso(self.clock.now() - 60))
+        self.assertFalse(outcome.ok)
+        self.assertIn("sem_amostra_do_processo_novo", outcome.reason)
+        self.assertIn(_iso(self.clock.now() - 120), outcome.reason)
+
+    def test_metrica_do_processo_novo_aprova_e_reporta_o_epoch(self) -> None:
+        epoch = _iso(self.clock.now() + 3)
+        self.jsonl.metric("camera", 19.9, session_epoch=epoch)
+        outcome = self.esperar_novo("camera", started_at=_iso(
+            self.clock.now() - 20))
+        self.assertTrue(outcome.ok)
+        self.assertEqual(outcome.session_epoch, epoch)
+        self.assertEqual(outcome.as_lines()["session_epoch"], epoch)
+
+    def test_orcamento_conta_da_recriacao_e_nao_do_inicio_do_script(self) -> None:
+        """F2 medido em bancada: `--timeout 40` reprovava troca que funcionou.
+
+        Custo fixo real: pré-check 5 s + parada/recriação ~10 s + 30 s do
+        `METRICS_INTERVAL_S`. Contando do início do script, os 40 s acabavam
+        antes de existir a primeira métrica do processo novo.
+        """
+        inicio_do_script = self.clock.now()
+        recriacao = inicio_do_script + 60.0     # pré-check + stop/recreate
+
+        # Comportamento antigo (orçamento do início do script): reprova.
+        self.clock.value = recriacao
+        antigo = self.esperar_novo("drone", timeout_s=40.0,
+                                   since=inicio_do_script)
+        self.assertFalse(antigo.ok)
+        self.assertIn("sem_metricas", antigo.reason)
+
+        # Com o boundary da recriação: a métrica chega 20 s depois e passa.
+        escritos = {"feito": False}
+
+        def sleep(seconds: float) -> None:
+            self.clock.sleep(seconds)
+            if not escritos["feito"]:
+                escritos["feito"] = True
+                self.clock.sleep(19.0)
+                self.jsonl.metric("drone", 24.0,
+                                  session_epoch=_iso(recriacao + 3))
+
+        self.clock.value = recriacao
+        novo = self.esperar_novo("drone", timeout_s=40.0,
+                                 started_at=_iso(recriacao),
+                                 since=inicio_do_script, sleep=sleep)
+        self.assertTrue(novo.ok)
+        self.assertAlmostEqual(novo.first_frame_in, 20.0, delta=1.5)
+
+
 class ReadNewRecordsTest(BaseTest):
     def test_offset_maior_que_o_arquivo_recomeca(self) -> None:
         """Log rotacionado entre a medição e a leitura não pode travar a espera."""
@@ -500,6 +661,27 @@ class ContratoDoScriptTest(unittest.TestCase):
         for proibido in ("echo \"$RTSP_URI", 'echo "$SOURCE_URI',
                          "printf '%s' \"$RTSP_URI"):
             self.assertNotIn(proibido, self.codigo)
+
+    # -- F1/F2: prova do processo novo e orçamento --------------------------
+    def test_pos_check_amarra_a_amostra_ao_processo_novo(self) -> None:
+        """F1: sem o boundary da recriação a espera volta a aceitar a métrica velha."""
+        self.assertIn("--started-at \"$STARTED_AT\"", self.codigo)
+        self.assertIn("--recreated-at \"$RECREATED_AT\"", self.codigo)
+        self.assertIn("State.StartedAt", self.codigo)
+        # O boundary é lido DEPOIS da recriação (antes dela não existe).
+        self.assertLess(self.codigo.index("recreate_app\nRECREATED_AT"),
+                        self.codigo.index("--started-at \"$STARTED_AT\""))
+
+    def test_saida_pass_mostra_o_session_epoch_usado(self) -> None:
+        self.assertIn("session_epoch=$session_epoch", self.codigo)
+        self.assertIn("session_epoch=\"$(kv \"$wait_out\" session_epoch)\"",
+                      self.codigo)
+
+    def test_orcamento_do_timeout_nao_conta_o_inicio_do_script(self) -> None:
+        """F2: `--since $SWITCH_START` era o bug — o custo fixo comia o orçamento."""
+        self.assertNotIn("--since \"$SWITCH_START\"", self.codigo)
+        self.assertNotIn("SWITCH_START", self.codigo)
+
 
 
 if __name__ == "__main__":

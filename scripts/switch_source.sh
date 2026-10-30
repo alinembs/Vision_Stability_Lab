@@ -15,11 +15,16 @@
 #      exit 4 (nada é escrito, container intacto);
 #   4. grava `data/config/active_source` de forma atômica (guarda o valor
 #      anterior para rollback) e o marcador `data/config/switch_in_progress`;
-#   5. recria o container do pipeline (`docker compose up -d --no-deps`);
-#   6. espera até `--timeout` (default 90 s) por um `interval_metrics` novo com
-#      `source_id` pedido **e** `fps_in > 0`;
+#   5. recria o container do pipeline (`docker compose up -d --no-deps`) e lê o
+#      `StartedAt` do processo novo;
+#   6. espera até `--timeout` (default 90 s) por um `interval_metrics` **do
+#      processo novo** com `source_id` pedido **e** `fps_in > 0`; o orçamento
+#      conta a partir da recriação, não do início do script (pré-check e parada
+#      não dizem nada sobre o pipeline novo);
 #   7. pós-check: se não confirmou, restaura a fonte anterior, recria de novo e
-#      sai 1 — nunca "PASS na fonte errada".
+#      sai 1 — nunca "PASS na fonte errada". "Do processo novo" é
+#      `session_epoch >= StartedAt` do container: sem isso, uma troca para a
+#      mesma fonte já ativa aprovaria com a métrica do processo anterior.
 #
 # Uso:
 #   ./scripts/switch_source.sh camera
@@ -56,13 +61,16 @@ TELEMETRY_FILE="${TELEMETRY_FILE:-$REPO_ROOT/data/logs/live.jsonl}"
 SWITCH_LOG="${SWITCH_LOG:-$REPO_ROOT/data/logs/switch.jsonl}"
 PRECHECK_SECONDS="${PRECHECK_SECONDS:-5}"
 
-SWITCH_START="$(date +%s)"
 # Estado do arquivo de controle anterior (preenchido em definitivo depois do
 # pré-check; os defaults existem porque `record_switch` é chamado também nos
 # caminhos que abortam antes de ler o controle).
 PREVIOUS_EXISTS=0
 PREVIOUS_VALUE=""
-
+# `StartedAt` do processo novo e epoch local logo depois da recriação: são a
+# prova de qual processo escreveu a métrica do pós-check e o início do
+# orçamento do `--timeout` (F1/F2).
+RECREATED_AT=""
+STARTED_AT=""
 log() { printf '[switch] %s\n' "$*" >&2; }
 
 # Resultado final: stdout é contrato (uma linha PASS/FAIL), o resto é log.
@@ -200,23 +208,32 @@ log "data/config/active_source = $SOURCE_ID"
 
 # --- 5. recriação do container do pipeline --------------------------------
 recreate_app
+RECREATED_AT="$(date +%s.%N)"
+# `StartedAt` do processo novo: é o que prova qual processo escreveu a métrica
+# do pós-check e onde começa o orçamento do `--timeout` (F1/F2). Se o inspect
+# falhar, `--recreated-at` (relógio local) cobre o caso.
+STARTED_AT="$(docker inspect --format '{{.State.StartedAt}}' "$APP_CONTAINER" \
+    2>/dev/null || true)"
+log "container recriado: started_at=${STARTED_AT:-?}"
 
-# --- 6. pós-check: telemetria da fonte pedida, com frames ------------------
-log "aguardando interval_metrics de '$SOURCE_ID' com fps_in > 0 (até ${TIMEOUT_S}s)"
+# --- 6. pós-check: telemetria da fonte pedida, do processo novo, com frames -
+log "aguardando interval_metrics de '$SOURCE_ID' (processo novo) com fps_in > 0 (até ${TIMEOUT_S}s após a recriação)"
 wait_out=$("$PYTHON" "$LIB" wait --source-id "$SOURCE_ID" \
     --timeout "$TIMEOUT_S" --offset "$telemetry_offset" \
-    --since "$SWITCH_START" --telemetry "$TELEMETRY_FILE" 2>/dev/null) || true
+    --started-at "$STARTED_AT" --recreated-at "$RECREATED_AT" \
+    --telemetry "$TELEMETRY_FILE" 2>/dev/null) || true
 wait_ok="$(kv "$wait_out" ok)"
 observed="$(kv "$wait_out" source_id)"
 wait_reason="$(kv "$wait_out" reason)"
 first_frame="$(kv "$wait_out" first_frame_in)"
 fps_in="$(kv "$wait_out" fps_in)"
 last_error="$(kv "$wait_out" last_error)"
+session_epoch="$(kv "$wait_out" session_epoch)"
 
 # --- 7. PASS ou rollback ---------------------------------------------------
 if [[ "$wait_ok" == "1" ]]; then
     record_switch "PASS" "ok"
-    finish "PASS source=$SOURCE_ID first_frame_in=${first_frame}s fps_in=$fps_in codec=$CODEC precheck=$PRECHECK_NOTE"
+    finish "PASS source=$SOURCE_ID first_frame_in=${first_frame}s fps_in=$fps_in codec=$CODEC precheck=$PRECHECK_NOTE session_epoch=$session_epoch"
     exit 0
 fi
 
