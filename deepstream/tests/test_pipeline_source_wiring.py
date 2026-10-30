@@ -41,6 +41,37 @@ class PipelineConsomeFonteAtivaTest(unittest.TestCase):
             re.search(r'"rtph26[45]depay"', self.codigo),
             "factory de depay hardcoded voltou ao pipeline")
 
+    def test_a_cadeia_de_midia_vem_das_fabricas_da_fonte(self) -> None:
+        """I5 (revisão): `self._make(...)` com literal passava no teste antigo.
+
+        As duas linhas são comparadas **literais**: `self.depay = self._make(
+        "rtph264depay")` (ou qualquer fábrica fixa) é mídia quebrada para
+        metade das fontes e o teste anterior ficava verde — a asserção de
+        `depay_factory(self.codec)` só provava que a chamada existia em algum
+        lugar do arquivo.
+        """
+        self.assertIn("self.depay = self._make(self.depay_factory)",
+                      self.codigo,
+                      "depay não é criado a partir da fábrica da fonte")
+        self.assertIn("self.parser = self._make(self.parser_factory)",
+                      self.codigo,
+                      "parser não é criado a partir da fábrica da fonte")
+
+    def test_nenhuma_leitura_de_rtsp_codec_do_ambiente(self) -> None:
+        """D5 (I5): codec é da fonte; o ambiente não pode reintroduzir o global.
+
+        Cobre as três formas de leitura por item/chave — a mutação do revisor
+        (`self.codec = os.environ['RTSP_CODEC']`) passava no teste anterior, que
+        só olhava `environ.get("RTSP_CODEC")`.
+        """
+        leituras = re.findall(
+            r"(?:os\.)?(?:environ(?:\.get)?\s*[\(\[]|getenv\s*\()"
+            r"[^)\]\n]*RTSP_CODEC", self.codigo)
+        self.assertEqual(
+            leituras, [],
+            f"pipeline_real.py voltou a ler RTSP_CODEC do ambiente: {leituras}")
+        self.assertIn("self.codec = self.source.codec", self.codigo)
+
     def test_rtspsrc_usa_uri_e_parametros_da_fonte(self) -> None:
         self.assertTrue("location=self.rtsp_uri" in self.codigo)
         self.assertTrue("latency=self.source.latency_ms" in self.codigo)
@@ -50,6 +81,11 @@ class PipelineConsomeFonteAtivaTest(unittest.TestCase):
         self.assertIsNone(
             re.search(r'environ\.get\(\s*"RTSP_CODEC"', self.codigo),
             "pipeline_real.py voltou a ler RTSP_CODEC: o codec é da fonte (D5)")
+        # Nenhum item access/`getenv` do codec legado (assert acima depende da
+        # forma exata da chamada; aqui a busca é pela leitura em si).
+        self.assertIsNone(
+            re.search(r'RTSP_CODEC["\']\s*\]', self.codigo),
+            "pipeline_real.py lê RTSP_CODEC por item access: codec é da fonte (D5)")
 
     def test_telemetria_identifica_a_fonte_e_a_sessao(self) -> None:
         for campo in ("source_id=", "source_name=", "source_target_fps=",
