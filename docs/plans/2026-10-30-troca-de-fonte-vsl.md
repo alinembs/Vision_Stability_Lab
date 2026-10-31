@@ -505,7 +505,7 @@ troca de fonte").
 
 | Métrica | Câmera (1 fonte) | Drone | Celular | Fonte do número |
 |---|---|---|---|---|
-| RSS do pipeline pós-warm-up | **750–1050 MB** | 750–1050 MB (gate provisório) | 750–1050 MB (gate provisório) | medido: 879–894 MB (`docs/baselines/2026-10-30-e1t2-baseline.md`) e 913–947 MB (`data/logs/live.jsonl`, 2026-10-30) |
+| RSS do pipeline pós-warm-up | **750–1050 MB** | **858–882 MB** (medido no drone real, 2026-10-31) | 750–1050 MB (gate provisório) | medido: 879–894 MB (`docs/baselines/2026-10-30-e1t2-baseline.md`), 913–947 MB (`data/logs/live.jsonl`, 2026-10-30) e 858–882 MB (`docs/baselines/2026-10-31-drone-campo.md`) |
 | Crescimento de RSS pós-warm-up | < 15 % | < 15 % | < 15 % | `scripts/watchdog.py` Regra 3 (`RULE3_RSS_RATIO`) |
 | RAM do sistema | ≤ 70 % (stack arquo parado) | ≤ 70 % | ≤ 70 % | medido 35,6–45,2 % (`docs/baselines/2026-10-30-e1t2-baseline.md`) |
 | `OOMKilled` / exit 137 | `false` / 0 | idem | idem | `scripts/mem_budget.sh` (`oom_killed`, `exit_code`) |
@@ -522,6 +522,12 @@ escritos para não se inventar número depois: quem medir, atualiza esta tabela 
 > na câmera H.265. Não é falha do gate: é o piso provisório se mostrando alto para fonte
 > H.264. Ajustar com a medição do **drone real** (E7-T1), não com o publisher sintético
 > (`docs/baselines/2026-10-31-gate-e2-inc006.md`, divergência 3).
+>
+> **Drone real (2026-10-31, `docs/baselines/2026-10-31-drone-campo.md`):** DJI Mini 3 em
+> 1440x1080/30 fps, 660 s de regime — RSS **858,2–882 MB**, platô de **861,9 MB** na janela,
+> dentro do gate 750–1050. O piso de 750 MB **se confirma** para o drone real; os 721–723 MB
+> do publisher sintético eram artefato do sintético, não da fonte. O celular continua
+> provisório (falta a medição real).
 
 ### 6.2 Gate de `lfb` — substituído (não é valor absoluto)
 

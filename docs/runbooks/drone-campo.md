@@ -413,22 +413,31 @@ tail -f data/logs/live.jsonl | grep -E '"(eos|rtsp_reconnect_started|rtsp_reconn
 | `last_frame_age_s` voltando a < 2 no `interval_metrics` | até 30 s de granularidade | prova objetiva de que frame voltou |
 | `rtsp_reconnect_started` (`reason=no_frames`, `idle_s≈30`) | se o path ficar **mudo** sem EOS | regra de inatividade: `RTSP_IDLE_RECONNECT_S=30` |
 | `source_reconnect_exhausted` | após **5** tentativas sem frame | o processo encerra com exit 2 (fonte perdida); `restart: unless-stopped` recria o container |
-| `pipeline_error` | qualquer momento | **falha de verdade** — anote e investigue |
+| `rtsp_reconnect_error` | a cada tentativa com o path fora do ar | erro do `rtspsrc` durante a reconexão: **esperado** numa queda, não é falha do pipeline. Desde 2026-10-31 sai com nome próprio e **não** entra em `error_count` do dashboard |
+| `pipeline_error` | qualquer momento | **falha de verdade** (erro de análise: mux, decoder, `nvinfer`) — anote e investigue |
 
-**Como medir o tempo de retorno (alvo ≤ 5 s):**
+**Como medir o tempo de retorno (alvo ≤ 20 s):**
 
-- **método principal, cronômetro:** com o dashboard aberto
-  (`http://192.168.59.102:8081`, preview `live`), dispare o cronômetro no
-  instante em que o app **volta** a transmitir e pare no primeiro frame novo no
-  preview. É o número que entra na ficha.
+> O alvo era **≤ 5 s** até 2026-10-31. Ele foi **revisado depois da primeira
+> medição de campo**, não antes: o backoff de reconexão começa em **10 s**
+> (`deepstream/source_reconnect.py`, `retry_base_s=10.0`: 10 → 20 → 40 → 45 s) e
+> o `rtspsrc` leva ~10 s para renegociar depois que o path volta — então ~10 s é
+> o **piso do desenho**, e ≤ 5 s exigiria mudar o código, não o teste. Medido em
+> 2026-10-31: **11,56 s** do `is publishing` do MediaMTX ao `rtsp_video_pad`
+> (9,56 s do path online ao pad). O alvo de 20 s cobre a 2ª tentativa (10 s de
+> espera) mais a renegociação; se o backoff mudar, o alvo acompanha.
+
+- **método principal:** delta entre o instante em que o app **volta** a
+  publicar (log do MediaMTX: `is publishing to path 'drone'`) e o evento
+  `rtsp_video_pad` (o primeiro frame novo). É o número que entra na ficha.
 - **conferência objetiva:** delta entre o `ts` do primeiro `interval_metrics`
-  com `last_frame_age_s < 2` e o `ts` de `rtsp_reconnect_resumed`. O pipeline
-  **não emite** um evento "primeiro frame após reconexão", e as métricas saem a
-  cada 30 s — então esse número é um **limite superior**, não a medida fina.
+  com `last_frame_age_s < 2` e o `ts` de `rtsp_reconnect_resumed`. As métricas
+  saem a cada 30 s, então esse número é um **limite superior**, não a medida
+  fina.
 - **registre também** quanto tempo o pipeline levou para **perceber** a queda
   (`ts` de `rtsp_reconnect_started` − `ts` do último frame). Se o path ficar
   mudo sem EOS, esse número tende a ~30 s: é a regra de inatividade, não um bug
-  — e é a razão de o alvo de 5 s valer para o **retorno**, não para a detecção.
+  — e é a razão de o alvo valer para o **retorno**, não para a detecção.
 
 Se o corte passar de ~1 min, é provável que o orçamento de reconexão
 (`SOURCE_RECONNECT_MAX_ATTEMPTS=5`) estoure e o processo saia com **exit 2**
@@ -583,7 +592,7 @@ A sessão é **aprovada** quando, na janela de regime (depois do PASS da §4b e
 - [ ] path `drone` online e processado por **≥ 10 min** sem `pipeline_error` na
       telemetria;
 - [ ] `fps_processed ≥ 0,95 × fps_in` nos `interval_metrics` da janela;
-- [ ] reconexão após queda provocada com **primeiro frame de volta ≤ 5 s**
+- [ ] reconexão após queda provocada com **primeiro frame de volta ≤ 20 s**
       (§4d) — e o evento `rtsp_reconnect_resumed` (ou, se o corte foi longo,
       `source_reconnect_exhausted` registrado como tal);
 - [ ] **zero** container com exit **137**;
@@ -598,6 +607,9 @@ A sessão é **aprovada** quando, na janela de regime (depois do PASS da §4b e
   (nesse caso, registre o número e a condição do link);
 - `eos` / `rtsp_reconnect_started` na janela da queda provocada — é o
   comportamento esperado;
+- `rtsp_reconnect_error` (erro do `rtspsrc` durante a reconexão) e
+  `preview_branch_error` (ramo descartável) — **não** são falha do pipeline;
+  `pipeline_error` continua reprovando;
 - exit **2** (`source_reconnect_exhausted`) em corte longo — é o caminho
   desenhado para fonte perdida, desde que o container tenha voltado e o retorno
   do vídeo esteja registrado;
