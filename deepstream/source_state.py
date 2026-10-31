@@ -183,3 +183,24 @@ class SessionState:
         objeto inteiro de uma vez, como o futuro `/api/sources` (E4-T1).
         """
         return {**self.namespace(), **self.counters()}
+
+
+def with_namespace(
+    record: Dict[str, Any], state: Optional[SessionState]
+) -> Dict[str, Any]:
+    """Preenche `source_id`/`session_epoch` num registro de telemetria.
+
+    Campo explícito **vence**: quem já declarou `source_id` no registro não é
+    sobrescrito, então a injeção é aditiva e idempotente. Sem sessão (eventos de
+    boot antes de a fonte ser resolvida, como `startup_failed` e
+    `shutdown_before_startup`), o registro volta intacto — não se inventa fonte
+    para um processo que ainda não tem fonte ativa.
+
+    Vive aqui, e não no `pipeline_real.py`, porque o pipeline não pode ser
+    importado em teste (puxa `gi`/`pyds`/TensorRT): a regra fica testável.
+    """
+    if state is None:
+        return record
+    for key, value in state.namespace().items():
+        record.setdefault(key, value)
+    return record

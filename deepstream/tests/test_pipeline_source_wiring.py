@@ -332,6 +332,102 @@ class EncerramentoLimpoTest(unittest.TestCase):
         raise AssertionError(f"método {nome} não encontrado em pipeline_real.py")
 
 
+class NamespaceDaSessaoTest(unittest.TestCase):
+    """E3-T2: todo registro identifica fonte e sessão, `startup` incluso.
+
+    `log_event` é chamado de callbacks de pad probe (thread de streaming) e do
+    loop GLib, por isso a injeção fica no ponto único de emissão. O formato
+    tem de ser **aditivo**: `scripts/watchdog.py` e o dashboard leem os campos
+    antigos e não mudam.
+    """
+
+    def setUp(self) -> None:
+        self.codigo = PIPELINE.read_text(encoding="utf-8")
+
+    def test_log_event_injeta_o_namespace_antes_de_serializar(self) -> None:
+        corpo = self._corpo("log_event")
+        self.assertIn("with_namespace(record, SESSION)", corpo,
+                      "log_event parou de injetar source_id/session_epoch")
+        self.assertLess(
+            corpo.index("with_namespace(record, SESSION)"),
+            corpo.index("json.dumps"),
+            "namespace injetado depois do json.dumps: não sairia no JSONL")
+
+    def test_importa_a_sessao_do_modulo_puro(self) -> None:
+        self.assertIn(
+            "from source_state import SessionState, with_namespace", self.codigo,
+            "pipeline_real.py não usa a sessão de source_state.py (E3-T1)")
+
+    def test_epoch_nao_vem_mais_de_constante_de_import(self) -> None:
+        self.assertNotIn(
+            "SESSION_EPOCH", self.codigo,
+            "voltou a constante de import: o epoch tem de vir da sessão")
+        self.assertIn("STARTED_AT = datetime.now(timezone.utc)", self.codigo)
+
+    def test_sessao_nasce_do_started_at_do_processo(self) -> None:
+        corpo = self._corpo("begin_session")
+        self.assertIn("global SESSION", corpo)
+        self.assertIn(
+            "SessionState.new(source_id, started_at=STARTED_AT)", corpo,
+            "epoch deixou de derivar do STARTED_AT do processo")
+        self.assertIn("self.session = begin_session(self.source.id)",
+                      self.codigo)
+
+    def test_startup_sai_depois_da_sessao_e_antes_dos_outros_eventos(self) -> None:
+        """O dashboard abre a run no `startup`: evento anterior cai na run antiga."""
+        self.assertLess(
+            self.codigo.index("self.session = begin_session(self.source.id)"),
+            self.codigo.index('log_event("startup"'),
+            "startup emitido antes de a sessão existir (sairia sem namespace)")
+        self.assertLess(
+            self.codigo.index('log_event("startup"'),
+            self.codigo.index('log_event("preview_branch_ready"'),
+            "evento antes do startup: o dashboard o atribui à run anterior")
+
+    def test_startup_carrega_fonte_codec_e_alvo(self) -> None:
+        # Recorte no arquivo inteiro: há dois `__init__` (`VisionPipeline` e o
+        # contador de FPS), e `ast.walk` não distingue qual veio primeiro.
+        inicio = self.codigo.index('log_event("startup"')
+        trecho = self.codigo[
+            inicio:self.codigo.index("self.monitor = AreaMonitor", inicio)]
+        for campo in ("source_id=self.source.id", "source_name=self.source.name",
+                      "codec=self.codec", "target_fps=self.source.target_fps"):
+            self.assertIn(campo, trecho, f"startup sem {campo.split('=')[0]}")
+
+    def test_metricas_usam_o_epoch_da_sessao(self) -> None:
+        self.assertIn("session_epoch=self.session.epoch", self.codigo)
+        for campo in ("source_id=self.source.id", "source_name=self.source.name",
+                      "source_target_fps=self.source.target_fps"):
+            self.assertIn(campo, self.codigo)
+
+    def test_shutdown_no_boot_nao_depende_da_fonte_existir(self) -> None:
+        """O handler de sinal roda antes de `self.source` ser atribuído.
+
+        Antes do E3-T2 o evento lia `self.source.id`: `SIGTERM` na janela entre
+        `GracefulShutdown.install()` e a resolução da fonte levantava
+        `AttributeError` **dentro do handler** e a parada limpa se perdia.
+        """
+        corpo = self._corpo("_request_shutdown")
+        self.assertNotIn("self.source", corpo,
+                         "handler de sinal voltou a depender da fonte resolvida")
+        self.assertIn('log_event("shutdown_requested"', corpo)
+
+    def _corpo(self, nome: str) -> str:
+        """Código do método, **sem** docstring (o texto dela não é contrato)."""
+        arvore = ast.parse(self.codigo)
+        for no in ast.walk(arvore):
+            if isinstance(no, ast.FunctionDef) and no.name == nome:
+                corpo = no.body
+                if (corpo and isinstance(corpo[0], ast.Expr)
+                        and isinstance(corpo[0].value, ast.Constant)
+                        and isinstance(corpo[0].value.value, str)):
+                    corpo = corpo[1:]
+                return "\n".join(
+                    ast.get_source_segment(self.codigo, stmt) or ""
+                    for stmt in corpo)
+        raise AssertionError(f"método {nome} não encontrado em pipeline_real.py")
+
+
 class InitDoContainerTest(unittest.TestCase):
     """`init: true` no compose: sem ele o `SIGTERM` de boot é ignorado.
 

@@ -16,6 +16,7 @@ isolamento entre fontes (R5) ou quebram o watchdog:
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import unittest
@@ -182,6 +183,53 @@ class TestContadores(unittest.TestCase):
         zerado = state.reset()
         zerado["total_entries"] = 5
         self.assertEqual(state.counter("total_entries"), 0)
+
+
+class TestWithNamespace(unittest.TestCase):
+    """Injeção do namespace num registro de telemetria (E3-T2).
+
+    É o que `pipeline_real.log_event` usa em todo evento. A regra tem de ser
+    aditiva (não sobrescrever campo explícito) e silenciosa quando ainda não há
+    sessão — `startup_failed` de config inválida sai sem fonte de propósito.
+    """
+
+    def test_injeta_os_dois_campos(self):
+        state = SessionState.new("drone")
+        record = source_state.with_namespace({"event": "startup"}, state)
+        self.assertEqual(record["source_id"], "drone")
+        self.assertEqual(record["session_epoch"], state.epoch)
+        self.assertEqual(record["event"], "startup")
+
+    def test_campo_explicito_vence(self):
+        state = SessionState("drone", "2026-10-31T20:00:00.000+00:00")
+        record = source_state.with_namespace({"source_id": "camera"}, state)
+        self.assertEqual(record["source_id"], "camera")
+        self.assertEqual(
+            record["session_epoch"], "2026-10-31T20:00:00.000+00:00"
+        )
+
+    def test_sem_sessao_registro_volta_intacto(self):
+        original = {"event": "startup_failed", "error": "fonte inválida"}
+        record = source_state.with_namespace(dict(original), None)
+        self.assertEqual(record, original)
+        self.assertNotIn("source_id", record)
+        self.assertNotIn("session_epoch", record)
+
+    def test_e_idempotente(self):
+        state = SessionState.new("phone")
+        uma = source_state.with_namespace({"event": "eos"}, state)
+        duas = source_state.with_namespace(dict(uma), state)
+        self.assertEqual(uma, duas)
+
+    def test_sobrevive_a_serializacao_jsonl(self):
+        """O contrato é a linha JSON que o watchdog e o dashboard leem."""
+        state = SessionState.new("camera")
+        linha = json.dumps(
+            source_state.with_namespace({"event": "interval_metrics"}, state)
+        )
+        lido = json.loads(linha)
+        self.assertEqual(lido["source_id"], state.source_id)
+        self.assertEqual(lido["session_epoch"], state.epoch)
 
 
 class TestModuloPuro(unittest.TestCase):

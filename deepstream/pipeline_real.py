@@ -90,6 +90,7 @@ from source_budget import SourceReconnectBudget  # noqa: E402
 from source_reconnect import (  # noqa: E402  (puro: sem gi/pyds)
     STEP_GIVE_UP, STEP_NONE, STEP_RESUMED, STEP_RETRY, STEP_START, STEP_STOP,
     SourceReconnectMachine)
+from source_state import SessionState, with_namespace  # noqa: E402  (puro)
 from sources import (  # noqa: E402  (puro: sem gi/pyds)
     depay_factory, endpoint_parts, load_sources, mask_uri,
     resolve_active_source)
@@ -97,16 +98,35 @@ from sources import (  # noqa: E402  (puro: sem gi/pyds)
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("VisionPipelineReal")
 
-# Identificador desta execução (E2-T2; E3-T1 troca por `SessionState`). É o
-# relógio de início do **processo**: único por execução, comparável com
-# `docker inspect .State.StartedAt` e suficiente para separar sessões de
-# fontes diferentes no JSONL append-only.
-# Nota (m7 da revisão): o valor é o instante do **import** deste módulo, que no
-# container coincide com o início do processo (`python3 pipeline_real.py` é o
-# entrypoint). Não é um relógio de sessão de fonte nem sobrevive a
-# reimportação em outro processo; o E3-T1 (`SessionState`) passa a usar
-# `STARTED_AT` explícito.
-SESSION_EPOCH = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+# Início do processo (E3-T2). É o relógio da sessão de fonte: no container o
+# import deste módulo coincide com o início do processo (`python3
+# pipeline_real.py` é o entrypoint), e o valor é comparável com
+# `docker inspect .State.StartedAt` — o mesmo campo que `scripts/mem_budget.sh`
+# expõe e que o `switch_source.sh` compara com `session_epoch` para provar que
+# a troca subiu um processo novo.
+STARTED_AT = datetime.now(timezone.utc)
+
+# Sessão ativa do processo (E3-T2). `None` até a fonte ser resolvida: eventos
+# anteriores (`shutdown_before_startup`, `startup_failed` de config inválida)
+# ficam **sem** namespace de propósito — não se inventa fonte para um processo
+# que ainda não tem fonte. Depois de `begin_session()`, todo registro sai com
+# `source_id` e `session_epoch` (ver `log_event`).
+SESSION = None
+
+
+def begin_session(source_id):
+    """Abre a sessão da fonte ativa e a torna o namespace da telemetria.
+
+    O epoch deriva de `STARTED_AT`, não do instante desta chamada: a sessão é a
+    execução inteira do processo, e dois `begin_session` no mesmo processo
+    seriam o mesmo epoch se o relógio fosse o de agora. A unicidade entre
+    processos consecutivos fica com `source_state.next_epoch` (resolução de ms
+    + guarda monotônica).
+    """
+    global SESSION
+    SESSION = SessionState.new(source_id, started_at=STARTED_AT)
+    return SESSION
+
 
 PERSON_CLASS_ID = 0
 METRICS_INTERVAL_SECONDS = int(os.environ.get("METRICS_INTERVAL_S", "30"))
@@ -182,12 +202,22 @@ EXIT_SOURCE_LOST = 2
 
 
 def log_event(event, **fields):
-    """Emite um log estruturado em JSON (uma linha por evento)."""
+    """Emite um log estruturado em JSON (uma linha por evento).
+
+    Todo registro recebe o namespace da sessão (`source_id`,
+    `session_epoch`) enquanto houver fonte resolvida (E3-T2), seja qual for o
+    thread que chamou — inclusive os callbacks de pad probe. Campo explícito
+    vence (`with_namespace` usa `setdefault`), então quem já declarou
+    `source_id` não é sobrescrito. Sem sessão, o registro sai como sempre saiu:
+    o formato é aditivo, e `scripts/watchdog.py` e o dashboard continuam
+    lendo os campos antigos sem mudança.
+    """
     record = {
         "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
         "event": event,
         **fields,
     }
+    record = with_namespace(record, SESSION)
     line = json.dumps(record, ensure_ascii=False)
     logger.info(line)
     try:
@@ -246,11 +276,31 @@ class VisionPipeline:
         # Trocar de fonte reinicia o processo (D4): nada de reconfiguração em
         # runtime, nenhum estado atravessa fontes.
         self.source = resolve_active_source(load_sources())
+        # Sessão da fonte (E3-T2): daqui em diante todo evento de telemetria
+        # carrega `source_id` + `session_epoch` (injetados por `log_event`) e o
+        # `startup` já pode identificar a fonte. A sessão nasce **depois** de
+        # resolver a fonte porque é ela que dá identidade ao namespace.
+        self.session = begin_session(self.source.id)
         self.rtsp_uri = self.source.uri
         # Codec é da fonte, não do container (D5): câmera H.265, drone/celular
         # H.264. `RTSP_CODEC` continua existindo só no fallback legado.
         self.codec = self.source.codec
         self.depay_factory, self.parser_factory = depay_factory(self.codec)
+        # `startup` sai aqui — fonte e codec resolvidos, antes de qualquer outro
+        # evento desta execução (o `preview_branch_ready` é emitido no fim
+        # deste `__init__`). O dashboard abre uma "run" a cada `startup`
+        # (`dashboard/backend/app.py`, `DashboardState.apply`): um evento que
+        # saísse antes cairia na run anterior. O aceite do E3-T2 exige
+        # `source_id`, `codec`, `target_fps` e `session_epoch` no startup, e
+        # esses só existem depois de resolver a fonte.
+        log_event("startup",
+                  gst_version=Gst.version_string(),
+                  pyds_version=getattr(pyds, "__version__", "unknown"),
+                  preview_enabled=PREVIEW_ENABLED,
+                  source_id=self.source.id,
+                  source_name=self.source.name,
+                  codec=self.codec,
+                  target_fps=self.source.target_fps)
         self.monitor = AreaMonitor(ttl_seconds=TRACK_TTL_SECONDS,
                                    max_events=MAX_EVENTS_BUFFERED)
         self.entries_interval = 0
@@ -536,11 +586,15 @@ class VisionPipeline:
 
         `exit_code` não é sobrescrito: se o pipeline já falhou (`_fail`), o
         processo continua saindo != 0 mesmo que o sinal chegasse depois.
+
+        Sem `source_id` explícito de propósito (E3-T2): quem injeta o namespace
+        é `log_event`, e este handler pode rodar **antes** de a fonte ser
+        resolvida (`self.source` ainda não existe → `AttributeError` dentro do
+        handler de sinal). Nesse caso o evento sai sem fonte, que é a verdade.
         """
         log_event("shutdown_requested",
                   signal=signal_name(signum),
-                  exit_code=self.exit_code,
-                  source_id=self.source.id)
+                  exit_code=self.exit_code)
         self._quit_loop()
 
     def _fail(self, reason, exit_code, **fields):
@@ -977,12 +1031,15 @@ class VisionPipeline:
 
         log_event("interval_metrics",
                   interval_s=METRICS_INTERVAL_SECONDS,
-                  # Namespace da sessão (E2-T2; E3-T1 evolui para estado por
-                  # sessão): qual fonte produziu esta amostra e desde quando.
+                  # Namespace da sessão (E3-T2): qual fonte produziu esta
+                  # amostra e desde quando. `log_event` injeta os mesmos dois
+                  # campos em todo registro; aqui eles são explícitos porque
+                  # `interval_metrics` é o insumo do watchdog (E5-T1) e da
+                  # série do dashboard (E4-T1).
                   source_id=self.source.id,
                   source_name=self.source.name,
                   source_target_fps=self.source.target_fps,
-                  session_epoch=SESSION_EPOCH,
+                  session_epoch=self.session.epoch,
                   last_frame_age_s=round(
                       time.monotonic() - self._last_input_frame_at, 2),
                   fps_in=fps_in,
@@ -1033,7 +1090,7 @@ class VisionPipeline:
                   parser=self.parser_factory,
                   transport=self.source.transport,
                   target_fps=self.source.target_fps,
-                  session_epoch=SESSION_EPOCH,
+                  session_epoch=self.session.epoch,
                   uri=mask_uri(self.rtsp_uri),
                   host=endpoint["host"],
                   port=endpoint["port"],
@@ -1115,16 +1172,18 @@ class VisionPipeline:
 
 def main():
     Gst.init(None)
-    log_event("startup",
-              gst_version=Gst.version_string(),
-              pyds_version=getattr(pyds, "__version__", "unknown"),
-              preview_enabled=PREVIEW_ENABLED)
+    # O `startup` é emitido pelo `VisionPipeline.__init__`, logo depois de a
+    # fonte ser resolvida (E3-T2): é a primeira oportunidade de o evento
+    # carregar `source_id`/`session_epoch`/`codec`/`target_fps` e continua
+    # sendo o primeiro evento da execução (o dashboard abre a run nele).
     try:
         app = VisionPipeline()
     except Exception as exc:  # noqa: BLE001
         # Erro de configuração de fonte (id inexistente em `ACTIVE_SOURCE`,
         # `uri_env` ausente, codec inválido) precisa ser legível no
-        # `docker logs`: uma linha "ERRO: ...", nunca um traceback cru.
+        # `docker logs`: uma linha "ERRO: ...", nunca um traceback cru. Se a
+        # falha for antes de a fonte existir, `startup_failed` sai sem
+        # namespace — e essa é a informação correta: não houve sessão.
         logger.error("ERRO: %s", exc)
         log_event("startup_failed", error=str(exc))
         return EXIT_PIPELINE_ERROR
