@@ -397,6 +397,15 @@ troca de fonte").
 > — 30 % de 25 = 7,5, exatamente o valor que o critério (b) descreve. A fonte
 > declara `source_target_fps=20.0` na mesma telemetria, então o alvo já está
 > disponível para ser consumido sem mudança no pipeline (E3-T2 fechado).
+>
+> **Causa da queda (operador, 2026-10-31): ambiente escuro, com a luz sendo
+> ligada/desligada — a própria câmera reduziu o fps.** A queda foi **real**: o
+> watchdog não errou em detectá-la, e o E5-T1 **não** pode passar a mascará-la.
+> O que está calibrado errado é o limiar (7,5 = 30 % de 25 contra alvo 20).
+> Fica registrado também que luminosidade é causa externa legítima de queda de
+> fps que a telemetria do pipeline não distingue de degradação própria — toda
+> comparação de fps (inclusive a da sessão do drone) precisa anotar a condição
+> de luz.
 
 #### E5-T2 — `healthcheck` e heartbeat do próprio watchdog
 

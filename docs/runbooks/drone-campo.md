@@ -514,6 +514,7 @@ esquecido mantém o path ocupado e contamina a próxima sessão (e, por DIV-003,
 | Sonda FAIL `no_video_pad` | só áudio no stream, ou vídeo em codec fora de H.264/H.265 | desligar áudio no app; conferir codec |
 | Pipeline sobe (`source_id=drone`) mas `fps_in = 0`, sem `pipeline_error` | config diz `h264`, stream é HEVC: pads nunca linkam | mesmo caso acima — o sintoma é *silencioso*, por isso a §4a existe |
 | `fps_processed` < 95 % de `fps_in`; `queue_analyze` subindo | bitrate/resolução acima do que o link e a GPU entregam | baixar bitrate/resolução no app; repetir §4a; anotar valores |
+| `fps_in` da **câmera** cai sozinho e volta (15,8 → 6,5 → 12,0) | **baixa luminosidade**: a câmera reduz o fps no escuro (auto-exposição/auto-framerate). Medido em 2026-10-31 com a luz sendo ligada/desligada; com luz estável volta a 20,0 | conferir a luz antes de culpar o pipeline ou o rádio; anotar a condição na ficha (`Distância / condição de luz`) |
 | `last_frame_age_s` > 30 com `rtsp_reconnect_started reason=no_frames` | path mudo (push morreu sem EOS) | religar o push; se repetir, é o link — medir distância |
 | `source_reconnect_exhausted` + container com exit **2** | 5 tentativas sem frame (corte longo) | esperado em corte > ~1 min; confirmar que o container voltou; **não** confundir com crash |
 | `eos` repetidos a cada poucos segundos | push instável (rádio/Wi-Fi do controle) | aproximar o drone/telefone; anotar distância e condição |
