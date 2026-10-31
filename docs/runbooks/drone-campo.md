@@ -187,6 +187,12 @@ falha.
 
 ### 3.2 A pergunta crítica: **o app aceita URL RTMP customizada?**
 
+> **Respondido pelo operador em 2026-10-31: sim, o app aceita URL RTMP
+> customizada.** O roteiro abaixo continua sendo passo de campo (confirmar no
+> aparelho, com a versão do app anotada), mas deixa de ser incógnita: **não há
+> plano B a decidir em voo**. Se o campo desmentir, o plano B abaixo continua
+> valendo.
+
 Antes de decolar, responda com o app na mão:
 
 ```text
@@ -220,10 +226,16 @@ Antes de decolar, responda com o app na mão:
 |---|---|
 | Nome e **versão** do app | tela "sobre"/loja — versão exata, é o que permite repetir |
 | Codec configurado | menu de transmissão (H.264 / H.265 / "auto") |
-| Resolução | 1080p / 720p / 4K |
+| Resolução | 1080p / 720p / 4K — **o app oferece 720p e 1080p; medir as duas** (§4a) |
 | FPS | 30 / 25 / 24 |
 | Bitrate | kbps ou "auto" — se for "auto", registre o valor que o app mostrar em voo |
 | Distância de rádio | "próximo (< 5 m)" / "médio" / "longe" — o link é parte do experimento |
+
+> **A tela do app não é medição.** Codec, resolução, fps e bitrate que valem
+> para a ficha são os que o caminho entrega, medidos com
+> `scripts/probe/ingest_report.py` no §4a. A tela serve de conferência (e é o
+> único lugar onde aparece "auto"); quando divergirem, vale o medido e a
+> divergência vira observação da ficha.
 
 **Regra desta sessão:** o app tem de publicar **H.264**. Se ele só oferecer
 H.265/HEVC, **pare** — o MediaMTX não transcodifica e o pipeline está com
@@ -270,6 +282,49 @@ O que conferir no JSON/linha de resumo:
 | `first_frame_s` | < 1 s com o push já no ar | > 3 s = path recém-criado ou rede |
 | `gaps_over_500ms` / `max_gap_ms` | 0–1 / < 500 ms | rádio instável: anote distância |
 | `reason` | `ok` | `no_video_pad` = só áudio ou HEVC (§5) |
+
+#### 4a.1 Medir codec, resolução, fps e bitrate reais (um comando)
+
+A sonda acima diz **se** chega vídeo; este instrumento diz **o que** chega — é
+ele que preenche as linhas de codec/resolução/fps/bitrate da ficha (§6):
+
+```bash
+python3 scripts/probe/ingest_report.py \
+    --url rtsp://192.168.59.102:8554/drone --seconds 20 --ficha
+```
+
+Saída esperada (resumo em stderr + uma linha JSON em stdout):
+
+```text
+OK ok | rtsp://192.168.59.102:8554/drone
+codec=h264 1920x1080 fps=29.97 bitrate=5980kbps frames=599 janela=20.0s
+first_frame=0.31s gaps>500ms=0 max_gap=34ms audio_tracks=0 dur=20.1s
+| Codec real | H.264 |
+| Resolução do app | 1920x1080 (1080p) |
+| FPS do app | 29.97 (medido) |
+| Bitrate do app | 5980 kbps (medido no RTP) |
+| Áudio junto | 0 faixa(s) |
+```
+
+Sem gate: exit **0 = OK** (chegou vídeo), **1 = FAIL** (motivo no `reason`),
+**2 = uso incorreto**. Ele **não** reprova fonte nem substitui o pré-check do
+`switch_source.sh` (D7).
+
+Regras de leitura:
+
+| O que | Por quê |
+|---|---|
+| `codec` tem de ser `h264` | `h265`/`HEVC` **para a sessão** (§5): `sources.yaml` declara H.264 e não há transcodificação |
+| `resolution_class` | 720p/1080p: é a variável que muda bitrate, fps e latência — número sem ela não é comparável (R10) |
+| `bitrate_kbps` | medido **no fio** (RTP, cabeçalho incluso; medição de bancada: 6.053 kbps para encoder de 6.000 kbps, ~1 % de overhead); compare com o que o app declara |
+| `audio_tracks` | > 0 é aceitável (o pipeline ignora áudio), mas anote: muda o bitrate total |
+| `gaps_over_500ms` | aqui é **observação** do link de rádio; o gate de gap é do `switch_source.sh` |
+
+**Rode duas vezes: uma em 720p e uma em 1080p** (são as opções do app), sempre
+com `--seconds 20`. O par (resolução, bitrate) medido é o que decide qual
+configuração entra na janela de regime do §7 — e o `fps_processed ≥ 95 % de
+fps_in` é o critério que condena a resolução alta (§4c). Registre as duas
+linhas JSON na ficha; não escolha "a melhor" e apague a outra.
 
 ### 4b. Trocar a fonte para o drone
 
@@ -475,7 +530,18 @@ Copie para `docs/baselines/2026-10-31-drone-campo.md` e preencha. Série bruta
 
 ```bash
 bash scripts/mem_budget.sh --loop 60 12 > data/logs/drone-campo-mem.jsonl &
+
+# as duas medições de ingestão (§4a.1), uma por resolução do app
+python3 scripts/probe/ingest_report.py \
+    --url rtsp://192.168.59.102:8554/drone --seconds 20 \
+    >> data/logs/drone-campo-ingest.jsonl          # app em 720p
+python3 scripts/probe/ingest_report.py \
+    --url rtsp://192.168.59.102:8554/drone --seconds 20 \
+    >> data/logs/drone-campo-ingest.jsonl          # app em 1080p
 ```
+
+As linhas `| ... |` da ficha saem prontas com `--ficha` (§4a.1) — cole e
+confira, não redigite de memória.
 
 | Campo | Valor |
 |---|---|
@@ -484,10 +550,11 @@ bash scripts/mem_budget.sh --loop 60 12 > data/logs/drone-campo-mem.jsonl &
 | Modelo do drone | |
 | App + **versão** | |
 | URL de push usada | `rtmp://192.168.59.102:1935/drone` (confirmar o que o app salvou) |
-| Codec real | H.264 / H.265 — **medido** na sonda (`codec=`) |
-| Resolução do app | |
-| FPS do app | |
-| Bitrate do app | |
+| Codec real | H.264 / H.265 — **medido** (`ingest_report.py` ou `codec=` da sonda) |
+| Resolução do app | 720p / 1080p — **medida** (`resolution_class`) |
+| FPS do app | medido (`fps`) |
+| Bitrate do app | kbps — **medido** (`bitrate_kbps`, no fio/RTP) |
+| Resoluções testadas (bitrate/fps em cada) | 720p: ___ kbps / ___ fps · 1080p: ___ kbps / ___ fps |
 | Distância / condição de luz | |
 | `fps_in` (telemetria, mediana) | |
 | `fps_processed` / `fps_in` | % |
