@@ -78,7 +78,12 @@ class DashboardState:
                          "pipeline_error", "pipeline_warning", "eos",
                          "interrupted_by_user", "test_duration_reached",
                          "pipeline_stopped", "pipeline_playing",
-                         "source_active", "preview_branch_ready"):
+                         "source_active", "preview_branch_ready",
+                         # não são falha do pipeline (E3-T2): erro do `rtspsrc`
+                         # durante reconexão e queda do ramo descartável de
+                         # preview. Ficam visíveis na lista, mas fora de
+                         # `error_count`.
+                         "rtsp_reconnect_error", "preview_branch_error"):
                 self._push_event(record)
         return event
 

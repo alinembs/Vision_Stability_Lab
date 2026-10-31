@@ -633,12 +633,27 @@ class VisionPipeline:
             reason = "eos"
         else:
             err, debug = message.parse_error()
-            log_event("pipeline_error", src=src_name, error=str(err),
-                      debug=debug)
-            action = classify_bus_message(MSG_ERROR, src_name, str(err),
-                                          self._preview_element_names)
             detail = str(err)
             reason = "bus_error"
+            action = classify_bus_message(MSG_ERROR, src_name, detail,
+                                          self._preview_element_names)
+            # Nem todo ERROR do bus é falha do pipeline. Erro do `rtspsrc` com a
+            # fonte fora do ar é o caminho **esperado** da reconexão (o MediaMTX
+            # recusa sessão para path sem publisher) e erro do ramo de preview é
+            # o ramo descartável caindo. Os dois saíam como `pipeline_error`,
+            # que é o evento que o dashboard conta em `error_count`: medido na
+            # sessão de campo do drone (2026-10-31), um corte de 23 s que o
+            # pipeline reconectou sozinho gerou 4 "erros" na tela. Só
+            # `ACTION_QUIT` é falha de verdade e mantém o nome `pipeline_error`.
+            if action == ACTION_RECONNECT:
+                log_event("rtsp_reconnect_error", src=src_name,
+                          error=detail, debug=debug)
+            elif action == ACTION_DROP_PREVIEW:
+                log_event("preview_branch_error", src=src_name,
+                          error=detail, debug=debug)
+            else:
+                log_event("pipeline_error", src=src_name, error=detail,
+                          debug=debug)
 
         if action == ACTION_DROP_PREVIEW:
             self._drop_preview_branch(element=src_name, error=detail)

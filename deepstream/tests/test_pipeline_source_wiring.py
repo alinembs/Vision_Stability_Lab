@@ -140,6 +140,27 @@ class ReconexaoDaFonteTest(unittest.TestCase):
                     for stmt in corpo)
         raise AssertionError(f"método {nome} não encontrado em pipeline_real.py")
 
+    def test_erro_do_rtspsrc_nao_vira_pipeline_error(self) -> None:
+        """Queda de fonte não pode inflar `error_count` do dashboard.
+
+        Medido na sessão de campo do drone (2026-10-31): um corte de 23 s que o
+        pipeline reconectou sozinho (mesmo `session_epoch`, sem restart) gerou
+        **4** `pipeline_error` — o dashboard mostrou 4 "erros" para uma
+        reconexão normal. Erro do `rtspsrc` é o caminho esperado da reconexão e
+        erro do ramo de preview é o ramo descartável caindo; só `ACTION_QUIT`
+        é falha do pipeline.
+        """
+        corpo = self._corpo("_on_bus_message")
+        self.assertIn('log_event("rtsp_reconnect_error"', corpo)
+        self.assertIn('log_event("preview_branch_error"', corpo)
+        self.assertEqual(
+            corpo.count('log_event("pipeline_error"'), 1,
+            "pipeline_error voltou a ser emitido fora do ramo de falha real")
+        self.assertLess(
+            corpo.index("if action == ACTION_RECONNECT"),
+            corpo.index('log_event("pipeline_error"'),
+            "erro de reconexão voltou a ser logado como pipeline_error")
+
     def test_callback_do_bus_nao_chama_gstreamer(self) -> None:
         """Só decide e loga; nada de `set_state`/`send_event` no callback."""
         corpo = self._corpo("_on_source_failure")
