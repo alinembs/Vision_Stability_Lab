@@ -329,7 +329,11 @@ class IngestReport:
             self.obs.error = self.obs.error or "interrompido pelo usuário"
         finally:
             self._teardown()
-            for source_id, fired in ((soft_id, self._soft_fired), (hard_id, self._hard_fired)):
+            expirados = (
+                (soft_id, self._soft_fired),
+                (hard_id, self._hard_fired),
+            )
+            for source_id, fired in expirados:
                 if source_id and not fired:
                     GLib.source_remove(source_id)
             for source_id in signal_ids:

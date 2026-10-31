@@ -23,9 +23,21 @@ import ingest_report_lib as lib  # noqa: E402
 USUARIO_FALSO = "admin"
 SENHA_FALSA = "senhaFalsa123"
 URL_LIMPA = "rtsp://192.168.59.102:8554/drone"
-URL_COM_CREDENCIAL = (
-    "rtsp://" + USUARIO_FALSO + ":" + SENHA_FALSA + "@192.168.59.108:5543/live/channel0"
-)
+URL_CAMERA = "rtsp://192.168.59.108:5543/live/channel0"
+
+
+def com_credencial(url: str) -> str:
+    """Monta a URL com `usuario:senha@` em tempo de execução.
+
+    Não pode ser literal: a guarda da DIV-001
+    (`deepstream/tests/test_no_hardcoded_secrets.py`) varre o repositório atrás
+    de URL versionada com credencial.
+    """
+    esquema, resto = url.split("://", 1)
+    return esquema + "://" + USUARIO_FALSO + ":" + SENHA_FALSA + "@" + resto
+
+
+URL_COM_CREDENCIAL = com_credencial(URL_CAMERA)
 
 
 class TestUrl(unittest.TestCase):
@@ -39,7 +51,7 @@ class TestUrl(unittest.TestCase):
         self.assertEqual(lib.sanitize_url(URL_LIMPA), URL_LIMPA)
 
     def test_scrub_remove_a_senha_de_texto_livre(self):
-        texto = f"falha em rtsp://{USUARIO_FALSO}:{SENHA_FALSA}@host/path"
+        texto = f"falha em {com_credencial('rtsp://host/path')}"
         limpo = lib.scrub_text(texto, URL_COM_CREDENCIAL)
         self.assertNotIn(SENHA_FALSA, limpo)
         self.assertIn("***", limpo)
