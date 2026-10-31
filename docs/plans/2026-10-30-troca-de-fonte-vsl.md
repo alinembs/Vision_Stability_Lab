@@ -4,9 +4,13 @@
 - **ADR:** [`docs/adr/adr-0006-troca-de-fonte.md`](../adr/adr-0006-troca-de-fonte.md)
 - **Escopo:** o pipeline passa a aceitar **três fontes alternativas** (câmera fixa, drone por RTMP, celular Android por WHIP), uma ativa por vez, trocável por comando, com estado isolado por fonte e observabilidade por fonte.
 - **Fora de escopo:** multi-fonte simultânea, tiler/grade, segundo `nvinfer`/engine b3, iOS, gravação contínua.
-- **Estado:** plano executável. Etapas **E0, E1-T1, E1-T2 e E2** concluídas e
-  commitadas (E2 com parecer independente do gate em
-  `docs/baselines/2026-10-31-gate-e2-inc006.md`); **E3→E7 pendentes**.
+- **Estado:** plano executável. Etapas **E0, E1-T1, E1-T2, E2 e E3 (T1/T2)**
+  concluídas e commitadas (E2 e E3-T2 com parecer de gate em
+  `docs/baselines/2026-10-31-gate-e2-inc006.md` e
+  `docs/baselines/2026-10-31-gate-e3t2.md`); **E4→E7 pendentes**. O parecer do
+  E3-T2 foi emitido por agente independente `general` porque o
+  `deepstream-tester` estava bloqueado por cota do provedor — repetir com o
+  agente canônico antes de fechar o épico E3 na tabela de gates.
 
 > **Regra de leitura deste documento:** todo número tem fonte explícita (arquivo, comando ou
 > medição com data). A branch já teve corpo de commit com número errado —
@@ -386,6 +390,13 @@ troca de fonte").
 | **Complexidade** | M |
 | **Critério de aceite** | (a) com `source_target_fps: 20`, `fps_processed: 16` **não** gera `fps_degradation` (é 80 % do alvo); com `fps_processed: 7,0` gera; (b) o limiar passa a ser **60 % do alvo da fonte** (12 fps para a câmera), não 30 % de 25 — justificativa: 30 % de 25 = 7,5 é exatamente onde a câmera foi medida, então o gate antigo alternava entre "espúrio" e "quase disparando"; (c) durante `switch_in_progress` válido, `no_frames_detected` e `crash_loop_detected` **não** escalam restart; (d) sem `source_target_fps` na telemetria (JSONL antigo), o comportamento é o de hoje (fallback `TARGET_FPS`); (e) o evento `watchdog_started` registra o alvo resolvido |
 | **Validação** | `pytest scripts/tests/test_watchdog_sources.py -q` com fixtures de `interval_metrics` (20/16/12/7 fps; com e sem `source_target_fps`; com e sem marcador de troca). Gate `deepstream-tester` **não** se aplica (não é `deepstream/*`), mas `scripts/watchdog.py` exige revisão por `REVIEWER` antes do merge |
+
+> **Medido no gate do E3-T2 (2026-10-31, `docs/baselines/2026-10-31-gate-e3t2.md`, divergência 5):**
+> a câmera oscilou para `fps_processed=6,53` e o watchdog emitiu
+> `{"event": "watchdog_fps_degradation", "threshold": 7.5, "target_fps": 25.0, "sustained_s": 140.2}`
+> — 30 % de 25 = 7,5, exatamente o valor que o critério (b) descreve. A fonte
+> declara `source_target_fps=20.0` na mesma telemetria, então o alvo já está
+> disponível para ser consumido sem mudança no pipeline (E3-T2 fechado).
 
 #### E5-T2 — `healthcheck` e heartbeat do próprio watchdog
 
