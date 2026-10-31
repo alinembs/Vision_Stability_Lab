@@ -4,7 +4,9 @@
 - **ADR:** [`docs/adr/adr-0006-troca-de-fonte.md`](../adr/adr-0006-troca-de-fonte.md)
 - **Escopo:** o pipeline passa a aceitar **três fontes alternativas** (câmera fixa, drone por RTMP, celular Android por WHIP), uma ativa por vez, trocável por comando, com estado isolado por fonte e observabilidade por fonte.
 - **Fora de escopo:** multi-fonte simultânea, tiler/grade, segundo `nvinfer`/engine b3, iOS, gravação contínua.
-- **Estado:** plano executável. Etapas E0 e E1-T1 concluídas e commitadas; E1-T2 e E2→E7 pendentes.
+- **Estado:** plano executável. Etapas **E0, E1-T1, E1-T2 e E2** concluídas e
+  commitadas (E2 com parecer independente do gate em
+  `docs/baselines/2026-10-31-gate-e2-inc006.md`); **E3→E7 pendentes**.
 
 > **Regra de leitura deste documento:** todo número tem fonte explícita (arquivo, comando ou
 > medição com data). A branch já teve corpo de commit com número errado —
@@ -494,6 +496,12 @@ troca de fonte").
 
 Gates do drone/celular são **provisórios** até a primeira medição de cada um (E7-T1). Ficam
 escritos para não se inventar número depois: quem medir, atualiza esta tabela com a fonte.
+
+> **Primeira medição (gate E2, 2026-10-31):** com publisher sintético H.264 a 720p/25 fps, o
+> RSS ficou em **721–723 MB** em `drone` e `phone` — abaixo do piso de 750 MB, que foi medido
+> na câmera H.265. Não é falha do gate: é o piso provisório se mostrando alto para fonte
+> H.264. Ajustar com a medição do **drone real** (E7-T1), não com o publisher sintético
+> (`docs/baselines/2026-10-31-gate-e2-inc006.md`, divergência 3).
 
 ### 6.2 Gate de `lfb` — substituído (não é valor absoluto)
 
