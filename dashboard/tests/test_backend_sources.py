@@ -108,7 +108,7 @@ class CatalogTest(unittest.TestCase):
                 os.environ[key] = value
 
     def test_env_source_never_leaks_credential(self) -> None:
-        os.environ["RTSP_URI"] = "rtsp://usuario:senha@10.0.0.1:554/live"
+        os.environ["RTSP_URI"] = "rtsp://USUARIO:SENHA@10.0.0.1:554/live"
         os.environ.pop("MTX_HOST", None)
 
         catalog = sources_catalog.load_catalog()
@@ -135,7 +135,7 @@ class CatalogTest(unittest.TestCase):
 
     def test_mask_uri_hides_userinfo(self) -> None:
         masked = sources_catalog.mask_uri(
-            "rtsp://usuario:senha@192.168.59.108:5543/live/channel0")
+            "rtsp://USUARIO:SENHA@192.168.59.108:5543/live/channel0")
         self.assertEqual(masked, "rtsp://***@192.168.59.108:5543/live/channel0")
 
 

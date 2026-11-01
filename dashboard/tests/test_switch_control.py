@@ -144,7 +144,7 @@ class SwitcherTestBase(unittest.TestCase):
     def make_env(self, **extra: str) -> dict:
         env = {
             "SOURCES_CONFIG": str(self.config_file),
-            "RTSP_URI": "rtsp://usuario:senha@10.0.0.1:554/live",
+            "RTSP_URI": "rtsp://USUARIO:SENHA@10.0.0.1:554/live",
             "MTX_HOST": "mediamtx",
         }
         env.update(extra)
