@@ -27,6 +27,8 @@ Nota: `scripts/tests` não tem `__init__.py` de propósito (ver
 
 import datetime
 import json
+import shlex
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -807,3 +809,55 @@ class MarcadorEntreProcessosTest(unittest.TestCase):
                 lib.main(["marker-expired", "--file", str(orfao)]), 0)
             self.assertEqual(
                 lib.main(["marker-expired", "--file", str(em_curso)]), 1)
+
+
+# ---------------------------------------------------------------------------
+# `write_marker` de verdade: extraído do script e executado no bash
+# ---------------------------------------------------------------------------
+class MarcadorDoScriptTest(unittest.TestCase):
+    """Regressão do INC-009 — marcador gravado sem o id da fonte.
+
+    Dentro de `$( ... )` a quebra de linha é **separador de comando**, não
+    continuação. Sem a `\\` no fim da linha do `printf`, os argumentos
+    (`"$SOURCE_ID" "$expires" "$SWITCH_OWNER"`) viravam um segundo comando:
+    o bash tentava rodar `drone`, o payload saía com os `%s` vazios e a troca
+    morria com `exit 127` **antes** de escrever `active_source`.
+
+    O teste roda a função como o script a define, em vez de confiar em leitura
+    de texto: um `\\` perdido numa edição futura volta a falhar aqui.
+    """
+
+    SCRIPT = RAIZ / "scripts" / "switch_source.sh"
+
+    def _funcao(self, nome: str) -> str:
+        linhas = self.SCRIPT.read_text(encoding="utf-8").splitlines()
+        inicio = next(
+            i for i, linha in enumerate(linhas) if linha.startswith(f"{nome}() {{"))
+        fim = next(i for i in range(inicio + 1, len(linhas)) if linhas[i] == "}")
+        return "\n".join(linhas[inicio:fim + 1])
+
+    def test_marcador_leva_id_e_dono(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            programa = "\n".join([
+                "set -euo pipefail",
+                "SOURCE_ID=drone",
+                "TIMEOUT_S=90",
+                "SWITCH_OWNER=test:1:2",
+                f"CONFIG_DIR={shlex.quote(tmp)}",
+                f"SWITCH_MARKER={shlex.quote(str(Path(tmp) / 'switch_in_progress'))}",
+                "log() { :; }",
+                "marker_expired() { return 1; }",
+                'die() { exit "${2:-1}"; }',
+                "record_switch() { :; }",
+                self._funcao("write_marker"),
+                "write_marker",
+                'cat "$SWITCH_MARKER"',
+            ])
+            saida = subprocess.run(["bash", "-c", programa],
+                                   capture_output=True, text=True)
+            self.assertEqual(saida.returncode, 0, saida.stderr)
+            self.assertNotIn("%s", saida.stdout)
+            marcador = json.loads(saida.stdout)
+            self.assertEqual(marcador["to"], "drone")
+            self.assertEqual(marcador["owner"], "test:1:2")
+            self.assertEqual(marcador["origin"], "script")

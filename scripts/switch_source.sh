@@ -135,7 +135,7 @@ write_marker() {
     expires="$(date -u -d "+$(( ${TIMEOUT_S%.*} + 60 )) seconds" \
         +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
     mkdir -p -- "$CONFIG_DIR"
-    payload="$(printf '{"to": "%s", "expires_at": "%s", "owner": "%s", "origin": "script"}'
+    payload="$(printf '{"to": "%s", "expires_at": "%s", "owner": "%s", "origin": "script"}' \
         "$SOURCE_ID" "$expires" "$SWITCH_OWNER")"
     # Reivindicação atômica (`set -C` = noclobber): se o arquivo já existe, é
     # porque outra troca (script ou dashboard) está em curso — ou é órfão de
