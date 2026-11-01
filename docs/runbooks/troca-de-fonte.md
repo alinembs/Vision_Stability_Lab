@@ -40,7 +40,7 @@ FAIL source=drone reason="no_frames_on_path" observed="camera" rollback=restored
 | 0 | PASS: pós-check confirmou a fonte | nada |
 | 1 | pós-check não confirmou; **rollback feito** para a fonte anterior | ler `reason`/`last_error` abaixo |
 | 2 | uso incorreto ou id inválido | ver `--help`; ids válidos em `deepstream/config/sources.yaml` |
-| 3 | `ACTIVE_SOURCE` no ambiente vence o arquivo | remover `ACTIVE_SOURCE` de `deploy/.env` (deixar vazio) e recriar |
+| 3 | bloqueado sem escrever: `ACTIVE_SOURCE` no ambiente vence o arquivo **ou** outra troca está em andamento (`reason=troca_em_andamento`) | no primeiro caso, remover `ACTIVE_SOURCE` de `deploy/.env` e recriar; no segundo, esperar a outra troca terminar (marcador em `data/config/switch_in_progress`) |
 | 4 | pré-check reprovado | a fonte não está publicando; nada foi escrito e o container está intacto |
 
 Histórico de trocas: `data/logs/switch.jsonl` (uma linha por execução, com
@@ -48,7 +48,11 @@ Histórico de trocas: `data/logs/switch.jsonl` (uma linha por execução, com
 pelo guard de precedência (exit 3, `reason=active_source_no_ambiente`).
 
 Durante a troca existe `data/config/switch_in_progress`
-(`{"to": "<id>", "expires_at": "<ISO>"}`, removido ao fim, inclusive em falha).
+(`{"to": "<id>", "expires_at": "<ISO>", "owner": "<quem>", "origin": "script|dashboard"}`,
+removido ao fim, inclusive em falha). O mesmo arquivo é o **mutex entre os dois
+caminhos de troca** (script e botão do dashboard): quem chega depois recebe
+`exit 3` / `409`. Marcador órfão (processo morto no meio) expira por
+`expires_at` e é descartado automaticamente pela execução seguinte.
 O watchdog lê esse marcador: enquanto ele vale, a recriação do container não é
 tratada como crash-loop nem como fonte morta (`switch_in_progress_observed` no
 `watchdog.jsonl`, uma vez por troca). As regras de RAM e CUDA continuam valendo.

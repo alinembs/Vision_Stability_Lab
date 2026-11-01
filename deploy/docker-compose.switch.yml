@@ -5,9 +5,22 @@
 # é o que dá ao dashboard o poder de trocar a fonte ativa, e por isso é
 # separado e explícito:
 #
+# **use o Makefile**: ele sobe o overlay com o painel em **loopback**
+# (o endpoint tem socket do Docker — root-equivalente — e o token viaja em HTTP
+# claro; publicar na LAN é decisão explícita e consciente).
+#
+#   make up-switch SWITCH_TOKEN="$(openssl rand -hex 24)"
+#
+# Acesso ao painel: por túnel SSH (o próprio `make up-switch` imprime o
+# comando). Para o vídeo do dashboard, encaminhe também a 8889 e aponte o
+# player: no console do navegador,
+#   localStorage.whep_url = "https://localhost:8889/live/whep"
+#
+# Se você subir o overlay à mão, repita os dois cuidados:
 #   cd deploy
-#   SWITCH_TOKEN="$(openssl rand -hex 24)" \
-#       docker compose -f docker-compose.yml -f docker-compose.switch.yml up -d dashboard
+#   DASHBOARD_BIND=127.0.0.1 SWITCH_TOKEN="$(openssl rand -hex 24)" \
+#       docker compose -f docker-compose.yml -f docker-compose.switch.yml \
+#       up -d --build dashboard
 #
 # Sem ele, `POST /api/source/switch` responde 503 (`switch_token_ausente`) e
 # nada muda no deploy atual.
@@ -41,6 +54,7 @@ services:
       - SWITCH_PROBE=/app/scripts/probe/source_probe.py
       - SWITCH_TIMEOUT_S=${SWITCH_TIMEOUT_S:-90}
       - PRECHECK_SECONDS=${PRECHECK_SECONDS:-5}
+      - PRECHECK_TIMEOUT_S=${PRECHECK_TIMEOUT_S:-20}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # subdiretórios graváveis (o `../data` somente leitura do compose base

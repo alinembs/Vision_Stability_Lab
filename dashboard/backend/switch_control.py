@@ -162,13 +162,21 @@ class DockerRuntime:
         base = ["python3", self.probe_path, "--source", source_id,
                 "--seconds", f"{self.probe_seconds:g}"]
         container = self._container(name)
+        # `-k 5`: depois do SIGTERM, SIGKILL em 5 s. Sem isso, um processo
+        # preso dentro de uma chamada C que não despacha o handler (o caso do
+        # INC-007: `change_state` bloqueado) faz o `timeout` esperar para
+        # sempre e o teto não vale nada.
         result = container.exec_run(
-            ["timeout", f"{self.probe_timeout_s:g}"] + base, demux=False)
+            ["timeout", "-k", "5", f"{self.probe_timeout_s:g}"] + base,
+            demux=False)
         if result.exit_code == 127:      # sem `timeout` na imagem
+            logger.warning(
+                "`timeout` ausente no container %s: sonda rodando SEM teto "
+                "(instale coreutils ou ajuste a imagem)", name)
             result = container.exec_run(base, demux=False)
         output = result.output or b""
         text = output.decode("utf-8", "replace") if isinstance(output, bytes) else str(output)
-        if result.exit_code == 124:      # estourou o teto do `timeout`
+        if result.exit_code in (124, 137):   # 124 = teto; 137 = SIGKILL do -k
             return ProbeResult(False, "timeout", _field(text, "masked_uri") or "")
         reason = _field(text, "reason") or ("ok" if result.exit_code == 0 else "probe_failed")
         return ProbeResult(result.exit_code == 0, reason,
@@ -331,16 +339,20 @@ class Switcher:
                 # pós-check. Restaura a anterior e audita sempre.
                 logger.exception("restart da troca falhou; restaurando")
                 self._restore_control(previous)
+                detalhe = ""
                 try:
                     self.runtime.restart(self.app_container)
-                except Exception:  # noqa: BLE001
+                except Exception as exc2:  # noqa: BLE001
                     logger.exception("restart de compensação também falhou")
+                    detalhe = (f"; o restart de compensação também falhou "
+                               f"({exc2}) — o processo pode estar na fonte "
+                               "anterior, mas o próximo boot já lê a restaurada")
                 self._audit(lib, "FAIL", "restart_falhou", probe="ok")
                 self._set_failed(
                     "restart_falhou",
                     "o restart do pipeline falhou depois da escrita; "
                     f"a fonte anterior ({previous or 'default_source'}) foi "
-                    f"restaurada em active_source ({exc})")
+                    f"restaurada em active_source ({exc}){detalhe}")
                 return
             started_at = self._safe_started_at()
 
@@ -384,6 +396,14 @@ class Switcher:
             self._set_failed(decision.reason or "pos_check_falhou",
                              "pós-check não confirmou a troca; fonte anterior "
                              "restaurada")
+        except SwitchBusy as exc:
+            # corrida perdida na reivindicação do marcador: outro processo
+            # entrou entre a checagem do `start` e a escrita. É bloqueio, não
+            # erro interno — o motivo tem de dizer isso ao operador.
+            if lib is not None:
+                self._fail(lib, "troca_em_andamento", str(exc), probe="blocked")
+            else:
+                self._set_failed("troca_em_andamento", str(exc))
         except Exception as exc:  # noqa: BLE001 — a thread não pode morrer calada
             self._set_failed("erro_interno", f"{type(exc).__name__}: {exc}")
             if lib is not None:
@@ -458,20 +478,70 @@ class Switcher:
                 active = self._marker_active()
                 if active is not None or attempt == 2:
                     raise SwitchBusy(self._busy_message(active or {})) from None
-                # marcador expirado: descarta e tenta de novo
-                try:
-                    marker.unlink(missing_ok=True)
-                except OSError:
-                    raise SwitchBusy(
-                        "não foi possível liberar o marcador expirado") from None
+                self._discard_stale_marker()
                 continue
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(payload)
             return
 
-    def _read_marker(self) -> Optional[Dict[str, Any]]:
+    def _discard_stale_marker(self) -> None:
+        """Descarta um marcador expirado **sem** roubar o de outro processo.
+
+        `unlink` depois de checar validade é um TOCTOU: entre a checagem e o
+        `unlink`, outro processo pode ter criado o marcador dele e nós
+        apagaríamos o arquivo errado. O `rename` é atômico e quem renomeia é
+        dono do inode; aí se confere a validade **do inode renomeado**: se ele
+        estava válido (perdemos a corrida), devolve para o lugar e recusa a
+        troca.
+        """
+        marker = self._marker_path()
+        stale = marker.with_name(
+            f"{MARKER_NAME}.stale.{uuid.uuid4().hex[:8]}")
         try:
-            raw = self._marker_path().read_text(encoding="utf-8").strip()
+            os.replace(marker, stale)
+        except FileNotFoundError:
+            return                      # outro já resolveu: tenta criar direto
+        except OSError as exc:
+            raise SwitchBusy(
+                "não foi possível liberar o marcador expirado "
+                f"({exc}); remova {marker} se não houver troca em curso") from None
+        try:
+            if self._marker_valid(stale):
+                os.replace(stale, marker)   # era de outro: devolve e recusa
+                raise SwitchBusy(self._busy_message(self._read_marker(stale) or {}))
+        finally:
+            try:
+                stale.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _marker_valid(self, path: Path) -> bool:
+        """True se o marcador em `path` ainda vale (com TTL por `mtime`)."""
+        data = self._read_marker(path)
+        if data is None:
+            return False
+        expires = data.get("expires_at")
+        if expires:
+            try:
+                deadline = datetime.strptime(
+                    str(expires), "%Y-%m-%dT%H:%M:%SZ").replace(
+                        tzinfo=timezone.utc)
+            except ValueError:
+                deadline = None
+            if deadline is not None:
+                return deadline > datetime.now(timezone.utc)
+        # sem validade legível: vale por `mtime + timeout + 60`, o mesmo
+        # contrato que o watchdog usa para marcador órfão. Nunca "para sempre".
+        try:
+            age = time.time() - path.stat().st_mtime
+        except OSError:
+            return False
+        return age <= (self.timeout_s + 60)
+
+    def _read_marker(self, path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+        path = path or self._marker_path()
+        try:
+            raw = path.read_text(encoding="utf-8").strip()
         except OSError:
             return None
         if not raw:
@@ -491,15 +561,7 @@ class Switcher:
             return None
         if data.get("owner") and data.get("owner") == self._marker_owner:
             return None
-        expires = data.get("expires_at")
-        if not expires:
-            return data          # sem validade: assume que está em curso
-        try:
-            deadline = datetime.strptime(
-                str(expires), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-        except ValueError:
-            return data
-        return None if deadline <= datetime.now(timezone.utc) else data
+        return data if self._marker_valid(self._marker_path()) else None
 
     def _clear_marker(self) -> None:
         """Remove o marcador **só** se ainda for deste processo."""

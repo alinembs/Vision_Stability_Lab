@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pathlib
 import re
 import sys
 import time
@@ -477,6 +478,46 @@ def wait_for_source(telemetry_path: os.PathLike | str, source_id: str,
 # ---------------------------------------------------------------------------
 # Pré-check e rollback
 # ---------------------------------------------------------------------------
+def marker_expired(text: Optional[str], now: float,
+                   mtime: Optional[float] = None,
+                   ttl_s: float = 150.0) -> bool:
+    """`True` se o marcador `switch_in_progress` pode ser descartado.
+
+    O marcador é o mutex entre os dois caminhos de troca (script e botão do
+    dashboard). Ele vale enquanto `expires_at` estiver no futuro; sem validade
+    legível (vazio, corrompido, ferramenta antiga) vale por `mtime + ttl_s`.
+    Marcador **nunca** vale para sempre: um `kill -9` no meio da troca deixava
+    o arquivo e nenhuma execução futura trocava fonte até alguém apagar à mão.
+
+    Args:
+        text: conteúdo do arquivo (`None` se não existe).
+        now: instante atual (`time.time()`).
+        mtime: mtime do arquivo, usado quando não há `expires_at` legível.
+        ttl_s: validade do marcador sem data (`timeout + 60` por convenção).
+    """
+    if text is None:
+        return True                       # nada a descartar
+    raw = text.strip()
+    expires = None
+    if raw:
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            expires = data.get("expires_at")
+    if expires:
+        try:
+            deadline = datetime.strptime(
+                str(expires), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            return deadline.timestamp() <= now
+        except ValueError:
+            pass                          # data inválida: cai no mtime
+    if mtime is None:
+        return False                      # sem data e sem mtime: conservador
+    return (now - mtime) > ttl_s
+
+
 def probe_failure_reason(report: Mapping[str, Any]) -> str:
     """Traduz a reprovação da sonda no vocabulário do switch.
 
@@ -586,7 +627,8 @@ def build_arg_parser(prog: str = "switch_source.sh") -> argparse.ArgumentParser:
             "Exit codes: 0 = PASS (pós-check confirmou a fonte), "
             "1 = FAIL (pós-check não confirmou; rollback feito), "
             "2 = uso incorreto ou id inválido, "
-            "3 = ACTIVE_SOURCE no ambiente vence o arquivo (nada foi escrito), "
+            "3 = bloqueado sem escrever: ACTIVE_SOURCE no ambiente vence o arquivo "
+            "ou outra troca está em andamento (marcador switch_in_progress), "
             "4 = pré-check reprovado (nada foi escrito, container intacto).\n\n"
             "Orçamento do --timeout: conta a partir da recriação do container "
             "(StartedAt do processo novo), não do início do script. Ficam FORA "
@@ -705,6 +747,12 @@ def build_cli_parser() -> argparse.ArgumentParser:
                              help="ACTIVE_SOURCE de deploy/.env")
     env_cmd.add_argument("--env-file", default=str(DEFAULT_ENV_FILE))
 
+    marker_cmd = sub.add_parser(
+        "marker-expired",
+        help="o marcador switch_in_progress pode ser descartado? (exit 0 = sim)")
+    marker_cmd.add_argument("--file", required=True)
+    marker_cmd.add_argument("--ttl", default="150")
+
     record_cmd = sub.add_parser("switch-record",
                                 help="linha JSON de data/logs/switch.jsonl")
     record_cmd.add_argument("--to", required=True)
@@ -788,6 +836,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if namespace.command == "active-source-env":
         _emit({"value": read_env_file(namespace.env_file).get("ACTIVE_SOURCE", "")})
         return EXIT_OK
+
+    if namespace.command == "marker-expired":
+        import time as _time
+        path = pathlib.Path(namespace.file)
+        try:
+            text = path.read_text(encoding="utf-8")
+            mtime = path.stat().st_mtime
+        except OSError:
+            text, mtime = None, None
+        # exit 0 = pode descartar (órfão); exit 1 = em curso, não invadir
+        return EXIT_OK if marker_expired(text, _time.time(), mtime,
+                                         float(namespace.ttl)) else 1
 
     if namespace.command == "switch-record":
         print(json.dumps(

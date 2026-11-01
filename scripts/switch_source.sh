@@ -121,6 +121,15 @@ write_control() {
     mv -f -- "$tmp" "$CONTROL_FILE"
 }
 
+marker_expired() {
+    # Decisão pura e testada em `switch_source_lib.marker_expired` (exit 0 =
+    # órfão, pode descartar; exit 1 = em curso). Honrar `expires_at` é o que
+    # impede que um `kill -9` no meio da troca deixe o marcador e **nenhuma**
+    # execução futura troque fonte até alguém apagar à mão.
+    "$PYTHON" "$LIB" marker-expired --file "$SWITCH_MARKER" \
+        --ttl "$(( ${TIMEOUT_S%.*} + 60 ))" >/dev/null 2>&1
+}
+
 write_marker() {
     local expires payload
     expires="$(date -u -d "+$(( ${TIMEOUT_S%.*} + 60 )) seconds" \
@@ -129,12 +138,25 @@ write_marker() {
     payload="$(printf '{"to": "%s", "expires_at": "%s", "owner": "%s", "origin": "script"}'
         "$SOURCE_ID" "$expires" "$SWITCH_OWNER")"
     # Reivindicação atômica (`set -C` = noclobber): se o arquivo já existe, é
-    # porque outra troca (script ou dashboard) está em curso — não invadir.
+    # porque outra troca (script ou dashboard) está em curso — ou é órfão de
+    # uma execução morta. Só o órfão (expirado) é descartado.
     if ! (set -C; printf '%s\n' "$payload" >"$SWITCH_MARKER") 2>/dev/null; then
-        log "outra troca de fonte em andamento (marcador $SWITCH_MARKER); abortando"
-        PRECHECK_NOTE="blocked"
-        record_switch "FAIL" "troca_em_andamento"
-        die 3 "FAIL source=$SOURCE_ID reason=troca_em_andamento (nada foi escrito; container intacto)"
+        if marker_expired; then
+            log "marcador órfão (expirado) em $SWITCH_MARKER: descartando"
+            mv -f -- "$SWITCH_MARKER" "$SWITCH_MARKER.stale.$$" 2>/dev/null || true
+            rm -f -- "$SWITCH_MARKER.stale.$$" 2>/dev/null || true
+            if ! (set -C; printf '%s\n' "$payload" >"$SWITCH_MARKER") 2>/dev/null; then
+                log "outra troca de fonte em andamento; abortando"
+                PRECHECK_NOTE="blocked"
+                record_switch "FAIL" "troca_em_andamento"
+                die 3 "FAIL source=$SOURCE_ID reason=troca_em_andamento (nada foi escrito; container intacto)"
+            fi
+        else
+            log "outra troca de fonte em andamento; abortando"
+            PRECHECK_NOTE="blocked"
+            record_switch "FAIL" "troca_em_andamento"
+            die 3 "FAIL source=$SOURCE_ID reason=troca_em_andamento (nada foi escrito; container intacto)"
+        fi
     fi
 }
 

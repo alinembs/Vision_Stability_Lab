@@ -21,6 +21,7 @@ const state = {
     enabled: false,
     reason: null,
     status: null,
+    foreign: null,
     token: null,
     pending: null,
     timer: null,
@@ -456,6 +457,16 @@ function renderSwitchStatus() {
     setBanner("info", SWITCH_DISABLED[state.sw.reason] || "troca pela tela desligada");
     return;
   }
+  // Troca em andamento por outro processo (`switch_source.sh`): o 409 vem do
+  // mutex entre processos, não de bug. Sem mostrar isto, o operador só vê o
+  // banner voltar para "idle" no próximo poll e tenta de novo.
+  const foreign = state.sw.foreign;
+  if (foreign && (!status || status.state === "idle" || status.state === "done")) {
+    const to = foreign.to ? ` para ${foreign.to}` : "";
+    setBanner("running",
+      `outra troca em andamento (${foreign.origin}${to}) — aguarde terminar`);
+    return;
+  }
   if (!status || status.state === "idle") {
     setBanner("", "");
     return;
@@ -503,6 +514,7 @@ async function refreshSwitchInfo() {
     state.sw.enabled = !!info.enabled;
     state.sw.reason = info.disabled_reason || null;
     state.sw.status = info.status || null;
+    state.sw.foreign = info.in_progress_by || null;
     if (info.status?.state === "running") startSwitchPolling();
   } catch {
     return;  // backend subindo: mantém o último estado conhecido
@@ -530,7 +542,9 @@ async function pollSwitch() {
     return;  // uma falha de rede não cancela o acompanhamento
   }
   state.sw.status = info.status || null;
+  state.sw.foreign = info.in_progress_by || null;
   renderSwitchStatus();
+  if (state.sw.foreign && !state.sw.timer) startSwitchPolling();
   if (state.sw.status?.state === "running") return;
 
   stopSwitchPolling();
@@ -543,6 +557,7 @@ async function pollSwitch() {
 }
 
 async function postSwitch(sourceId) {
+  state.sw.foreign = null;
   state.sw.status = { state: "running", step: "pedindo", source_id: sourceId,
                       message: "pedido enviado" };
   renderSwitchStatus();

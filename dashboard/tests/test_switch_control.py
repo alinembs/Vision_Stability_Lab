@@ -348,21 +348,22 @@ class ProbeExecTest(unittest.TestCase):
             client=self._Client(container), probe_timeout_s=timeout_s)
         return runtime, container
 
-    def test_sonda_roda_sob_timeout_do_coreutils(self) -> None:
+    def test_sonda_roda_sob_timeout_com_sigkill_de_reserva(self) -> None:
         runtime, container = self._runtime(
             [self._Result(0, b"ok=1\nreason=ok\n")])
         result = runtime.probe("vision-stability-app", "drone")
 
         self.assertTrue(result.ok)
-        self.assertEqual(container.calls[0][0], "timeout")
-        self.assertEqual(container.calls[0][1], "20")
+        self.assertEqual(container.calls[0][:4], ["timeout", "-k", "5", "20"])
 
-    def test_exit_124_e_reportado_como_timeout(self) -> None:
-        runtime, _ = self._runtime([self._Result(124)])
-        result = runtime.probe("vision-stability-app", "drone")
+    def test_exit_124_e_137_sao_reportados_como_timeout(self) -> None:
+        for code in (124, 137):
+            with self.subTest(code=code):
+                runtime, _ = self._runtime([self._Result(code)])
+                result = runtime.probe("vision-stability-app", "drone")
 
-        self.assertFalse(result.ok)
-        self.assertEqual(result.reason, "timeout")
+                self.assertFalse(result.ok)
+                self.assertEqual(result.reason, "timeout")
 
     def test_sem_timeout_na_imagem_repete_sem_o_teto(self) -> None:
         runtime, container = self._runtime(
@@ -403,6 +404,38 @@ class MarcadorEntreProcessosTest(SwitcherTestBase):
         self.assertEqual(self.control_value(), "drone")
         self.assertFalse(self.marker_exists())
 
+    def test_marcador_expirado_e_descartado_na_reivindicacao(self) -> None:
+        self._marcador_externo("2020-01-01T00:00:00Z")
+        switcher = self.make_switcher(FakeRuntime(self.make_env()))
+
+        switcher._claim_marker("drone")
+
+        data = json.loads((self.config_dir / "switch_in_progress")
+                          .read_text(encoding="utf-8"))
+        self.assertEqual(data["owner"][:9], "dashboard")
+        # o arquivo descartado não fica para trás
+        self.assertEqual(
+            list(self.config_dir.glob("switch_in_progress.stale.*")), [])
+
+    def test_marcador_sem_validade_expira_por_mtime(self) -> None:
+        marker = self.config_dir / "switch_in_progress"
+        marker.write_text('{"to": "drone"}\n', encoding="utf-8")
+        os.utime(marker, (0, 0))          # mtime muito antigo
+        switcher = self.make_switcher(FakeRuntime(self.make_env()))
+
+        switcher.start("drone")
+        switcher.wait(timeout=10)
+
+        self.assertEqual(switcher.status.state, "done")
+
+    def test_marcador_ilegivel_recente_ainda_bloqueia(self) -> None:
+        (self.config_dir / "switch_in_progress").write_text(
+            "lixo", encoding="utf-8")
+        switcher = self.make_switcher(FakeRuntime(self.make_env()))
+
+        with self.assertRaises(switch_control.SwitchBusy):
+            switcher.start("drone")
+
     def test_reivindicacao_atomica_recusa_marcador_de_terceiro(self) -> None:
         switcher = self.make_switcher(FakeRuntime(self.make_env()))
         self._marcador_externo("2099-01-01T00:00:00Z")
@@ -424,6 +457,27 @@ class MarcadorEntreProcessosTest(SwitcherTestBase):
 
         self.assertTrue(self.marker_exists(),
                         "o marcador de outro dono foi apagado")
+
+    def test_corrida_na_reivindicacao_vira_troca_em_andamento(self) -> None:
+        # Outro processo reivindica **durante** o pré-check: a checagem do
+        # `start` já passou, e quem perde a corrida na escrita precisa reportar
+        # `troca_em_andamento` (bloqueio), não `erro_interno`.
+        escrever = lambda: self._marcador_externo("2099-01-01T00:00:00Z")
+
+        class RuntimeQueCriaMarcador(FakeRuntime):
+            def probe(self, name: str, source_id: str):
+                escrever()
+                return super().probe(name, source_id)
+
+        switcher = self.make_switcher(RuntimeQueCriaMarcador(self.make_env()))
+        switcher.start("drone")
+        switcher.wait(timeout=10)
+
+        self.assertEqual(switcher.status.state, "failed")
+        self.assertEqual(switcher.status.reason, "troca_em_andamento")
+        self.assertIsNone(self.control_value(), "escreveu com outra troca em curso")
+        self.assertEqual(self.audit()[0]["reason"], "troca_em_andamento")
+        self.assertEqual(self.audit()[0]["probe"], "blocked")
 
     def test_get_informa_troca_de_terceiro(self) -> None:
         switcher = self.make_switcher(FakeRuntime(self.make_env()))

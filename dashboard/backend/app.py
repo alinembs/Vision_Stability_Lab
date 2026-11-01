@@ -428,7 +428,15 @@ def get_switcher() -> "switch_control.Switcher":
     """
     switcher = switch_state.get("switcher")
     if switcher is None:
-        switcher = switch_control.Switcher(switch_control.DockerRuntime())
+        # Os dois parâmetros de pré-check vêm do ambiente do dashboard
+        # (`PRECHECK_SECONDS`/`PRECHECK_TIMEOUT_S` no overlay): antes o
+        # `DockerRuntime()` era criado sem argumentos e a configuração só
+        # aparecia no texto da tela.
+        precheck_s = float(switch_control.PRECHECK_SECONDS)
+        switcher = switch_control.Switcher(
+            switch_control.DockerRuntime(probe_seconds=precheck_s),
+            precheck_seconds=switch_control.PRECHECK_SECONDS,
+            precheck_timeout_s=switch_control.PRECHECK_TIMEOUT_S)
         switch_state["switcher"] = switcher
     return switcher
 

@@ -745,3 +745,65 @@ class ContratoDoScriptTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MarcadorEntreProcessosTest(unittest.TestCase):
+    """`marker_expired`: validade do mutex entre script e dashboard (E4/H2).
+
+    O marcador `switch_in_progress` é o único ponto de exclusão mútua entre o
+    `switch_source.sh` e o botão do dashboard. Regra: vale enquanto
+    `expires_at` estiver no futuro; sem data legível, vale por `mtime + ttl`;
+    nunca "para sempre" (senão um `kill -9` no meio da troca inutiliza o CLI).
+    """
+
+    NOW = 1_800_000_000.0
+    TTL = 150.0
+
+    def marca(self, expires, now=None):
+        return json.dumps({"to": "drone", "expires_at": expires})
+
+    def test_expirado_pode_ser_descartado(self) -> None:
+        self.assertTrue(lib.marker_expired(
+            self.marca("2020-01-01T00:00:00Z"), self.NOW))
+
+    def test_valido_nao_pode_ser_descartado(self) -> None:
+        self.assertFalse(lib.marker_expired(
+            self.marca("2099-01-01T00:00:00Z"), self.NOW))
+
+    def test_ausente_e_orfao(self) -> None:
+        self.assertTrue(lib.marker_expired(None, self.NOW))
+
+    def test_sem_data_expira_por_mtime(self) -> None:
+        mtime_velho = self.NOW - (self.TTL + 10)
+        self.assertTrue(lib.marker_expired(
+            '{"to": "drone"}\n', self.NOW, mtime_velho, self.TTL))
+
+    def test_sem_data_recente_bloqueia(self) -> None:
+        self.assertFalse(lib.marker_expired(
+            '{"to": "drone"}\n', self.NOW, self.NOW - 5, self.TTL))
+
+    def test_ilegivel_segue_o_mtime(self) -> None:
+        self.assertTrue(lib.marker_expired(
+            "lixo", self.NOW, self.NOW - (self.TTL + 1), self.TTL))
+        self.assertFalse(lib.marker_expired(
+            "lixo", self.NOW, self.NOW - 1, self.TTL))
+
+    def test_data_invalida_cai_para_o_mtime(self) -> None:
+        texto = self.marca("data-ruim")
+        self.assertTrue(lib.marker_expired(
+            texto, self.NOW, self.NOW - (self.TTL + 1), self.TTL))
+        self.assertFalse(lib.marker_expired(
+            texto, self.NOW, self.NOW - 1, self.TTL))
+
+    def test_cli_devolve_exit_0_para_orfao_e_1_para_em_curso(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            orfao = Path(tmp) / "orfao"
+            orfao.write_text(self.marca("2020-01-01T00:00:00Z"),
+                             encoding="utf-8")
+            em_curso = Path(tmp) / "em_curso"
+            em_curso.write_text(self.marca("2099-01-01T00:00:00Z"),
+                                encoding="utf-8")
+            self.assertEqual(
+                lib.main(["marker-expired", "--file", str(orfao)]), 0)
+            self.assertEqual(
+                lib.main(["marker-expired", "--file", str(em_curso)]), 1)
