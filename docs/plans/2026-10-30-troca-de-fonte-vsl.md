@@ -5,17 +5,22 @@
 - **Escopo:** o pipeline passa a aceitar **três fontes alternativas** (câmera fixa, drone por RTMP, celular Android por WHIP), uma ativa por vez, trocável por comando, com estado isolado por fonte e observabilidade por fonte.
 - **Fora de escopo:** multi-fonte simultânea, tiler/grade, segundo `nvinfer`/engine b3, iOS, gravação contínua.
 - **Estado:** plano executável. Etapas **E0, E1-T1, E1-T2, E2, E3 (T1/T2) e
-  E4 (T1/T2)** concluídas (E2/E3-T2 com parecer de gate em
+  E4 (T1/T2/T3)** concluídas (E2/E3-T2 com parecer de gate em
   `docs/baselines/2026-10-31-gate-e2-inc006.md` e
-  `docs/baselines/2026-10-31-gate-e3t2.md`; E4-T1/T2 implementado em
-  2026-11-01 e validado localmente em
-  `docs/baselines/2026-11-01-e4-dashboard-multifonte.md`, **sem parecer
-  independente ainda**; **E4-T3** — troca da fonte ativa pela tela — foi
-  adicionado na mesma data, opt-in por `SWITCH_TOKEN` (seção 5 do baseline e
-  emenda no ADR-0006)); **E5→E7 pendentes**. O E3-T2 tem parecer do
+  `docs/baselines/2026-10-31-gate-e3t2.md`; **E4 fechado em 2026-11-01** com
+  gate 8/8 em `docs/baselines/2026-11-01-gate-e4.md` — backend por fonte,
+  frontend e troca da fonte ativa pela tela, esta opt-in por `SWITCH_TOKEN`,
+  com caminho feliz ida-e-volta e **rollback validados no stack real**; o gate
+  é auto-gate, com revisão independente do diff em curso);
+  **E5→E7 pendentes**. O E3-T2 tem parecer do
   `deepstream-tester` (6/6 itens, 2026-10-31); o parecer provisório de um agente
   `general`, usado enquanto o tester estava bloqueado por cota, foi revisado e
   corrigido no mesmo documento.
+
+> **Nota de 2026-11-01:** o caminho do preview ganhou correção própria fora
+> deste plano — INC-007 (`docs/incident-log.md`): erro do `rtspclientsink` no
+> callback do bus congelava o loop GLib e derrubava a telemetria. A análise
+> (e portanto o E4) passou a ficar imune a esse caso.
 
 > **Regra de leitura deste documento:** todo número tem fonte explícita (arquivo, comando ou
 > medição com data). A branch já teve corpo de commit com número errado —
@@ -352,6 +357,13 @@ troca de fonte").
 ---
 
 ### Épico E4 — Telemetria e dashboard multi-fonte
+
+> **Status: CONCLUÍDO em 2026-11-01.** Gate em
+> [`docs/baselines/2026-11-01-gate-e4.md`](../baselines/2026-11-01-gate-e4.md)
+> (8/8 itens): séries isoladas por fonte/sessão, painel da fonte ativa, e troca
+> pela tela com caminho feliz ida-e-volta e rollback validados no stack real
+> (auditoria `origin=dashboard` em `switch.jsonl`). Deploy padrão continua sem
+> o overlay do socket (DIV-004 aberta).
 
 #### E4-T1 — Backend do dashboard por fonte
 
