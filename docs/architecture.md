@@ -43,34 +43,43 @@ navegador ──► http://192.168.59.102:8888/live/     (HLS fallback, latênci
 celular   ──► https://192.168.59.102:8443/capture.html (página de captura; WHIP em https://…:8889/phone/whip)
 ```
 
-> **Acesse o dashboard pelo IP da LAN** (`http://192.168.59.102:8081`), não por
-> `http://localhost:8081`. Dois motivos: (1) as portas do MediaMTX são
-> publicadas amarradas no IP da LAN `${LAN_IP:-192.168.59.102}`, não em
-> `0.0.0.0` (DIV-003, `docs/incident-log.md`), então `127.0.0.1:8889` não
-> responde; (2) `dashboard/frontend/app.js` deriva a URL do WHEP do hostname da
-> página (`location.hostname:8889`), logo abrir o dashboard em `localhost` faz o
-> player apontar para `localhost:8889` e o vídeo fica morto, sem erro na tela.
+> **Acesse o dashboard pelo IP da LAN** (`http://192.168.59.102:8081` no Orin NX,
+> `http://192.168.59.129:8081` no Orin Nano), não por `http://localhost:8081`.
+> Dois motivos: (1) as portas do MediaMTX são publicadas amarradas no `LAN_IP`
+> do host (`${LAN_IP:-192.168.59.102}`), não em `0.0.0.0` (DIV-003,
+> `docs/incident-log.md`), então `127.0.0.1:8889` não responde; (2)
+> `dashboard/frontend/app.js` deriva a URL do WHEP do hostname da página
+> (`location.hostname:8889`), logo abrir o dashboard em `localhost` faz o player
+> apontar para `localhost:8889` e o vídeo fica morto, sem erro na tela.
 >
 > Desde o E0-T4 a porta 8889 é **TLS** (`webrtcEncryption: yes`, certificado de
 > `deploy/certs/`): o navegador que abre o dashboard precisa confiar na CA
-> interna (`deploy/certs/ca.crt`), senão o `fetch` do WHEP falha por
-> certificado. A página de captura do celular usa a 8443 pelo mesmo motivo.
+> interna **daquele host**, senão o `fetch` do WHEP falha por certificado. A
+> página de captura do celular usa a 8443 pelo mesmo motivo.
 >
-> **Requisito de CA na máquina do dashboard (não é do servidor).** O `ca.crt`
-> tem de ser instalado em cada máquina que abre o player:
+> **Requisito de CA na máquina do dashboard (não é do servidor).** Cada Jetson
+> tem a sua CA — `deploy/certs/` é gitignored e o SAN lista o `LAN_IP` do host —
+> e as duas têm o mesmo `CN`, então a CA do NX **não** habilita o dashboard do
+> Nano (INC-008). Pegue o arquivo no **host que serve** e prove que é ele antes
+> de instalar:
 >
 > ```bash
-> sudo cp deploy/certs/ca.crt /usr/local/share/ca-certificates/vsl-ca.crt
-> sudo update-ca-certificates   # Chrome/Edge no Linux
+> ssh <usuario>@192.168.59.129 'docker exec vision-mediamtx cat /certs/ca.crt' > ca.crt
+> openssl x509 -in ca.crt -noout -dates -fingerprint -sha256   # notBefore = data do host
+> curl --cacert ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.129:8889/   # 404 = ok
+> sudo cp ca.crt /usr/local/share/ca-certificates/vsl-ca.crt
+> sudo update-ca-certificates   # "1 added"; "0 added" = arquivo já instalado (CA de outro host)
 > ```
 >
 > Firefox usa store próprio (*Ver certificados* → *Autoridades* → *Importar*);
-> Android, o runbook `docs/runbooks/captura-celular.md` (seção 3). `docker ps`
-> mostrar tudo `healthy` **não** prova que o player negocia: a verificação do
-> certificado é do navegador. `dashboard/frontend/app.js` distingue os dois
-> casos com uma sonda `no-cors` (HTTPS 8889 vs. HTTP 8888) e mostra
-> "certificado do MediaMTX não é confiável neste navegador — instale
-> deploy/certs/ca.crt" em vez de "sem stream do mediamtx".
+> Windows, `certutil -addstore -f Root ca.crt` como administrador; macOS,
+> `security add-trusted-cert`; Android, o runbook
+> `docs/runbooks/captura-celular.md` (seção 3). `docker ps` mostrar tudo
+> `healthy` **não** prova que o player negocia: a verificação do certificado é
+> do navegador. `dashboard/frontend/app.js` distingue os dois casos com uma sonda
+> `no-cors` (HTTPS 8889 vs. HTTP 8888) e mostra "certificado do MediaMTX não é
+> confiável neste navegador — instale deploy/certs/ca.crt" em vez de "sem stream
+> do mediamtx".
 
 - **Saúde derivada** no backend: `healthy` se `interval_metrics` fresco (<90 s) com `fps_processed > 0`; `stale` se telemetria velha; `down` sem telemetria.
 - **Sem persistência além do JSONL**: o histórico dos gráficos é reconstruído replayando o arquivo na partida do backend; SQLite fica para fase futura.

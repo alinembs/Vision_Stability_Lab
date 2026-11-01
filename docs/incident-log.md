@@ -57,6 +57,15 @@
 - **Prevenção:** a regra do INC-006 passa a valer explicitamente para **todo** caminho de evento: nada de GStreamer no thread do loop; mutação de pipeline sempre em worker com teto de tempo. Ponto restante da mesma classe: `periodic_metrics` consulta `queue.get_property("current-level-buffers")` no thread do loop — é leitura, mas ainda pega o lock do elemento; fica registrado como próximo alvo.
 
 
+## INC-008 — CA por host: dashboard do Orin Nano recusava o WHEP com a CA do NX instalada no cliente
+- **Data:** 2026-11-01 (resolvido)
+- **Severidade:** Média (bloqueia o vídeo no navegador; pipeline e telemetria intactos)
+- **Sintoma:** na máquina de teste (`aline-lenovo`), o dashboard de `http://192.168.59.129:8081` mostrava "certificado do MediaMTX não é confiável neste navegador" e nenhum vídeo — com `/api/snapshot` em `healthy` (`fps_in=20`, `fps_preview=20`), `curl -sk https://192.168.59.129:8889/` = `404` e `OPTIONS /live/whep` = `204`.
+- **Causa raiz:** as duas CAs internas têm o **mesmo `CN`** (`Vision Stability Lab Internal CA`) e chaves diferentes. A máquina de teste já tinha a CA do **Orin NX** (gerada em 2026-10-30 16:10, SHA-256 `64:14:E4…`), instalada quando o único dashboard era o do `.102`; o leaf do **Nano** foi emitido em **2026-11-01 19:20 UTC** pela CA gerada no próprio Nano (serial `6F85C7A1…`, SAN `192.168.59.129`). O procedimento então vigente mandava instalar `deploy/certs/ca.crt` sem distinguir **de qual host** vinha o arquivo. Dois sinais ficaram mascarados: `curl --cacert` devolvia `000` (o `-s` esconde o `curl: (60)`), e `update-ca-certificates` respondia `0 added` — porque o certificado já estava no store, justamente por ser o mesmo arquivo do NX.
+- **Resolução:** extrair a CA **do host que serve** (`ssh …@192.168.59.129 'docker exec vision-mediamtx cat /certs/ca.crt' > vsl-nano-ca.crt`), validar antes de instalar (`openssl x509 -dates` com `notBefore` de 2026-11-01 e `curl --cacert … → 404`), instalar no store do cliente e reiniciar o navegador (Chrome só relê o store na inicialização).
+- **Evidência:** antes, `curl --cacert` = `000`; depois da CA correta, `404` e `1 added`; o player negociou o WHEP no path `live`.
+- **Prevenção:** (1) `README.md` — "Ambientes de teste: Orin NX e Orin Nano" e Fase 4 passam a dizer que a CA é **por host**, com o teste `curl --cacert` e o significado de `0 added`; (2) passo explícito de distribuição da CA no **P3** de `docs/plans/2026-11-01-portabilidade-orin-nano.md`; (3) runbook operacional no Notion com a tabela de comparação das duas CAs; (4) regra de leitura: **`CN` igual não identifica CA** — comparar `notBefore`/fingerprint e provar com `curl --cacert` antes de instalar.
+
 ### DIV-001 — Credenciais RTSP hardcoded como default em `pipeline_real.py`
 - **Data:** 2026-08-23
 - **Tipo:** Dívida de segurança (não incidente — ainda sem exposição conhecida)

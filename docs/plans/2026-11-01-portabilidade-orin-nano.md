@@ -156,9 +156,15 @@ foi mudado neste ciclo altera o comportamento dele (padrão de imagem DS 7.1,
 - `deploy/.env` com `LAN_IP=192.168.59.129`; regenerar o certificado do painel
   (`deploy/certs/generate-certs.sh --force` com `VSL_LAN_IP=192.168.59.129`) —
   o certificado atual está amarrado ao IP do NX.
+- **Distribuir a CA do Nano** para cada máquina que abre o dashboard
+  (`ssh …@192.168.59.129 'docker exec vision-mediamtx cat /certs/ca.crt'`,
+  validar com `curl --cacert … → 404`, instalar no store e reiniciar o
+  navegador). A CA do NX **não serve**: mesmo `CN`, chave diferente — INC-008.
 - `make status`, `make sources`, player WHEP no path `live`.
 - **Critério de aceite:** `http://192.168.59.129:8081` abre, fontes listadas,
-  preview toca no dashboard.
+  preview toca no dashboard **na máquina do operador, com a CA do Nano
+  instalada** (não basta `docker ps` saudável: a verificação de certificado é do
+  navegador).
 
 ### P4 — Gate de aceitação (0,5 d)
 
