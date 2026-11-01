@@ -61,6 +61,11 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+      args:
+        # Base do DeepStream, por plataforma (ver `make doctor`). Padrão: o
+        # Orin NX deste host (L4T R36 / DS 7.1). No Orin Nano (JP 7.2 /
+        # DS 9.1) sobrescreva com `DS_BASE_IMAGE=...` no `deploy/.env`.
+        DS_BASE_IMAGE: ${DS_BASE_IMAGE:-nvcr.io/nvidia/deepstream-l4t:7.1-triton-multiarch}
     container_name: vision-stability-app
     restart: unless-stopped
     # `docker-init` (tini) como PID 1. Sem ele o processo do pipeline **é** o
