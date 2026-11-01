@@ -153,6 +153,12 @@ services:
       - "${DASHBOARD_PORT:-8081}:8000"
     environment:
       - TELEMETRY_FILE=/app/data/logs/live.jsonl
+      # Catálogo de fontes (E4-T1): o dashboard lista as três fontes mesmo
+      # antes de a fonte ter telemetria. Path só de leitura; nenhuma
+      # credencial é montada (a câmera referencia RTSP_URI, DIV-001).
+      - SOURCES_CONFIG=/app/deepstream/config/sources.yaml
+      - MTX_HOST=${MTX_HOST:-}
     volumes:
       - ../data:/app/data:ro
       - ../dashboard:/app/dashboard
+      - ../deepstream/config:/app/deepstream/config:ro

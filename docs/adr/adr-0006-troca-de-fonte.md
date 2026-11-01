@@ -237,6 +237,32 @@ APP_CONTAINER=vision-stability-app bash scripts/mem_budget.sh --loop 60 30
 python3 -m pytest deepstream/tests scripts/tests -q
 ```
 
+## Emenda (2026-11-01) — botão de troca no dashboard (E4-T3)
+
+O operador pediu a troca da fonte ativa pela tela. **Nenhuma decisão desta ADR
+muda:**
+
+- **D4 continua sendo o caminho**: `data/config/active_source` + reinício do
+  processo. O endpoint `POST /api/source/switch` do dashboard é um **atalho**
+  para o mesmo script, e reusa as decisões puras do
+  `scripts/switch_source_lib.py` (validação do id, guarda de precedência do
+  `ACTIVE_SOURCE`, `process_boundary` no pós-check, `decide_rollback`).
+- **A3 segue descartada**: não há reconfiguração em runtime. Quando o endpoint
+  é chamado, o processo do pipeline é **reiniciado** — o dashboard não fala com
+  o GStreamer, apenas com o Docker.
+- **D7 continua obrigatório**: o pré-check roda **antes** de escrever o arquivo,
+  dentro do `vision-stability-app` (via `docker exec`), porque o dashboard não
+  tem GStreamer e o ambiente que vale é o do container.
+- **Superfície de ataque**: o endpoint é **opt-in**. Sem `SWITCH_TOKEN` ele
+  responde `503`; com token, exige o header `X-Switch-Token` (`401` se
+  divergir). O socket do Docker só é montado no overlay
+  `deploy/docker-compose.switch.yml` — a exposição está registrada como
+  **DIV-004** em `docs/incident-log.md`.
+
+Consequência aceita: um dashboard comprometido passa a ter acesso
+root-equivalente ao host (socket do Docker). O mitigante é o deploy padrão
+seguir **sem** o overlay e sem token.
+
 ## Referências
 
 - Plano executável: `docs/plans/2026-10-30-troca-de-fonte-vsl.md`
@@ -246,6 +272,7 @@ python3 -m pytest deepstream/tests scripts/tests -q
 - Baseline de memória (inválida como baseline, útil como referência de ordem de grandeza):
   `docs/baselines/2026-10-30-e1t2-baseline.md`
 - Runbook do celular: `docs/runbooks/captura-celular.md`
-- Dívidas e incidentes: `docs/incident-log.md` (DIV-001 resolvida, DIV-003 aberta),
-  `docs/phase5-progress.md:89` (DIV-002, UPS)
+- **Dívidas e incidentes:** `docs/incident-log.md` (DIV-001 resolvida, DIV-003 e
+  **DIV-004** abertas — DIV-004 é o socket do Docker no dashboard, criado pela
+  emenda de 2026-11-01), `docs/phase5-progress.md:89` (DIV-002, UPS)
 - Regra global de containers DeepStream: `~/.config/opencode/AGENTS.md`

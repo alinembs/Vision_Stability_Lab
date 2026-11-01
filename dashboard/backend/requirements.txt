@@ -1,2 +1,10 @@
 fastapi>=0.111
 uvicorn[standard]>=0.30
+# `sources_catalog.py` lê `deepstream/config/sources.yaml` (E4-T1). Já vinha
+# como dependência transitiva do `uvicorn[standard]`; declarada por ser usada
+# diretamente.
+pyyaml>=6
+# `switch_control.DockerRuntime` (E4-T3): SDK do Docker para reiniciar o
+# `vision-stability-app` e rodar a sonda via `docker exec`. Só é usado quando a
+# troca pela tela está ligada; a imagem é a mesma, então o SDK já vai junto.
+docker>=7

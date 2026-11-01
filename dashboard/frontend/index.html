@@ -33,6 +33,26 @@
 
 <main class="grid">
 
+  <section class="panel sources-panel">
+    <div class="panel-head">
+      <span class="eyebrow">fontes · uma ativa por vez</span>
+      <span class="sources-tools">
+        <span class="sources-note">path somente leitura</span>
+        <button id="btn-follow" class="chip" hidden aria-pressed="false">seguir ativa</button>
+        <button id="btn-token" class="chip" hidden>destravar troca</button>
+      </span>
+    </div>
+    <form id="switch-token-form" class="switch-token" hidden>
+      <label class="sr-only" for="switch-token">token da troca de fonte</label>
+      <input id="switch-token" type="password" autocomplete="off" spellcheck="false"
+             placeholder="SWITCH_TOKEN (fica só nesta aba)">
+      <button type="submit" class="chip">ok</button>
+      <button type="button" class="chip" id="switch-token-cancel" aria-label="cancelar">×</button>
+    </form>
+    <p id="switch-banner" class="switch-banner" role="status" aria-live="polite" hidden></p>
+    <div class="sources" id="sources" role="group" aria-label="fontes — ver e ativar"></div>
+  </section>
+
   <section class="panel video-panel">
     <div class="panel-head">
       <span class="eyebrow">vídeo anotado · rtsp → mediamtx → webrtc</span>
@@ -67,13 +87,13 @@
     </div>
   </aside>
 
-  <section class="panel chart-panel">
-    <div class="panel-head"><span class="eyebrow">fps · últimos 30 min</span><span class="chart-max" id="fps-max"></span></div>
+  <section class="panel chart-panel chart-fps-panel">
+    <div class="panel-head"><span class="eyebrow" id="chart-fps-title">fps · últimos 30 min</span><span class="chart-max" id="fps-max"></span></div>
     <canvas id="chart-fps" role="img" aria-label="Gráfico de FPS processado nos últimos 30 minutos"></canvas>
   </section>
 
-  <section class="panel chart-panel">
-    <div class="panel-head"><span class="eyebrow">rss mb · últimos 30 min</span><span class="chart-max" id="rss-max"></span></div>
+  <section class="panel chart-panel chart-rss-panel">
+    <div class="panel-head"><span class="eyebrow" id="chart-rss-title">rss mb · últimos 30 min</span><span class="chart-max" id="rss-max"></span></div>
     <canvas id="chart-rss" role="img" aria-label="Gráfico de memória RSS em megabytes nos últimos 30 minutos"></canvas>
   </section>
 

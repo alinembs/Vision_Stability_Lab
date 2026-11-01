@@ -4,13 +4,18 @@
 - **ADR:** [`docs/adr/adr-0006-troca-de-fonte.md`](../adr/adr-0006-troca-de-fonte.md)
 - **Escopo:** o pipeline passa a aceitar **três fontes alternativas** (câmera fixa, drone por RTMP, celular Android por WHIP), uma ativa por vez, trocável por comando, com estado isolado por fonte e observabilidade por fonte.
 - **Fora de escopo:** multi-fonte simultânea, tiler/grade, segundo `nvinfer`/engine b3, iOS, gravação contínua.
-- **Estado:** plano executável. Etapas **E0, E1-T1, E1-T2, E2 e E3 (T1/T2)**
-  concluídas e commitadas (E2 e E3-T2 com parecer de gate em
+- **Estado:** plano executável. Etapas **E0, E1-T1, E1-T2, E2, E3 (T1/T2) e
+  E4 (T1/T2)** concluídas (E2/E3-T2 com parecer de gate em
   `docs/baselines/2026-10-31-gate-e2-inc006.md` e
-  `docs/baselines/2026-10-31-gate-e3t2.md`); **E4→E7 pendentes**. O E3-T2 tem
-  parecer do `deepstream-tester` (6/6 itens, 2026-10-31); o parecer provisório
-  de um agente `general`, usado enquanto o tester estava bloqueado por cota,
-  foi revisado e corrigido no mesmo documento.
+  `docs/baselines/2026-10-31-gate-e3t2.md`; E4-T1/T2 implementado em
+  2026-11-01 e validado localmente em
+  `docs/baselines/2026-11-01-e4-dashboard-multifonte.md`, **sem parecer
+  independente ainda**; **E4-T3** — troca da fonte ativa pela tela — foi
+  adicionado na mesma data, opt-in por `SWITCH_TOKEN` (seção 5 do baseline e
+  emenda no ADR-0006)); **E5→E7 pendentes**. O E3-T2 tem parecer do
+  `deepstream-tester` (6/6 itens, 2026-10-31); o parecer provisório de um agente
+  `general`, usado enquanto o tester estava bloqueado por cota, foi revisado e
+  corrigido no mesmo documento.
 
 > **Regra de leitura deste documento:** todo número tem fonte explícita (arquivo, comando ou
 > medição com data). A branch já teve corpo de commit com número errado —
@@ -373,6 +378,16 @@ troca de fonte").
 | **Complexidade** | S |
 | **Critério de aceite** | Card "Fonte ativa" com `name`, `id`, `session_epoch` e uptime da sessão; troca de fonte no seletor troca gráfico e eventos; o player WHEP continua apontando para `live` (o preview é sempre o mesmo path, independente da fonte); nada de `localhost` hardcoded (o WHEP deriva de `location.hostname` — `README.md:521-527`) |
 | **Validação** | `node --check dashboard/frontend/app.js` (Node 24.19 presente no host); abrir `http://192.168.59.102:8081` com a CA instalada e conferir 2 sessões de fontes diferentes no seletor |
+
+> **Escopo do seletor (decisão do operador, 2026-11-01):** o cartão escolhe a
+> fonte **vista** (gráfico e eventos) e o **path é somente leitura**. A troca da
+> fonte ativa ganhou o botão "ativar" no **E4-T3** (2026-11-01), que chama
+> `POST /api/source/switch` — um atalho para o **mesmo** caminho do
+> `scripts/switch_source.sh` (D4): pré-check, `active_source`, restart do
+> processo e rollback. Nada de reconfiguração em runtime (A3 segue descartada);
+> o endpoint é opt-in por `SWITCH_TOKEN` e sem token responde `503`. Editar path
+> pela tela fica para etapa posterior, com override próprio, probe antes de
+> aplicar e emenda ao ADR-0006.
 
 ---
 

@@ -9,6 +9,22 @@ const state = {
   events: [],
   filter: "all",
   ws: null,
+  // E4: catálogo de fontes e qual fonte o operador está olhando.
+  // `selectedSource === null` significa "seguir a fonte ativa"; ao clicar num
+  // cartão a seleção fica fixa e os gráficos/eventos passam a ser daquela fonte.
+  sources: [],
+  selectedSource: null,
+  activeSource: null,
+  // E4-T3: troca da fonte ativa pela tela. `token` vive só em `sessionStorage`
+  // (aba atual, sem persistir no disco) e nunca é renderizado.
+  sw: {
+    enabled: false,
+    reason: null,
+    status: null,
+    token: null,
+    pending: null,
+    timer: null,
+  },
 };
 
 const fmtTime = new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -210,6 +226,423 @@ $("btn-play").addEventListener("click", () => {
   player.playing ? player.disconnect() : player.connect();
 });
 
+/* ---------------- fontes (E4) ---------------- */
+
+/**
+ * Ícones das três fontes do ADR-0006 (câmera, drone, celular).
+ *
+ * SVG inline, `currentColor`, sem build e sem dependência externa — a SPA é
+ * vanilla. `default` cobre id novo em `sources.yaml` (a etapa de path
+ * editável vai permitir isso sem tocar aqui).
+ */
+const SOURCE_ICONS = {
+  camera: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="7.5" width="11" height="9" rx="1.6"/><circle cx="8" cy="12" r="2"/><path d="m13.5 10.5 6-2.5v8l-6-2.5"/><path d="M6 16.5V19h4"/></svg>`,
+  drone: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9.4" y="9.4" width="5.2" height="5.2" rx="1.4"/><path d="m9.4 9.4-3-3M14.6 9.4l3-3M9.4 14.6l-3 3M14.6 14.6l3 3"/><circle cx="4.6" cy="4.6" r="2.1"/><circle cx="19.4" cy="4.6" r="2.1"/><circle cx="4.6" cy="19.4" r="2.1"/><circle cx="19.4" cy="19.4" r="2.1"/></svg>`,
+  phone: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.2"/><path d="M10.6 18.6h2.8"/><circle cx="12" cy="5.6" r="0.9"/></svg>`,
+  default: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8.5v7M8.5 12h7"/></svg>`,
+};
+
+function sourceIcon(source) {
+  const haystack = `${source.id || ""} ${source.name || ""}`.toLowerCase();
+  for (const key of Object.keys(SOURCE_ICONS)) {
+    if (key !== "default" && haystack.includes(key)) return SOURCE_ICONS[key];
+  }
+  return SOURCE_ICONS.default;
+}
+
+function sourceKey(record) {
+  return record.source_id || "legacy";
+}
+
+function sourceById(id) {
+  return state.sources.find((s) => s.id === id) || null;
+}
+
+/** Fonte que os gráficos e a lista de eventos estão mostrando. */
+function viewedSourceId() {
+  return state.selectedSource ?? state.activeSource;
+}
+
+/** Path é somente leitura: mostra a URI mascarada ou de qual env ela vem. */
+function sourcePathText(source) {
+  if (source.path) return source.path;
+  if (source.path_env) return `${source.path_env} (deploy/.env)`;
+  return source.path_origin === "telemetria" ? "sem path no config" : "—";
+}
+
+function fmtEpoch(epoch) {
+  if (!epoch) return "—";
+  const date = new Date(epoch);
+  return Number.isNaN(date.getTime()) ? String(epoch) : fmtClock(epoch);
+}
+
+function sourceMetaText(source) {
+  const session = source.session;
+  if (!session) return "sem sessão registrada";
+  const samples = session.points === 1 ? "1 amostra" : `${session.points} amostras`;
+  const sinceMs = session.since ? new Date(session.since).getTime() : NaN;
+  const uptime = Number.isNaN(sinceMs)
+    ? "—"
+    : fmtAgo((Date.now() - sinceMs) / 1000);
+  return `há ${uptime} (desde ${fmtEpoch(session.since)}) · epoch ${fmtEpoch(session.session_epoch)} · ${samples}`;
+}
+
+function renderSources() {
+  const box = $("sources");
+  // o painel é re-renderizado a cada atualização: devolve o foco ao mesmo
+  // cartão para quem navega por teclado não perder a posição
+  const focused = document.activeElement?.dataset?.source;
+  box.innerHTML = "";
+  if (!state.sources.length) {
+    const note = document.createElement("p");
+    note.className = "sources-empty";
+    note.textContent = "catálogo de fontes indisponível — mostrando só o que a telemetria traz";
+    box.appendChild(note);
+    return;
+  }
+
+  const viewed = viewedSourceId();
+  const switching = state.sw.status?.state === "running";
+  const frag = document.createDocumentFragment();
+  for (const source of state.sources) {
+    const card = document.createElement("div");
+    card.className = "source-card";
+    if (source.id === viewed) card.classList.add("selected");
+    if (source.active) card.classList.add("is-active");
+    if (source.enabled === false) card.classList.add("is-disabled");
+
+    // "ver" (gráfico/eventos) é um botão; "ativar" é outro — irmãos, nunca
+    // aninhados: dois alvos distintos e navegáveis por teclado.
+    const view = document.createElement("button");
+    view.type = "button";
+    view.className = "source-view";
+    view.dataset.source = source.id;
+    view.setAttribute("aria-pressed", String(source.id === viewed));
+    view.title = `ver telemetria de ${source.name}`;
+
+    const icon = document.createElement("span");
+    icon.className = "source-icon";
+    icon.innerHTML = sourceIcon(source);
+
+    const body = document.createElement("span");
+    body.className = "source-body";
+
+    const line = document.createElement("span");
+    line.className = "source-line";
+    const name = document.createElement("span");
+    name.className = "source-name";
+    name.textContent = source.name;
+    line.appendChild(name);
+    if (source.active) {
+      const badge = document.createElement("span");
+      badge.className = "source-badge";
+      badge.textContent = "ativa";
+      line.appendChild(badge);
+    }
+
+    const id = document.createElement("span");
+    id.className = "source-id";
+    id.textContent = `${source.id}${source.codec ? ` · ${source.codec}` : ""}`;
+
+    const path = document.createElement("span");
+    path.className = "source-path";
+    path.textContent = sourcePathText(source);
+    path.title = path.textContent;
+
+    const meta = document.createElement("span");
+    meta.className = "source-meta";
+    meta.textContent = sourceMetaText(source);
+    if (source.session?.session_epoch) {
+      meta.title = `session_epoch ${source.session.session_epoch}`;
+    }
+
+    body.append(line, id, path, meta);
+    view.append(icon, body);
+    view.addEventListener("click", () => selectSource(source.id));
+    card.appendChild(view);
+
+    // troca disponível só para fonte do catálogo, habilitada e não ativa
+    const canActivate = state.sw.enabled && source.enabled !== false &&
+      source.in_catalog !== false && !source.active;
+    if (canActivate) {
+      const activate = document.createElement("button");
+      activate.type = "button";
+      activate.className = "source-activate";
+      activate.dataset.activate = source.id;
+      activate.textContent = switching ? "…" : "ativar";
+      activate.disabled = switching;
+      activate.title = `tornar ${source.name} a fonte ativa do pipeline`;
+      activate.addEventListener("click", () => requestSwitch(source));
+      card.appendChild(activate);
+    }
+    frag.appendChild(card);
+  }
+  box.appendChild(frag);
+  if (focused) {
+    box.querySelector(`[data-source="${focused}"]`)?.focus();
+  }
+}
+
+function updateChartTitles() {
+  const source = sourceById(viewedSourceId());
+  const label = source ? source.name : "fonte ativa";
+  $("chart-fps-title").textContent = `fps · ${label} · últimos 30 min`;
+  $("chart-rss-title").textContent = `rss mb · ${label} · últimos 30 min`;
+}
+
+async function refreshSources() {
+  try {
+    state.sources = await fetchJson("/api/sources");
+  } catch {
+    return;  // backend subindo: mantém os cartões que já estão na tela
+  }
+  const active = state.sources.find((s) => s.active);
+  state.activeSource = active ? active.id : null;
+  renderSources();
+  updateChartTitles();
+}
+
+function selectSource(id) {
+  state.selectedSource = id;
+  $("btn-follow").hidden = false;
+  renderSources();
+  updateChartTitles();
+  loadHistory();
+  loadEvents();
+}
+
+$("btn-follow").addEventListener("click", () => {
+  state.selectedSource = null;
+  $("btn-follow").hidden = true;
+  renderSources();
+  updateChartTitles();
+  loadHistory();
+  loadEvents();
+});
+
+/* ---------------- troca da fonte ativa (E4-T3) ----------------
+ *
+ * O dashboard pede a troca; quem troca é o backend, com o mesmo contrato do
+ * `scripts/switch_source.sh`: pré-check obrigatório, `active_source` escrito só
+ * depois de aprovado, restart do processo e rollback se o pós-check não
+ * confirmar. A tela só acompanha o status — nenhuma decisão mora aqui.
+ */
+
+const SWITCH_TOKEN_KEY = "vsl.switchToken";
+
+const SWITCH_DISABLED = {
+  switch_token_ausente:
+    "troca pela tela desligada — defina SWITCH_TOKEN no overlay deploy/docker-compose.switch.yml",
+  switch_sem_repo_montado:
+    "troca pela tela desligada — monte scripts/ e deepstream/ no dashboard (overlay)",
+  switch_enabled_off: "troca pela tela desligada (SWITCH_ENABLED=0)",
+};
+
+function setBanner(kind, text) {
+  const banner = $("switch-banner");
+  if (!text) {
+    banner.hidden = true;
+    banner.textContent = "";
+    return;
+  }
+  banner.hidden = false;
+  banner.className = `switch-banner ${kind}`;
+  banner.textContent = text;
+}
+
+function renderSwitchStatus() {
+  const status = state.sw.status;
+  if (!state.sw.enabled) {
+    setBanner("info", SWITCH_DISABLED[state.sw.reason] || "troca pela tela desligada");
+    return;
+  }
+  if (!status || status.state === "idle") {
+    setBanner("", "");
+    return;
+  }
+  if (status.state === "running") {
+    const step = status.step ? `${status.step} · ` : "";
+    setBanner("running",
+      `trocando para ${status.source_id} — ${step}${status.message || "aguardando"}`);
+    return;
+  }
+  if (status.state === "done") {
+    setBanner("ok", status.message || `fonte ativa agora é ${status.source_id}`);
+    return;
+  }
+  setBanner("error",
+    `troca não concluída (${status.reason || "falha"}) — ${status.message || ""}`
+      .trim());
+}
+
+function updateSwitchUi() {
+  $("btn-token").hidden = !state.sw.enabled || !!state.sw.token;
+  renderSwitchStatus();
+}
+
+function openTokenForm(sourceId) {
+  if (sourceId) state.sw.pending = sourceId;
+  $("switch-token-form").hidden = false;
+  $("switch-token").focus();
+}
+
+function closeTokenForm() {
+  $("switch-token-form").hidden = true;
+  $("switch-token").value = "";
+  state.sw.pending = null;
+}
+
+function forgetToken() {
+  state.sw.token = null;
+  sessionStorage.removeItem(SWITCH_TOKEN_KEY);
+}
+
+async function refreshSwitchInfo() {
+  try {
+    const info = await fetchJson("/api/source/switch");
+    state.sw.enabled = !!info.enabled;
+    state.sw.reason = info.disabled_reason || null;
+    state.sw.status = info.status || null;
+    if (info.status?.state === "running") startSwitchPolling();
+  } catch {
+    return;  // backend subindo: mantém o último estado conhecido
+  }
+  updateSwitchUi();
+  renderSources();
+}
+
+function startSwitchPolling() {
+  if (state.sw.timer) return;
+  state.sw.timer = setInterval(pollSwitch, 2000);
+}
+
+function stopSwitchPolling() {
+  if (!state.sw.timer) return;
+  clearInterval(state.sw.timer);
+  state.sw.timer = null;
+}
+
+async function pollSwitch() {
+  let info;
+  try {
+    info = await fetchJson("/api/source/switch");
+  } catch {
+    return;  // uma falha de rede não cancela o acompanhamento
+  }
+  state.sw.status = info.status || null;
+  renderSwitchStatus();
+  if (state.sw.status?.state === "running") return;
+
+  stopSwitchPolling();
+  renderSources();
+  await refreshSources();
+  if (state.selectedSource === null) {
+    loadHistory();
+    loadEvents();
+  }
+}
+
+async function postSwitch(sourceId) {
+  state.sw.status = { state: "running", step: "pedindo", source_id: sourceId,
+                      message: "pedido enviado" };
+  renderSwitchStatus();
+  renderSources();
+
+  let res;
+  try {
+    res = await fetch("/api/source/switch", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Switch-Token": state.sw.token || "",
+      },
+      body: JSON.stringify({ source_id: sourceId }),
+    });
+  } catch {
+    setBanner("error", "o dashboard não respondeu — a troca não foi pedida");
+    state.sw.status = null;
+    renderSources();
+    return;
+  }
+
+  if (res.status === 401) {
+    forgetToken();
+    updateSwitchUi();
+    setBanner("error", "token recusado — informe o SWITCH_TOKEN de novo");
+    openTokenForm(sourceId);
+    state.sw.status = null;
+    renderSources();
+    return;
+  }
+  if (res.status === 503) {
+    const body = await res.json().catch(() => ({}));
+    const reason = body?.detail?.error || null;
+    state.sw.enabled = false;
+    state.sw.reason = reason;
+    state.sw.status = null;
+    updateSwitchUi();
+    renderSources();
+    return;
+  }
+  if (res.status === 409) {
+    setBanner("error", "já existe uma troca em andamento — acompanhe abaixo");
+    state.sw.status = { state: "running", step: "aguardando", source_id: sourceId,
+                        message: "outra troca em andamento" };
+    renderSwitchStatus();
+    startSwitchPolling();
+    return;
+  }
+  if (!res.ok) {
+    state.sw.status = null;
+    setBanner("error", `não foi possível pedir a troca (HTTP ${res.status})`);
+    renderSources();
+    return;
+  }
+
+  const body = await res.json().catch(() => ({}));
+  state.sw.status = body.status || { state: "running", source_id: sourceId };
+  renderSwitchStatus();
+  renderSources();
+  startSwitchPolling();
+}
+
+async function requestSwitch(source) {
+  if (!state.sw.enabled) return;
+  if (!state.sw.token) {
+    openTokenForm(source.id);
+    setBanner("info", "informe o token para destravar a troca (fica só nesta aba)");
+    return;
+  }
+  const active = sourceById(state.activeSource);
+  const message =
+    `Ativar a fonte "${source.name}"?\n\n` +
+    `Fonte ativa agora: ${active ? active.name : "—"}.\n` +
+    "O pipeline reinicia (30–90 s) e o vídeo fica fora do ar nesse intervalo.\n" +
+    "Se o pré-check não aprovar a fonte, nada é alterado.";
+  if (!confirm(message)) return;
+  await postSwitch(source.id);
+}
+
+$("btn-token").addEventListener("click", () => openTokenForm(null));
+
+$("switch-token-form").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const value = $("switch-token").value.trim();
+  if (!value) return;
+  state.sw.token = value;
+  sessionStorage.setItem(SWITCH_TOKEN_KEY, value);
+  const pending = state.sw.pending;
+  closeTokenForm();          // limpa o campo: o token não fica no DOM
+  updateSwitchUi();
+  renderSources();
+  if (pending) {
+    const source = sourceById(pending) || { id: pending, name: pending };
+    requestSwitch(source);
+  }
+});
+
+$("switch-token-cancel").addEventListener("click", closeTokenForm);
+
 /* ---------------- WebSocket ---------------- */
 
 function wsConnect() {
@@ -250,14 +683,28 @@ function wsConnect() {
 
 /* ---------------- dados ---------------- */
 
+function isViewedRecord(record) {
+  return state.selectedSource === null ||
+    sourceKey(record) === state.selectedSource;
+}
+
 function renderSnapshot(snap) {
-  // snapshot substitui o buffer local (evita duplicação a cada reconexão WS)
-  state.events = [];
-  for (let i = snap.events_recent.length - 1; i >= 0; i--) {
-    pushEvent(snap.events_recent[i], true);
+  if (snap.source) state.activeSource = snap.source.id;
+  refreshSources();
+
+  if (state.selectedSource === null) {
+    // seguindo a fonte ativa: o snapshot manda na lista de eventos
+    state.events = [];
+    for (let i = snap.events_recent.length - 1; i >= 0; i--) {
+      pushEvent(snap.events_recent[i], true);
+    }
+    renderEvents();
+  } else {
+    // fonte fixada: os eventos dela vêm da API, não da execução atual
+    loadEvents();
   }
-  renderEvents();
-  if (snap.latest_metrics) {
+
+  if (snap.latest_metrics && isViewedRecord(snap.latest_metrics)) {
     applyMetrics(snap.latest_metrics);
     drawCharts();
   }
@@ -266,6 +713,21 @@ function renderSnapshot(snap) {
 
 function ingestRecord(record) {
   const event = record.event || "";
+
+  if (event === "source_active") {
+    // troca de fonte ou restart: cartões e, se estiver seguindo, histórico
+    refreshSources();
+    if (state.selectedSource === null) {
+      state.history = [];
+      loadHistory();
+    }
+  }
+
+  // fonte fixada pelo operador: registro de outra fonte não entra em nada
+  if (state.selectedSource !== null && state.selectedSource !== sourceKey(record)) {
+    return;
+  }
+
   if (event === "interval_metrics") {
     applyMetrics(record);
     if (!state.history) state.history = [];
@@ -379,12 +841,18 @@ const EVENT_LABELS = {
   pipeline_playing: "pipeline ativo",
   pipeline_stopped: "pipeline parado",
   preview_branch_ready: "preview pronto",
+  preview_branch_error: "erro no preview",
+  rtsp_reconnect_error: "reconexão rtsp",
+  source_active: "fonte ativa",
   test_duration_reached: "teste concluído",
   interrupted_by_user: "interrompido",
   eos: "fim de fluxo",
 };
 
 function eventClass(event) {
+  // falhas de reconexão e do ramo de preview não são falha do pipeline
+  // (classificação do E3-T2): ficam neutras, sem o vermelho de `pipeline_error`
+  if (event === "rtsp_reconnect_error" || event === "preview_branch_error") return "";
   if (event.includes("error")) return "ev-error";
   if (event === "track_entered") return "ev-entered";
   if (event === "track_exited") return "ev-exited";
@@ -399,6 +867,11 @@ function eventDetail(r) {
     case "area_transition": return `${r.transition} · ${r.active_tracks} track(s)`;
     case "pipeline_error": return r.error || "";
     case "pipeline_warning": return r.warning || "";
+    case "source_active":
+      return `${r.source_name || r.source_id}${r.codec ? ` · ${r.codec}` : ""}`;
+    case "rtsp_reconnect_error":
+    case "preview_branch_error":
+      return r.error || "";
     default:
       return Object.entries(r)
         .filter(([k]) => !["ts", "event"].includes(k))
@@ -527,18 +1000,39 @@ function drawLine(canvasId, values, color, fillColor, maxElId) {
 
 function drawCharts() {
   const rows = state.history || [];
-  if (rows.length < 2) return;
   drawLine("chart-fps", rows.map((m) => m.fps_processed ?? 0),
     "rgb(255,180,84)", "rgba(255,180,84,0.08)", "fps-max");
   drawLine("chart-rss", rows.map((m) => m.rss_mb ?? 0),
     "rgb(110,168,254)", "rgba(110,168,254,0.08)", "rss-max");
+  if (!rows.length) {
+    $("fps-max").textContent = "";
+    $("rss-max").textContent = "";
+  }
 }
 
-/* histórico completo para os gráficos */
+/* histórico completo da fonte vista (30 min) */
 async function loadHistory() {
+  const id = viewedSourceId();
+  const url = id
+    ? `/api/history?minutes=30&source=${encodeURIComponent(id)}`
+    : "/api/history?minutes=30";
   try {
-    state.history = await fetchJson("/api/history?minutes=30");
+    state.history = await fetchJson(url);
     drawCharts();
+  } catch { /* backend ainda subindo */ }
+}
+
+/* eventos da fonte vista (a lista completa daquela fonte, não só do run) */
+async function loadEvents() {
+  const id = viewedSourceId();
+  const url = id
+    ? `/api/events?limit=200&source=${encodeURIComponent(id)}`
+    : "/api/events?limit=200";
+  try {
+    const records = await fetchJson(url);
+    state.events = [];
+    for (const record of records) pushEvent(record, true);
+    renderEvents();
   } catch { /* backend ainda subindo */ }
 }
 
@@ -554,6 +1048,11 @@ window.addEventListener("resize", () => {
 
 /* ---------------- boot ---------------- */
 
+state.sw.token = sessionStorage.getItem(SWITCH_TOKEN_KEY);
+
 wsConnect();
+refreshSources();
+refreshSwitchInfo();
 loadHistory();
 setInterval(loadHistory, 60000);
+setInterval(refreshSources, 30000);

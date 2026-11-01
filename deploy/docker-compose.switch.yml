@@ -1,0 +1,51 @@
+# Overlay **opt-in** da troca de fonte pela tela (E4-T3).
+#
+# O compose padrão (`docker-compose.yml`) sobe o dashboard sem socket do Docker
+# e com `../data` somente leitura — o dashboard só lê telemetria. Este overlay
+# é o que dá ao dashboard o poder de trocar a fonte ativa, e por isso é
+# separado e explícito:
+#
+#   cd deploy
+#   SWITCH_TOKEN="$(openssl rand -hex 24)" \
+#       docker compose -f docker-compose.yml -f docker-compose.switch.yml up -d dashboard
+#
+# Sem ele, `POST /api/source/switch` responde 503 (`switch_token_ausente`) e
+# nada muda no deploy atual.
+#
+# O que o overlay adiciona, e por quê:
+#
+# - **socket do Docker** (`/var/run/docker.sock`): reiniciar o `vision-app` e
+#   rodar a sonda via `docker exec`. É acesso root-equivalente ao host —
+#   DIV-004 em `docs/incident-log.md` registra o risco e a mitigação (token,
+#   só o processo do dashboard, nenhum outro serviço recebe o socket).
+# - **`../data/config` e `../data/logs` graváveis**: `active_source`,
+#   `switch_in_progress` e `switch.jsonl`. Montados como subdiretórios para o
+#   resto de `../data` continuar somente leitura.
+# - **`../scripts` e `../deepstream` em `ro`**: `switch_source_lib.py` (as
+#   decisões da troca), `sources.py` (validação do id) e `source_probe.py`
+#   (pré-check). O dashboard só lê esses arquivos.
+# - **`SWITCH_TOKEN`**: sem ele, o endpoint fica desligado. Use `:-` para o
+#   arquivo continuar válido mesmo sem token definido (feature desligada).
+#
+# Regra global do projeto: **um** container DeepStream por host. A troca
+# reinicia o `vision-stability-app` que já existe; nunca cria outro container.
+services:
+  dashboard:
+    environment:
+      - SWITCH_TOKEN=${SWITCH_TOKEN:-}
+      - SWITCH_ENABLED=${SWITCH_ENABLED:-1}
+      - APP_CONTAINER=vision-stability-app
+      - SWITCH_CONFIG_DIR=/app/data/config
+      - SWITCH_LOG=/app/data/logs/switch.jsonl
+      - TELEMETRY_FILE=/app/data/logs/live.jsonl
+      - SWITCH_PROBE=/app/scripts/probe/source_probe.py
+      - SWITCH_TIMEOUT_S=${SWITCH_TIMEOUT_S:-90}
+      - PRECHECK_SECONDS=${PRECHECK_SECONDS:-5}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # subdiretórios graváveis (o `../data` somente leitura do compose base
+      # continua valendo para o resto)
+      - ../data/config:/app/data/config
+      - ../data/logs:/app/data/logs
+      - ../scripts:/app/scripts:ro
+      - ../deepstream:/app/deepstream:ro
