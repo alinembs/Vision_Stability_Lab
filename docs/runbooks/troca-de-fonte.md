@@ -95,7 +95,11 @@ referência).
 
 ```bash
 printf 'drone\n' > data/config/active_source
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --no-deps vision-app
+# `--force-recreate` é obrigatório: o controle chega ao container por volume,
+# não por configuração — sem ele o compose responde "Running" e o pipeline
+# continua na fonte antiga (D4 exige processo novo).
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml \
+    up -d --no-deps --force-recreate vision-app
 tail -f data/logs/live.jsonl   # conferir source_id e fps_in
 ```
 
