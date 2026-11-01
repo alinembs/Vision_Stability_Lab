@@ -40,6 +40,84 @@ Pendências de confirmação **no próprio Nano** (sem acesso hoje):
 - se as configs de `nvinfer`/`nvtracker` (`deepstream/config/`) seguem válidas
   no DS 9.1.
 
+## Resultado do P0/P1 (medido em 2026-11-01, SSH em `192.168.59.129`)
+
+Inventário (P0) — todas as dúvidas acima respondidas:
+
+| Item | Medido |
+|---|---|
+| Plataforma | L4T **R39.2.1**, `nvidia-jetpack 7.2.1-b49` **instalado** → o `Jetpack: MISSING` do `jtop` é cosmético (não detecta o layout do JP 7) |
+| Runtime | Python **3.12.3**, GStreamer **1.24.2**, Docker 29.8.1, runtime `nvidia` como **default** |
+| Imagens | `deepstream:9.1-samples-multiarch` (16,2 GB) e `deepstream:9.1-triton-multiarch` (28,4 GB) **já presentes** — nenhum pull, nenhum login NGC necessário |
+| Memória/disco | 7,5 GB (6,3 GB disponíveis), 805 GB livres |
+| Portas | 8081/8554/1935/8889 livres |
+
+P1 — imagem e stack:
+
+- `make doctor` **verde** no Nano (detecta DS 9.1 e exige o wheel cp312);
+- `docker compose build vision-app` **verde** com a base consolidada 9.1 e
+  `pyds 1.2.2` (cp312) — o wheel novo está em `deploy/wheels/`;
+- stack sobe (`make up`), dashboard e watchdog ok, **telemetria funciona** no
+  DS 9.1 (GStreamer 1.24.2): `interval_metrics` a cada 30 s e a máquina de
+  reconexão da fonte respondendo — nenhum deadlock de loop (INC-006/INC-007);
+- **decode de hardware funciona**: teste isolado no Nano entregou 20 buffers de
+  H.265 em 1,3 s com `nvv4l2decoder` (NvMMLite abriu), e o RTSP da câmera
+  responde `200 OK` a partir do Nano.
+
+Três defeitos de portabilidade encontrados e **corrigidos** neste ciclo:
+
+1. **`nvtracker` com caminho fixo do DS 7.1** (`/opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_nvmultiobjecttracker.so`):
+   no DS 9.1 o `dlopen` falha, o `nvtracker` não vai a PLAYING e o
+   `pipeline.set_state()` devolve **FAILURE** — mas o pipeline logava
+   `pipeline_playing` e ficava com `fps_in=0` para sempre. Corrigido com o
+   caminho **sem versão** (symlink estável nas duas bases, sobrescrevível por
+   `NVTRACKER_LL_LIB`) e com `pipeline_state_failed` quando o `set_state`
+   falha.
+2. **Sem NVENC no Orin Nano** (`/dev/v4l2-nvenc` não existe): `nvv4l2h264enc`
+   não instancia e o **boot morria** (`startup_failed`). Corrigido com escolha
+   do encoder do preview por disponibilidade (hardware → software), pulando o
+   hardware quando o device falta, e erro explícito se não houver nenhum.
+3. **`privileged: true` no DS 9.1 esconde o encoder**: com `--privileged` o
+   `gst-inspect-1.0 nvv4l2h264enc` **não** encontra o elemento; sem o flag,
+   encontra (mas o device continua inexistente no Nano). Ainda **sem decisão**:
+   tornar `privileged` configurável por plataforma (`APP_PRIVILEGED`) quando o
+   preview for habilitado no Nano.
+
+Observação de plataforma: a imagem DS 9.1 **não traz encoder de software**
+(`x264enc` e `openh264enc` ausentes, `libgstx264.so` não existe mesmo com
+`gstreamer1.0-plugins-ugly` instalado). No Orin Nano o preview fica
+`PREVIEW_ENABLED=0`; habilitá-lo exige instalar o encoder de software na imagem
+(ou aceitar o custo de CPU, que compete com a inferência).
+
+### Bloqueio atual do P2
+
+`data/parser/libnvdsinfer_custom_impl_Yolo.so` é um **binário sem fonte** no
+repositório, compilado contra **CUDA 12** (NX). No Nano (CUDA **13.0**):
+
+```
+ERROR: Could not open lib: /app/data/parser/libnvdsinfer_custom_impl_Yolo.so,
+       error string: libcudart.so.12: cannot open shared object file
+nvinfer: Error in NvDsInferContextImpl::initialize(): Could not open custom lib
+→ pipeline_state_failed (exit 1)
+```
+
+Opções (decisão pendente, nenhuma delas é "só config"):
+
+1. **Trazer o fonte do parser para o repo e compilar na imagem** (recomendado):
+   o parser deixa de ser binário órfão, passa a ser construído por plataforma e
+   ganha proveniência/licença registradas. Custo: escolher a origem
+   (`NVIDIA-AI-IOT/deepstream_reference_apps` ou `marcoslucianops/DeepStream-Yolo`,
+   compatível com DS 9.x), revisar e validar a saída do `NvDsInferParseYolo`.
+2. Usar o backend **Triton YOLO** que já vem na imagem 9.1
+   (`TritonOnnxYolo`): elimina o parser custom, mas troca `nvinfer` por
+   `nvinferserver` + repositório de modelos Triton — mudança de arquitetura.
+3. Reexportar o modelo com **EfficientNMS** (end-to-end) e usar o parser
+   nativo: muda o ONNX (e o engine) e a pós-processagem.
+
+Enquanto isso, o **NX segue sendo o ambiente de produção** do VSL: nada do que
+foi mudado neste ciclo altera o comportamento dele (padrão de imagem DS 7.1,
+`ll-lib-file` versionless válido nas duas bases, encoder de hardware presente).
+
 ## Tarefas
 
 ### P0 — Inventário do Nano (0,5 d)

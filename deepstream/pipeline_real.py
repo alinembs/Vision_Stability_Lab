@@ -199,6 +199,23 @@ PREVIEW_VERIFY_MIN_FRAMES = int(
 # Tentativas antes de desistir. Recriar o ramo instancia NVENC a cada vez —
 # churn de encoder no Jetson precisa de teto.
 PREVIEW_MAX_ATTEMPTS = int(os.environ.get("PREVIEW_MAX_ATTEMPTS", "6"))
+# Encoders do preview, em ordem de preferência: hardware primeiro e software
+# como caminho de bancada. O Orin Nano **não tem NVENC** (`/dev/v4l2-nvenc`
+# não existe): `nvv4l2h264enc` devolve `None` na criação e o preview cai para
+# `x264enc` (CPU) em vez de derrubar o boot do pipeline (medido em 2026-11-01).
+PREVIEW_ENCODERS = (
+    ("nvv4l2h264enc",
+     {"bitrate": PREVIEW_BITRATE,
+      "idrinterval": PREVIEW_IDR_INTERVAL,
+      "insert_sps_pps": True},
+     "video/x-raw(memory:NVMM),format=NV12"),
+    ("x264enc",
+     {"bitrate": max(1, PREVIEW_BITRATE // 1000),      # kbps no x264enc
+      "key_int_max": PREVIEW_IDR_INTERVAL,
+      "tune": "zerolatency",
+      "speed_preset": "ultrafast"},
+     "video/x-raw,format=I420"),
+)
 # Ritmo do timer que despacha o trabalho do ramo de preview para uma thread
 # própria e observa o resultado. Nada de GStreamer do preview no thread do loop
 # GLib: medido em 2026-11-01, `rtspclientsink.set_state(NULL)` chamado no
@@ -389,8 +406,18 @@ class VisionPipeline:
 
         tracker_config = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                       "config", "config_tracker_IOU.yml")
+        # Lib de baixo nível do tracker: o caminho **sem versão**
+        # (`/opt/nvidia/deepstream/deepstream/lib`) é symlink estável nas duas
+        # bases — com `deepstream-7.1` fixo o `dlopen` falha no DeepStream 9.1
+        # e o `nvtracker` derruba o `set_state(PLAYING)` do pipeline inteiro
+        # (medido no Orin Nano em 2026-11-01). Sobrescreva com
+        # `NVTRACKER_LL_LIB` se a base mudar de layout.
+        ll_lib = os.environ.get(
+            "NVTRACKER_LL_LIB",
+            "/opt/nvidia/deepstream/deepstream/lib/"
+            "libnvds_nvmultiobjecttracker.so")
         self.tracker = self._make("nvtracker",
-                                  ll_lib_file="/opt/nvidia/deepstream/deepstream-7.1/lib/libnvds_nvmultiobjecttracker.so",
+                                  ll_lib_file=ll_lib,
                                   ll_config_file=tracker_config,
                                   tracker_width=640, tracker_height=384,
                                   gpu_id=0, display_tracking_id=0)
@@ -693,6 +720,44 @@ class VisionPipeline:
         return True
 
     # -- ramo de preview: construção, queda e retomada -----------------------
+    def _make_preview_encoder(self):
+        """Escolhe o encoder H.264 do preview que existe nesta base.
+
+        Hardware primeiro (`nvv4l2h264enc`); depois software (`x264enc`), que é
+        o caminho do **Orin Nano** — a placa não tem NVENC e não expõe
+        `/dev/v4l2-nvenc`, então `gst_element_factory_make` devolve `None`
+        (medido em 2026-11-01: o boot morria com "Falha ao criar elemento
+        GStreamer: nvv4l2h264enc"). Com esta escolha o preview funciona nos
+        dois hardwares e uma base sem encoder nenhum vira erro explícito, não
+        um crash de boot.
+
+        Returns:
+            `(elemento, caps)`: o encoder pronto e a caps que combina com ele
+            (NVMM/NV12 no hardware; memória de sistema no software).
+        """
+        for factory, props, caps in PREVIEW_ENCODERS:
+            if factory == "nvv4l2h264enc" and not os.path.exists(
+                    "/dev/v4l2-nvenc"):
+                # Sem o device de NVENC (Orin Nano) o elemento até é criado,
+                # mas falha no PLAYING e queima tentativa de retomada à toa.
+                continue
+            element = Gst.ElementFactory.make(factory, None)
+            if element is None:
+                continue
+            try:
+                for key, value in props.items():
+                    element.set_property(key.replace("_", "-"), value)
+            except Exception:  # noqa: BLE001 — fábrica de outra versão
+                logger.exception("encoder %s recusou as propriedades", factory)
+                continue
+            log_event("preview_encoder_selected", factory=factory, caps=caps,
+                      bitrate_preview=PREVIEW_BITRATE)
+            return element, caps
+        raise RuntimeError(
+            "nenhum encoder H.264 disponível para o preview "
+            f"(tentados: {[f for f, _p, _c in PREVIEW_ENCODERS]}); "
+            "use PREVIEW_ENABLED=0 nesta plataforma")
+
     def _make_preview_elements(self):
         """Cria os elementos do ramo de preview; devolve a cadeia em ordem.
 
@@ -707,16 +772,14 @@ class VisionPipeline:
         self.queue_preview = self._make(
             "queue", **{"leaky": 2, "max_size_buffers": 1,
                         "max_size_bytes": 0, "max_size_time": 0})
+        # `nvvideoconvert` serve os dois caminhos: NVMM/NV12 para o encoder de
+        # hardware e memória de sistema para o de software.
         self.videoconv = self._make("nvvideoconvert")
+        self.encoder, caps = self._make_preview_encoder()
         # gst_element_set_property não parseia a string de caps;
         # é preciso um objeto Gst.Caps.
         self.enc_caps = self._make("capsfilter")
-        self.enc_caps.set_property(
-            "caps",
-            Gst.Caps.from_string("video/x-raw(memory:NVMM),format=NV12"))
-        self.encoder = self._make(
-            "nvv4l2h264enc", bitrate=PREVIEW_BITRATE,
-            idrinterval=PREVIEW_IDR_INTERVAL, insert_sps_pps=True)
+        self.enc_caps.set_property("caps", Gst.Caps.from_string(caps))
         self.h264parse = self._make("h264parse")
         if PREVIEW_TRANSPORT == "rtsp":
             # Fase 4 — publica no MediaMTX via RTSP RECORD
@@ -1185,9 +1248,25 @@ class VisionPipeline:
             # despacha e observa (ver `preview_control.py`).
             GLib.timeout_add(PREVIEW_STEP_MS, self._preview_step)
 
-        self.pipeline.set_state(Gst.State.PLAYING)
+        # O retorno do `set_state` importa: FAILURE significa que um elemento
+        # não passou a PLAYING (ex.: `nvtracker` com `ll-lib-file` inválido na
+        # base de imagem) e o pipeline fica "rodando" sem nunca receber frame.
+        # Medido em 2026-11-01 no Orin Nano: sem esta checagem o log dizia
+        # `pipeline_playing` e a telemetria ficava em `fps_in=0` para sempre,
+        # sem nenhum erro visível.
+        state_ret = self.pipeline.set_state(Gst.State.PLAYING)
+        if state_ret == Gst.StateChangeReturn.FAILURE:
+            # O elemento culpado publica ERROR no bus; o callback do bus já
+            # registra (`pipeline_error`), mas o processo não pode seguir.
+            log_event("pipeline_state_failed", codec=self.codec,
+                      source_id=self.source.id,
+                      action="pipeline não chegou a PLAYING; encerrando para "
+                             "o compose reiniciar com a causa no log")
+            self._teardown()
+            return EXIT_PIPELINE_ERROR
         log_event("pipeline_playing", codec=self.codec,
-                  source_id=self.source.id)
+                  source_id=self.source.id,
+                  state_return=getattr(state_ret, "value_nick", str(state_ret)))
 
         try:
             if self._shutdown_pending:
