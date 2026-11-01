@@ -17,7 +17,11 @@ O ramo de preview é descartável: o vídeo anotado nunca bloqueia a
 inferência (queue leaky com 1 buffer de folga). Falha nele — erro de bus ou
 EOS — derruba só o ramo de preview (`preview_branch_failed`) e tenta
 religá-lo com backoff; a análise segue. A classificação dessa decisão está
-em `bus_classifier.py` (puro, testável sem DeepStream).
+em `bus_classifier.py` (puro, testável sem DeepStream), e a derrubada/retomada
+também **não** roda no thread do loop: `preview_control.py` decide e
+`_preview_step` despacha o trabalho de GStreamer para uma thread própria, com
+teto de tempo (INC-007: `rtspclientsink.set_state(NULL)` no callback do bus
+congelava o loop quando o MediaMTX estava fora do ar).
 EOS (ou erro) do `rtspsrc` também não encerra o processo: reconecta a fonte.
 A reconexão é **agendada**, nunca executada no callback do bus: aquele
 callback roda no thread do loop GLib, e uma chamada de GStreamer que espere um
@@ -86,6 +90,7 @@ from bus_classifier import (  # noqa: E402
     classify_bus_message)
 from graceful_shutdown import GracefulShutdown, signal_name  # noqa: E402
 from health_metrics import HealthMetricsCollector  # noqa: E402
+import preview_control  # noqa: E402  (puro: sem gi/pyds)
 from source_budget import SourceReconnectBudget  # noqa: E402
 from source_reconnect import (  # noqa: E402  (puro: sem gi/pyds)
     STEP_GIVE_UP, STEP_NONE, STEP_RESUMED, STEP_RETRY, STEP_START, STEP_STOP,
@@ -194,6 +199,18 @@ PREVIEW_VERIFY_MIN_FRAMES = int(
 # Tentativas antes de desistir. Recriar o ramo instancia NVENC a cada vez —
 # churn de encoder no Jetson precisa de teto.
 PREVIEW_MAX_ATTEMPTS = int(os.environ.get("PREVIEW_MAX_ATTEMPTS", "6"))
+# Ritmo do timer que despacha o trabalho do ramo de preview para uma thread
+# própria e observa o resultado. Nada de GStreamer do preview no thread do loop
+# GLib: medido em 2026-11-01, `rtspclientsink.set_state(NULL)` chamado no
+# callback do bus ficou preso no mutex do elemento (sink que falhou em
+# conectar, MediaMTX fora do ar) e o loop parou de despachar timers e
+# `SIGTERM` — `interval_metrics` sumia e o restart do watchdog virava
+# `SIGKILL`. Ver `preview_control.py`.
+PREVIEW_STEP_MS = int(os.environ.get("PREVIEW_STEP_MS", "250"))
+# Teto de uma operação de GStreamer do ramo (derrubar ou recriar). Estourado
+# o teto, o preview é dado como perdido e a análise segue publicando métricas.
+PREVIEW_OP_TIMEOUT_S = float(
+    os.environ.get("PREVIEW_OP_TIMEOUT_S", "10"))
 
 # Códigos de saída do processo (observabilidade via docker inspect).
 EXIT_OK = 0
@@ -332,15 +349,24 @@ class VisionPipeline:
         self._reconnect_error_logged = False
 
         # Ramo de preview (descartável): estado da queda e da retomada.
+        # A decisão é pura (`preview_control.py`); as mutações de GStreamer
+        # rodam numa thread própria, despachadas por `_preview_step`.
+        self.preview = preview_control.PreviewBranchController(
+            retry_base_s=PREVIEW_RETRY_BASE_S,
+            retry_max_s=PREVIEW_RETRY_MAX_S,
+            verify_s=PREVIEW_VERIFY_S,
+            verify_min_frames=PREVIEW_VERIFY_MIN_FRAMES,
+            max_attempts=PREVIEW_MAX_ATTEMPTS,
+            op_timeout_s=PREVIEW_OP_TIMEOUT_S)
         self._preview_chain = ()
         self._preview_element_names = frozenset()
         self._preview_tee_pad = None
-        self._preview_failed = False
-        self._preview_pending = False
-        self._preview_exhausted = False
-        self._preview_retry_attempt = 0
-        self._preview_retry_at = 0.0
-        self._preview_total_at_retry = 0
+        # Operação em voo: nome, evento de conclusão e erro (se houve).
+        self._preview_op = None
+        self._preview_op_done = threading.Event()
+        self._preview_op_done.set()
+        self._preview_op_error = None
+        self._preview_op_started_at = 0.0
 
         self.pipeline = Gst.Pipeline.new("vision-phase1")
 
@@ -769,101 +795,132 @@ class VisionPipeline:
             if hasattr(self, name):
                 setattr(self, name, None)
 
-    def _preview_retry_delay(self):
-        delay = PREVIEW_RETRY_BASE_S * (2 ** min(self._preview_retry_attempt, 5))
-        return min(delay, PREVIEW_RETRY_MAX_S)
-
-    def _schedule_preview_retry(self):
-        delay = self._preview_retry_delay()
-        self._preview_retry_at = time.monotonic() + delay
-        log_event("preview_branch_retry_scheduled", delay_s=int(delay),
-                  attempt=self._preview_retry_attempt)
-        if self._preview_retry_attempt >= PREVIEW_MAX_ATTEMPTS:
-            self._preview_exhausted = True
-            log_event("preview_branch_unavailable",
-                      attempts=self._preview_retry_attempt,
-                      action="preview só volta com reinício do pipeline "
-                             "(docker restart vision-stability-app); "
-                             "a análise segue sem ele")
-
     def _drop_preview_branch(self, element, error):
-        """Derruba SÓ o ramo de preview; a análise segue intocada.
+        """Pede a derrubada do ramo de preview — **só marca estado e loga**.
 
-        Corta o tee (o ramo deixa de receber buffers) e descarta a cadeia.
-        Sem isso, o erro do `rtspclientsink` encerrava o pipeline inteiro e
-        levava a análise junto (E-A).
+        Roda no thread do loop GLib (callback do bus). A derrubada em si
+        (`unlink`, `release_request_pad`, `set_state(NULL)`, `remove`) é
+        trabalho de GStreamer e é executada por `_preview_step` numa thread
+        própria. Motivo medido em 2026-11-01: `rtspclientsink.set_state(NULL)`
+        aqui ficou preso no mutex do elemento enquanto o caminho de erro do
+        sink (MediaMTX fora do ar) não liberava, e o loop parou de despachar
+        timers e `SIGTERM` — `interval_metrics` sumia e o `docker restart` do
+        watchdog virava `SIGKILL`. Mesma classe do INC-006 (`source_reconnect`).
         """
         if not PREVIEW_ENABLED:
             return
-        if self._preview_failed:
+        kind = self.preview.request_drop()
+        if kind == preview_control.DROP_IGNORED:
+            return
+        if kind == preview_control.DROP_RETRY:
             # tentativa de retomada falhou de novo: registra e reagenda com
             # backoff (a falha original não é repetida em preview_branch_failed)
-            self._preview_retry_attempt += 1
             log_event("preview_branch_retry_failed", element=element,
-                      error=error, attempt=self._preview_retry_attempt)
+                      error=error, attempt=self.preview.attempts)
         else:
             log_event("preview_branch_failed", element=element, error=error,
                       action="ramo de preview derrubado; análise segue",
                       fps_processed=self.fps_proc.fps)
-        self._preview_failed = True
-        self._preview_pending = False
-        self._detach_preview_branch()
-        self._schedule_preview_retry()
 
     def _retry_preview_branch(self):
-        """Recria o ramo de preview inteiro e o religa ao tee."""
-        attempt = self._preview_retry_attempt + 1
-        try:
-            self._install_preview_branch(self._make_preview_elements(),
-                                         start=True)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("falha ao recriar o ramo de preview")
-            self._preview_retry_attempt = attempt
-            log_event("preview_branch_retry_failed", error=str(exc),
-                      attempt=attempt)
-            self._detach_preview_branch()
-            self._schedule_preview_retry()
-            return
-        self._preview_pending = True
-        self._preview_total_at_retry = self.fps_preview.total
-        self._preview_retry_at = time.monotonic()
-        log_event("preview_branch_retry", attempt=attempt)
+        """Recria o ramo de preview inteiro e o religa ao tee.
+
+        Alvo do worker de `_preview_step` (nunca o thread do loop): levanta
+        exceção em falha, que o timer registra como tentativa gasta.
+        """
+        self._install_preview_branch(self._make_preview_elements(),
+                                     start=True)
+
+    def _start_preview_op(self, name, target):
+        """Executa uma mutação de GStreamer do preview fora do thread do loop.
+
+        O loop só observa `_preview_op_done` e o teto de tempo: operação que
+        não retorna vira `preview_branch_unavailable`, nunca loop parado.
+        """
+        done = threading.Event()
+        self._preview_op = name
+        self._preview_op_done = done
+        self._preview_op_error = None
+        self._preview_op_started_at = time.monotonic()
+
+        def worker():
+            error = None
+            try:
+                target()
+            except Exception as exc:  # noqa: BLE001
+                error = f"{type(exc).__name__}: {exc}"
+                logger.exception("operação do preview falhou (%s)", name)
+            finally:
+                self._preview_op_error = error
+                done.set()
+
+        threading.Thread(target=worker, name=f"preview-{name}",
+                         daemon=True).start()
+
+    def _preview_step(self):
+        """Timer: despacha e observa o trabalho do ramo de preview.
+
+        O thread do loop **não** executa GStreamer do preview — só decide
+        (`preview_control.PreviewBranchController`) e, quando a operação
+        termina, registra e agenda. Retorno True mantém o timer ativo.
+        """
+        if not PREVIEW_ENABLED:
+            return False
+        if self.preview.exhausted:
+            # Preview dado como perdido nesta sessão: desliga o timer (a
+            # análise, as métricas e o `SIGTERM` já não dependem dele).
+            return False
+        now = time.monotonic()
+        action = self.preview.step(
+            now,
+            op_done=self._preview_op_done.is_set(),
+            frames_total=self.fps_preview.total,
+            op_error=self._preview_op_error)
+        if action == preview_control.ACTION_DETACH:
+            self._start_preview_op("detach", self._detach_preview_branch)
+        elif action == preview_control.ACTION_INSTALL:
+            self._start_preview_op("install", self._retry_preview_branch)
+        elif action == preview_control.ACTION_ARMED:
+            log_event("preview_branch_retry_scheduled",
+                      delay_s=int(self.preview.delay_s(now)),
+                      attempt=self.preview.attempts)
+        elif action == preview_control.ACTION_RETRIED:
+            log_event("preview_branch_retry",
+                      attempt=self.preview.attempts + 1)
+        elif action == preview_control.ACTION_RETRY_FAILED:
+            log_event("preview_branch_retry_failed",
+                      error=self.preview.last_error,
+                      attempt=self.preview.attempts)
+        elif action == preview_control.ACTION_GIVE_UP:
+            log_event("preview_branch_unavailable",
+                      attempts=self.preview.attempts,
+                      reason=self.preview.give_up_reason,
+                      action="preview só volta com reinício do pipeline "
+                             "(docker restart vision-stability-app); "
+                             "a análise segue sem ele")
+        return True
 
     def _check_preview_alive(self):
-        """Timer 5 s: retoma o ramo de preview derrubado (com backoff).
+        """Timer 5 s: confere se a retomada do preview voltou a dar frames.
 
         A retomada só é dada como boa quando frames de preview de fato
         chegam: religar os elementos e receber dois buffers não significa que
-        o `rtspclientsink` voltou a publicar.
+        o `rtspclientsink` voltou a publicar. Quem derruba/recria é o worker de
+        `_preview_step`; aqui só se verifica o resultado.
         Retorno True mantém o timer GLib ativo.
         """
-        if not PREVIEW_ENABLED or not self._preview_failed:
+        if not PREVIEW_ENABLED:
             return True
-        now = time.monotonic()
-        if self._preview_pending:
-            frames = self.fps_preview.total - self._preview_total_at_retry
-            if frames >= PREVIEW_VERIFY_MIN_FRAMES:
-                self._preview_failed = False
-                self._preview_pending = False
-                self._preview_retry_attempt = 0
-                log_event("preview_branch_restored",
-                          frames_since_retry=frames,
-                          elapsed_s=round(now - self._preview_retry_at, 1))
-            elif now - self._preview_retry_at >= PREVIEW_VERIFY_S:
-                # religou, nenhum erro novo no bus, mas nenhum frame saiu:
-                # conta como tentativa falha e reagenda
-                self._preview_pending = False
-                self._preview_retry_attempt += 1
-                log_event("preview_branch_retry_failed",
-                          error="sem frame de preview após religar",
-                          frames_since_retry=frames,
-                          attempt=self._preview_retry_attempt)
-                self._detach_preview_branch()
-                self._schedule_preview_retry()
-            return True
-        if self._preview_exhausted or now < self._preview_retry_at:
-            return True
-        self._retry_preview_branch()
+        outcome = self.preview.verify(time.monotonic(), self.fps_preview.total)
+        if outcome == preview_control.VERIFY_RESTORED:
+            log_event("preview_branch_restored",
+                      frames_since_retry=self.preview.last_frames_since_retry,
+                      elapsed_s=round(self.preview.last_elapsed_s, 1))
+        elif outcome == preview_control.VERIFY_FAILED:
+            log_event("preview_branch_retry_failed",
+                      error=self.preview.last_error,
+                      frames_since_retry=self.preview.last_frames_since_retry,
+                      attempt=self.preview.attempts)
         return True
 
     # -- fonte (rtspsrc) -----------------------------------------------------
@@ -1124,6 +1181,9 @@ class VisionPipeline:
         GLib.timeout_add(SOURCE_RECONNECT_STEP_MS, self._reconnect_step)
         if PREVIEW_ENABLED:
             GLib.timeout_add_seconds(5, self._check_preview_alive)
+            # Trabalho do ramo de preview em thread própria: o loop só
+            # despacha e observa (ver `preview_control.py`).
+            GLib.timeout_add(PREVIEW_STEP_MS, self._preview_step)
 
         self.pipeline.set_state(Gst.State.PLAYING)
         log_event("pipeline_playing", codec=self.codec,
