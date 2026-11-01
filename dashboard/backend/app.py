@@ -437,7 +437,13 @@ def _require_switch_token(token: Optional[str]) -> None:
     reason = switch_feature_reason()
     if reason is not None:
         raise HTTPException(status_code=503, detail={"error": reason})
-    if not token or not secrets.compare_digest(token.strip(), SWITCH_TOKEN):
+    # `compare_digest` levanta TypeError para `str` não-ASCII: um header
+    # malformado derrubava a requisição com 500 em vez de 401. Comparar bytes
+    # resolve sem afrouxar a comparação em tempo constante.
+    if not token or not secrets.compare_digest(
+            token.strip().encode("utf-8", "surrogateescape"),
+            SWITCH_TOKEN.encode("utf-8", "surrogateescape")):
+        logger.warning("tentativa de troca com token inválido recusada")
         raise HTTPException(status_code=401, detail={"error": "token_invalido"})
 
 
@@ -490,12 +496,20 @@ async def api_switch_status():
     switcher = switch_state.get("switcher")
     status = (switcher.status.as_dict() if switcher is not None
               else switch_control.SwitchStatus().as_dict())
+    # Troca em andamento por outro processo (`switch_source.sh`): o operador
+    # precisa saber que o 409 vem do mutex entre processos, não de bug.
+    foreign = switcher.foreign_marker() if switcher is not None else None
     return {
         "enabled": reason is None,
         "disabled_reason": reason,
         "container": switch_control.APP_CONTAINER,
         "timeout_s": switch_control.TIMEOUT_S,
         "status": status,
+        "in_progress_by": ({
+            "origin": foreign.get("origin") or "script",
+            "to": foreign.get("to"),
+            "expires_at": foreign.get("expires_at"),
+        } if foreign else None),
     }
 
 

@@ -271,6 +271,41 @@ class SwitcherPrecheckTest(SwitcherTestBase):
         record = self.audit()[0]
         self.assertEqual((record["result"], record["probe"]), ("FAIL", "failed"))
 
+    def test_motivo_cru_da_sonda_e_normalizado(self) -> None:
+        # H2/M2: o motivo cru (`pipeline_error: ...`) vira o vocabulário do
+        # switch, igual ao script — senão consulta/alertar por
+        # `precheck:no_frames_on_path` não vê trocas vindas da tela.
+        runtime = FakeRuntime(
+            self.make_env(),
+            probe=switch_control.ProbeResult(
+                False, "pipeline_error: Could not open resource (7)"))
+        switcher = self.make_switcher(runtime)
+
+        switcher.start("drone")
+        switcher.wait(timeout=10)
+
+        self.assertEqual(switcher.status.reason, "precheck:no_frames_on_path")
+        self.assertEqual(self.audit()[0]["reason"], "precheck:no_frames_on_path")
+        self.assertIn("Could not open resource",
+                      switcher.status.message)
+
+    def test_sonda_que_estoura_o_teto_nao_pende_a_troca(self) -> None:
+        # H4: sonda pendurada não pode deixar o `Switcher` travado (409 eterno).
+        runtime = FakeRuntime(
+            self.make_env(), probe=switch_control.ProbeResult(False, "timeout"))
+        switcher = self.make_switcher(runtime)
+
+        switcher.start("drone")
+        switcher.wait(timeout=10)
+
+        self.assertEqual(switcher.status.state, "failed")
+        self.assertEqual(switcher.status.reason, "precheck:timeout")
+        self.assertEqual(runtime.restarts, [])
+        self.assertFalse(switcher._lock.locked(), "lock preso após timeout")
+        # e a próxima troca é aceita
+        switcher.start("drone")
+        switcher.wait(timeout=10)
+
     def test_probe_uses_container_exec_not_host(self) -> None:
         runtime = FakeRuntime(self.make_env())
         switcher = self.make_switcher(runtime)
@@ -279,6 +314,178 @@ class SwitcherPrecheckTest(SwitcherTestBase):
         switcher.wait(timeout=10)
 
         self.assertEqual(runtime.probes, [("vision-stability-app", "drone")])
+
+
+class ProbeExecTest(unittest.TestCase):
+    """`DockerRuntime.probe`: teto de tempo via `timeout` dentro do container."""
+
+    class _Result:
+        def __init__(self, exit_code: int, output: bytes = b"") -> None:
+            self.exit_code = exit_code
+            self.output = output
+
+    class _Container:
+        def __init__(self, results) -> None:
+            self.results = list(results)
+            self.calls: list[list[str]] = []
+
+        def exec_run(self, argv, demux=False):
+            self.calls.append(list(argv))
+            return self.results.pop(0)
+
+    class _Client:
+        def __init__(self, container) -> None:
+            self._container = container
+            self.containers = self
+            self.attrs_env = {}
+
+        def get(self, name):
+            return self._container
+
+    def _runtime(self, results, timeout_s: float = 20.0):
+        container = self._Container(results)
+        runtime = switch_control.DockerRuntime(
+            client=self._Client(container), probe_timeout_s=timeout_s)
+        return runtime, container
+
+    def test_sonda_roda_sob_timeout_do_coreutils(self) -> None:
+        runtime, container = self._runtime(
+            [self._Result(0, b"ok=1\nreason=ok\n")])
+        result = runtime.probe("vision-stability-app", "drone")
+
+        self.assertTrue(result.ok)
+        self.assertEqual(container.calls[0][0], "timeout")
+        self.assertEqual(container.calls[0][1], "20")
+
+    def test_exit_124_e_reportado_como_timeout(self) -> None:
+        runtime, _ = self._runtime([self._Result(124)])
+        result = runtime.probe("vision-stability-app", "drone")
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.reason, "timeout")
+
+    def test_sem_timeout_na_imagem_repete_sem_o_teto(self) -> None:
+        runtime, container = self._runtime(
+            [self._Result(127), self._Result(0, b"reason=ok\n")])
+        result = runtime.probe("vision-stability-app", "drone")
+
+        self.assertTrue(result.ok)
+        self.assertEqual(len(container.calls), 2)
+        self.assertNotIn("timeout", container.calls[1])
+
+
+class MarcadorEntreProcessosTest(SwitcherTestBase):
+    """H2: `switch_in_progress` é mutex entre a tela e o `switch_source.sh`."""
+
+    def _marcador_externo(self, expires_at: str, owner: str = "script:1:1") -> None:
+        (self.config_dir / "switch_in_progress").write_text(json.dumps({
+            "to": "drone", "expires_at": expires_at,
+            "owner": owner, "origin": "script"}) + "\n", encoding="utf-8")
+
+    def test_troca_do_script_em_curso_bloqueia_a_tela(self) -> None:
+        self._marcador_externo("2099-01-01T00:00:00Z")
+        switcher = self.make_switcher(FakeRuntime(self.make_env()))
+
+        with self.assertRaises(switch_control.SwitchBusy) as ctx:
+            switcher.start("drone")
+        self.assertIn("script", str(ctx.exception))
+        # nada rodou: sem restart, sem escrita
+        self.assertEqual(switcher.status.state, "idle")
+
+    def test_marcador_expirado_nao_bloqueia(self) -> None:
+        self._marcador_externo("2020-01-01T00:00:00Z")
+        switcher = self.make_switcher(FakeRuntime(self.make_env()))
+
+        switcher.start("drone")
+        switcher.wait(timeout=10)
+
+        self.assertEqual(switcher.status.state, "done")
+        self.assertEqual(self.control_value(), "drone")
+        self.assertFalse(self.marker_exists())
+
+    def test_reivindicacao_atomica_recusa_marcador_de_terceiro(self) -> None:
+        switcher = self.make_switcher(FakeRuntime(self.make_env()))
+        self._marcador_externo("2099-01-01T00:00:00Z")
+        # simula a corrida: o marcador aparece entre o `start` e a escrita
+        with self.assertRaises(switch_control.SwitchBusy):
+            switcher._claim_marker("drone")
+
+    def test_saida_nao_apaga_marcador_de_outro_dono(self) -> None:
+        switcher = self.make_switcher(FakeRuntime(self.make_env()))
+
+        def waiter(path, source_id, timeout_s, **kwargs):
+            # outro processo assume o marcador no meio da espera
+            self._marcador_externo("2099-01-01T00:00:00Z", owner="script:9:9")
+            return outcome(True, source_id=source_id)
+
+        switcher = self.make_switcher(FakeRuntime(self.make_env()), waiter=waiter)
+        switcher.start("drone")
+        switcher.wait(timeout=10)
+
+        self.assertTrue(self.marker_exists(),
+                        "o marcador de outro dono foi apagado")
+
+    def test_get_informa_troca_de_terceiro(self) -> None:
+        switcher = self.make_switcher(FakeRuntime(self.make_env()))
+        self._marcador_externo("2099-01-01T00:00:00Z")
+
+        foreign = switcher.foreign_marker()
+        self.assertIsNotNone(foreign)
+        self.assertEqual(foreign["origin"], "script")
+        self.assertEqual(foreign["to"], "drone")
+
+
+class RestartFalhouTest(SwitcherTestBase):
+    """H3: restart quebrado depois da escrita não deixa a fonte trocada."""
+
+    class RuntimeQueFalhaNoRestart(FakeRuntime):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.tentativas = 0
+
+        def restart(self, name: str) -> None:
+            self.tentativas += 1
+            if self.tentativas == 1:
+                raise RuntimeError("daemon do Docker caiu")
+            super().restart(name)
+
+    def test_falha_restaura_a_fonte_anterior_e_audita(self) -> None:
+        (self.config_dir / "active_source").write_text("camera\n",
+                                                       encoding="utf-8")
+        runtime = self.RuntimeQueFalhaNoRestart(self.make_env())
+        switcher = self.make_switcher(runtime)
+
+        switcher.start("drone")
+        switcher.wait(timeout=10)
+
+        self.assertEqual(switcher.status.state, "failed")
+        self.assertEqual(switcher.status.reason, "restart_falhou")
+        self.assertEqual(self.control_value(), "camera",
+                         "active_source ficou apontando para a fonte nova")
+        self.assertEqual(runtime.tentativas, 2, "faltou o restart de compensação")
+        record = self.audit()[0]
+        self.assertEqual((record["result"], record["reason"]),
+                         ("FAIL", "restart_falhou"))
+        self.assertFalse(self.marker_exists())
+
+    def test_restart_de_compensacao_tambem_falhando_ainda_audita(self) -> None:
+        (self.config_dir / "active_source").write_text("camera\n",
+                                                       encoding="utf-8")
+
+        class RuntimeSempreQuebrado(FakeRuntime):
+            def restart(self, name: str) -> None:
+                raise RuntimeError("sem daemon")
+
+        runtime = RuntimeSempreQuebrado(self.make_env())
+        switcher = self.make_switcher(runtime)
+
+        switcher.start("drone")
+        switcher.wait(timeout=10)
+
+        self.assertEqual(switcher.status.reason, "restart_falhou")
+        self.assertEqual(self.control_value(), "camera")
+        self.assertEqual(self.audit()[0]["reason"], "restart_falhou")
+        self.assertFalse(self.marker_exists())
 
 
 class SwitcherHappyPathTest(SwitcherTestBase):
@@ -538,8 +745,10 @@ class SwitchRouteTest(unittest.TestCase):
 class _FakeSwitcher:
     """`Switcher` mínimo para exercitar as rotas sem thread nem Docker."""
 
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(self, error: Exception | None = None,
+                 foreign: dict | None = None) -> None:
         self.error = error
+        self.foreign = foreign
         self.status = switch_control.SwitchStatus(
             state="running", step="precheck", source_id="drone")
 
@@ -548,6 +757,49 @@ class _FakeSwitcher:
             raise self.error
         self.status.source_id = source_id
         return self.status
+
+    def foreign_marker(self):
+        return self.foreign
+
+
+@unittest.skipIf(backend is None,
+                 "fastapi ausente no host (rotas só no container)")
+class SwitchStatusRouteTest(unittest.TestCase):
+    """`GET /api/source/switch`: informa troca em curso de outro processo."""
+
+    def setUp(self) -> None:
+        self._saved = {
+            "token": backend.SWITCH_TOKEN,
+            "switcher": backend.switch_state.get("switcher"),
+        }
+        self.addCleanup(self._restore)
+
+    def _restore(self) -> None:
+        backend.SWITCH_TOKEN = self._saved["token"]
+        backend.switch_state["switcher"] = self._saved["switcher"]
+
+    def test_get_mostra_troca_do_script(self) -> None:
+        import asyncio
+
+        backend.SWITCH_TOKEN = "segredo"
+        backend.switch_state["switcher"] = _FakeSwitcher(foreign={
+            "origin": "script", "to": "phone",
+            "expires_at": "2099-01-01T00:00:00Z"})
+        payload = asyncio.run(backend.api_switch_status())
+
+        self.assertTrue(payload["enabled"])
+        self.assertEqual(payload["in_progress_by"],
+                         {"origin": "script", "to": "phone",
+                          "expires_at": "2099-01-01T00:00:00Z"})
+
+    def test_get_sem_troca_em_curso(self) -> None:
+        import asyncio
+
+        backend.SWITCH_TOKEN = "segredo"
+        backend.switch_state["switcher"] = _FakeSwitcher()
+        payload = asyncio.run(backend.api_switch_status())
+
+        self.assertIsNone(payload["in_progress_by"])
 
 
 if __name__ == "__main__":

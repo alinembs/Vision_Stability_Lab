@@ -14,7 +14,10 @@
 #   3. pré-check (D7): `rtsp_read_probe.py --seconds 5` exit 0 ou aborta com
 #      exit 4 (nada é escrito, container intacto);
 #   4. grava `data/config/active_source` de forma atômica (guarda o valor
-#      anterior para rollback) e o marcador `data/config/switch_in_progress`;
+#      anterior para rollback) e reivindica o marcador
+#      `data/config/switch_in_progress` com `noclobber` — o dashboard usa o
+#      mesmo arquivo como mutex entre processos e só apaga o marcador que
+#      criou; outra troca em curso aborta aqui com exit 3, sem tocar em nada;
 #   5. recria o container do pipeline (`docker compose up -d --no-deps`) e lê o
 #      `StartedAt` do processo novo;
 #   6. espera até `--timeout` (default 90 s) por um `interval_metrics` **do
@@ -63,6 +66,10 @@ SWITCH_MARKER="$CONFIG_DIR/switch_in_progress"
 TELEMETRY_FILE="${TELEMETRY_FILE:-$REPO_ROOT/data/logs/live.jsonl}"
 SWITCH_LOG="${SWITCH_LOG:-$REPO_ROOT/data/logs/switch.jsonl}"
 PRECHECK_SECONDS="${PRECHECK_SECONDS:-5}"
+# Dono do marcador `switch_in_progress`. O dashboard (`E4-T3`) usa o **mesmo**
+# arquivo como mutex entre processos: quem apaga só remove o próprio marcador
+# (H2 da revisão independente do E4, 2026-11-01).
+SWITCH_OWNER="${SWITCH_OWNER:-script:$$:$(date +%s)}"
 
 # Estado do arquivo de controle anterior (preenchido antes do guard de
 # precedência, porque a tentativa bloqueada também é registrada em
@@ -96,7 +103,14 @@ die() {
 }
 
 cleanup() {
-    rm -f -- "$SWITCH_MARKER" "$CONTROL_FILE.tmp.$$" 2>/dev/null || true
+    # Remove só o marcador **desta** execução: o dashboard (`E4-T3`) usa o
+    # mesmo arquivo como mutex entre processos, e apagar o marcador de outro
+    # dono liberava o watchdog antes da hora (H2 da revisão do E4).
+    if [[ -f "$SWITCH_MARKER" ]] \
+        && grep -q "\"owner\": \"$SWITCH_OWNER\"" "$SWITCH_MARKER" 2>/dev/null; then
+        rm -f -- "$SWITCH_MARKER" 2>/dev/null || true
+    fi
+    rm -f -- "$CONTROL_FILE.tmp.$$" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -108,12 +122,20 @@ write_control() {
 }
 
 write_marker() {
-    local expires
+    local expires payload
     expires="$(date -u -d "+$(( ${TIMEOUT_S%.*} + 60 )) seconds" \
         +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
     mkdir -p -- "$CONFIG_DIR"
-    printf '{"to": "%s", "expires_at": "%s"}\n' "$SOURCE_ID" "$expires" \
-        >"$SWITCH_MARKER"
+    payload="$(printf '{"to": "%s", "expires_at": "%s", "owner": "%s", "origin": "script"}'
+        "$SOURCE_ID" "$expires" "$SWITCH_OWNER")"
+    # Reivindicação atômica (`set -C` = noclobber): se o arquivo já existe, é
+    # porque outra troca (script ou dashboard) está em curso — não invadir.
+    if ! (set -C; printf '%s\n' "$payload" >"$SWITCH_MARKER") 2>/dev/null; then
+        log "outra troca de fonte em andamento (marcador $SWITCH_MARKER); abortando"
+        PRECHECK_NOTE="blocked"
+        record_switch "FAIL" "troca_em_andamento"
+        die 3 "FAIL source=$SOURCE_ID reason=troca_em_andamento (nada foi escrito; container intacto)"
+    fi
 }
 
 recreate_app() {

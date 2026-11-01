@@ -34,6 +34,7 @@ import re
 import sys
 import threading
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -57,6 +58,11 @@ SWITCH_LOG = Path(os.environ.get(
     "SWITCH_LOG", REPO_ROOT / "data" / "logs" / "switch.jsonl"))
 TIMEOUT_S = float(os.environ.get("SWITCH_TIMEOUT_S", "90"))
 PRECHECK_SECONDS = os.environ.get("PRECHECK_SECONDS", "5")
+# Teto da sonda de pré-check. Sem ele, uma sonda pendurada (a classe de falha
+# deste projeto: `rtspclientsink`/teardown preso) travava a thread da troca e
+# todo `POST` passava a responder 409 até reiniciar o dashboard.
+PRECHECK_TIMEOUT_S = float(os.environ.get("PRECHECK_TIMEOUT_S", "20"))
+MARKER_NAME = "switch_in_progress"
 
 _SOURCE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
@@ -120,13 +126,15 @@ class DockerRuntime:
     """Adaptador mínimo do Docker SDK, sem CLI nem `docker compose`."""
 
     def __init__(self, client: Any = None, probe_path: str = PROBE_PATH,
-                 probe_seconds: float = 5.0) -> None:
+                 probe_seconds: float = 5.0,
+                 probe_timeout_s: float = PRECHECK_TIMEOUT_S) -> None:
         if client is None:
             import docker  # import tardio: só quem troca de fonte precisa do SDK
             client = docker.from_env()
         self.client = client
         self.probe_path = probe_path
         self.probe_seconds = probe_seconds
+        self.probe_timeout_s = probe_timeout_s
 
     def _container(self, name: str) -> Any:
         return self.client.containers.get(name)
@@ -146,13 +154,22 @@ class DockerRuntime:
         self._container(name).restart(timeout=10)
 
     def probe(self, name: str, source_id: str) -> ProbeResult:
-        result = self._container(name).exec_run(
-            ["python3", self.probe_path, "--source", source_id,
-             "--seconds", f"{self.probe_seconds:g}"],
-            demux=False,
-        )
+        """Roda a sonda com teto de tempo (`timeout` dentro do container).
+
+        `timeout` é do coreutils da imagem; se não existir (exit 127), repete
+        sem ele em vez de falhar a troca por falta de um utilitário.
+        """
+        base = ["python3", self.probe_path, "--source", source_id,
+                "--seconds", f"{self.probe_seconds:g}"]
+        container = self._container(name)
+        result = container.exec_run(
+            ["timeout", f"{self.probe_timeout_s:g}"] + base, demux=False)
+        if result.exit_code == 127:      # sem `timeout` na imagem
+            result = container.exec_run(base, demux=False)
         output = result.output or b""
         text = output.decode("utf-8", "replace") if isinstance(output, bytes) else str(output)
+        if result.exit_code == 124:      # estourou o teto do `timeout`
+            return ProbeResult(False, "timeout", _field(text, "masked_uri") or "")
         reason = _field(text, "reason") or ("ok" if result.exit_code == 0 else "probe_failed")
         return ProbeResult(result.exit_code == 0, reason,
                            _field(text, "masked_uri") or "")
@@ -190,6 +207,7 @@ class Switcher:
                  switch_log: Path = SWITCH_LOG,
                  timeout_s: float = TIMEOUT_S,
                  precheck_seconds: str = PRECHECK_SECONDS,
+                 precheck_timeout_s: float = PRECHECK_TIMEOUT_S,
                  wait_for_source=None) -> None:
         self.runtime = runtime
         self.app_container = app_container
@@ -198,20 +216,35 @@ class Switcher:
         self.switch_log = Path(switch_log)
         self.timeout_s = timeout_s
         self.precheck_seconds = precheck_seconds
+        self.precheck_timeout_s = precheck_timeout_s
         self._wait_for_source = wait_for_source
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
+        self._marker_owner: str = ""
         self.status = SwitchStatus()
 
     # -- API ---------------------------------------------------------------
     def start(self, source_id: str) -> SwitchStatus:
-        """Dispara a troca e devolve imediatamente o estado inicial."""
+        """Dispara a troca e devolve imediatamente o estado inicial.
+
+        Recusa com `SwitchBusy` (HTTP 409) quando **outro processo** (o
+        `switch_source.sh`) já está trocando: o marcador
+        `data/config/switch_in_progress` é o mutex entre os dois caminhos,
+        não só o lock em memória.
+        """
         source_id = (source_id or "").strip()
         if not _SOURCE_ID_RE.match(source_id):
             raise SwitchRejected(
                 f"id inválido: {source_id!r} (use o id de sources.yaml)")
+        foreign = self._marker_active()
+        if foreign is not None:
+            raise SwitchBusy(self._busy_message(foreign))
         if not self._lock.acquire(blocking=False):
             raise SwitchBusy("já existe uma troca de fonte em andamento")
+        foreign = self._marker_active()   # confere de novo já com o lock
+        if foreign is not None:
+            self._lock.release()
+            raise SwitchBusy(self._busy_message(foreign))
         self.status = SwitchStatus(
             state="running", step="validando", source_id=source_id,
             started_at=_now_iso(), message="validando a fonte")
@@ -219,6 +252,19 @@ class Switcher:
             target=self._run, args=(source_id,), name="switch-source", daemon=True)
         self._thread.start()
         return self.status
+
+    @staticmethod
+    def _busy_message(marker: Dict[str, Any]) -> str:
+        origin = marker.get("origin") or "script"
+        target = marker.get("to") or "?"
+        return (f"outra troca de fonte em andamento ({origin} → {target}); "
+                "aguarde terminar")
+
+    def foreign_marker(self) -> Optional[Dict[str, Any]]:
+        """Marcador válido de outro processo (o `GET` informa o operador)."""
+        if self._lock.locked():
+            return None
+        return self._marker_active()
 
     def wait(self, timeout: Optional[float] = None) -> SwitchStatus:
         """Espera a thread terminar (usado nos testes e no encerramento)."""
@@ -229,8 +275,12 @@ class Switcher:
 
     # -- execução ----------------------------------------------------------
     def _run(self, source_id: str) -> None:
-        lib = _lib()
+        # `_lib()` fica **dentro** do try: um erro de import (mount trocado,
+        # sintaxe quebrada no lib) tem de liberar o lock e auditar, não deixar
+        # o estado em `running` com 409 eterno.
+        lib = None
         try:
+            lib = _lib()
             env = self.runtime.container_env(self.app_container)
             try:
                 lib.resolve_source(source_id, dict(env), None)
@@ -249,20 +299,50 @@ class Switcher:
             self._step("precheck", f"lendo a fonte por {self.precheck_seconds}s")
             probe = self.runtime.probe(self.app_container, source_id)
             if not probe.ok:
-                self._fail(lib, f"precheck:{probe.reason}",
+                # Veredito no vocabulário do switch (`no_frames_on_path` etc.),
+                # igual ao script; o motivo cru da sonda vai na mensagem.
+                if probe.reason == "timeout":
+                    reason = "precheck:timeout"
+                else:
+                    try:
+                        reason = ("precheck:"
+                                  + lib.probe_failure_reason({"reason": probe.reason}))
+                    except Exception:  # noqa: BLE001 — lib antiga sem a função
+                        reason = f"precheck:{probe.reason}"
+                self._fail(lib, reason,
                            "pré-check reprovado: a fonte não está entregando "
-                           "vídeo agora (nada foi escrito)", probe="failed")
+                           f"vídeo agora ({probe.reason}); nada foi escrito",
+                           probe="failed")
                 return
 
             self._step("write", "gravando a fonte ativa")
             offset = self.telemetry_file.stat().st_size \
                 if self.telemetry_file.exists() else 0
-            self._write_marker(source_id)
+            self._claim_marker(source_id)
             self._write_control(source_id)
 
             self._step("restart", "reiniciando o pipeline (30–90 s)")
-            self.runtime.restart(self.app_container)
-            started_at = self.runtime.started_at(self.app_container)
+            try:
+                self.runtime.restart(self.app_container)
+            except Exception as exc:  # noqa: BLE001 — escrita já aconteceu
+                # O arquivo já aponta para a fonte nova e o processo pode não
+                # ter reiniciado: sem compensar, o próximo reinício (inclusive
+                # do watchdog) subiria numa fonte que nunca passou pelo
+                # pós-check. Restaura a anterior e audita sempre.
+                logger.exception("restart da troca falhou; restaurando")
+                self._restore_control(previous)
+                try:
+                    self.runtime.restart(self.app_container)
+                except Exception:  # noqa: BLE001
+                    logger.exception("restart de compensação também falhou")
+                self._audit(lib, "FAIL", "restart_falhou", probe="ok")
+                self._set_failed(
+                    "restart_falhou",
+                    "o restart do pipeline falhou depois da escrita; "
+                    f"a fonte anterior ({previous or 'default_source'}) foi "
+                    f"restaurada em active_source ({exc})")
+                return
+            started_at = self._safe_started_at()
 
             self._step("wait", f"aguardando telemetria de {source_id}")
             waiter = self._wait_for_source or lib.wait_for_source
@@ -286,10 +366,7 @@ class Switcher:
 
             self._step("rollback", f"pós-check falhou ({decision.reason}); "
                                    "restaurando a fonte anterior")
-            if decision.restore_to:
-                self._write_control(decision.restore_to)
-            else:
-                (self.config_dir / "active_source").unlink(missing_ok=True)
+            self._restore_control(decision.restore_to)
             try:
                 self.runtime.restart(self.app_container)
             except Exception as exc:  # noqa: BLE001 — rollback já pode ter valido
@@ -309,9 +386,22 @@ class Switcher:
                              "restaurada")
         except Exception as exc:  # noqa: BLE001 — a thread não pode morrer calada
             self._set_failed("erro_interno", f"{type(exc).__name__}: {exc}")
+            if lib is not None:
+                try:
+                    self._audit(lib, "FAIL", "erro_interno", probe="failed")
+                except Exception:  # noqa: BLE001
+                    logger.exception("auditoria do erro interno falhou")
         finally:
             self._clear_marker()
             self._lock.release()
+
+    def _safe_started_at(self) -> Optional[str]:
+        """`StartedAt` do container; ausência não invalida a troca."""
+        try:
+            return self.runtime.started_at(self.app_container)
+        except Exception:  # noqa: BLE001
+            logger.exception("não foi possível ler StartedAt do container")
+            return None
 
     # -- arquivos ----------------------------------------------------------
     def _previous_value(self) -> Optional[str]:
@@ -328,19 +418,98 @@ class Switcher:
         tmp.write_text(f"{value.strip()}\n", encoding="utf-8")
         os.replace(tmp, target)
 
-    def _write_marker(self, source_id: str) -> None:
+    def _restore_control(self, previous: Optional[str]) -> None:
+        """Volta o `active_source` ao valor anterior (ou remove o arquivo)."""
+        if previous:
+            self._write_control(previous)
+        else:
+            (self.config_dir / "active_source").unlink(missing_ok=True)
+
+    # -- marcador: mutex entre processos (script × tela) --------------------
+    def _marker_path(self) -> Path:
+        return self.config_dir / MARKER_NAME
+
+    def _claim_marker(self, source_id: str) -> None:
+        """Reivindica o marcador de forma atômica (`O_EXCL`).
+
+        O lock em memória só separa trocas **deste** processo; o
+        `scripts/switch_source.sh` escreve o mesmo arquivo. Sem `O_EXCL`, dois
+        caminhos podiam trocar junto (dois restarts, `previous` capturado por
+        um e desfeito pelo outro e o marcador do primeiro apagado pelo
+        segundo), e o watchdog deixava de suprimir `no_frames` no meio da
+        troca. Aqui: cria com `O_EXCL`, valida `expires_at` e apaga (na saída)
+        **só** o marcador que este processo criou.
+        """
         self.config_dir.mkdir(parents=True, exist_ok=True)
+        self._marker_owner = f"dashboard:{os.getpid()}:{uuid.uuid4().hex[:8]}"
         expires = (datetime.now(timezone.utc)
                    + timedelta(seconds=self.timeout_s + 60))
-        marker = self.config_dir / "switch_in_progress"
-        marker.write_text(
-            json.dumps({"to": source_id,
-                        "expires_at": expires.strftime("%Y-%m-%dT%H:%M:%SZ")})
-            + "\n", encoding="utf-8")
+        payload = json.dumps({
+            "to": source_id,
+            "expires_at": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "owner": self._marker_owner,
+            "origin": "dashboard",
+        }) + "\n"
+        marker = self._marker_path()
+        for attempt in (1, 2):
+            try:
+                fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            except FileExistsError:
+                active = self._marker_active()
+                if active is not None or attempt == 2:
+                    raise SwitchBusy(self._busy_message(active or {})) from None
+                # marcador expirado: descarta e tenta de novo
+                try:
+                    marker.unlink(missing_ok=True)
+                except OSError:
+                    raise SwitchBusy(
+                        "não foi possível liberar o marcador expirado") from None
+                continue
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+            return
+
+    def _read_marker(self) -> Optional[Dict[str, Any]]:
+        try:
+            raw = self._marker_path().read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            return {}      # ilegível (outra ferramenta): tratar como ocupado
+        return data if isinstance(data, dict) else {}
+
+    def _marker_active(self) -> Optional[Dict[str, Any]]:
+        """Marcador de **outro** dono ainda válido; `None` se livre/expirado."""
+        if not self._marker_path().exists():
+            return None
+        data = self._read_marker()
+        if data is None:
+            return None
+        if data.get("owner") and data.get("owner") == self._marker_owner:
+            return None
+        expires = data.get("expires_at")
+        if not expires:
+            return data          # sem validade: assume que está em curso
+        try:
+            deadline = datetime.strptime(
+                str(expires), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return data
+        return None if deadline <= datetime.now(timezone.utc) else data
 
     def _clear_marker(self) -> None:
+        """Remove o marcador **só** se ainda for deste processo."""
+        if not self._marker_owner:
+            return
+        data = self._read_marker()
+        if not data or data.get("owner") != self._marker_owner:
+            return
         try:
-            (self.config_dir / "switch_in_progress").unlink(missing_ok=True)
+            self._marker_path().unlink(missing_ok=True)
         except OSError:
             pass
 

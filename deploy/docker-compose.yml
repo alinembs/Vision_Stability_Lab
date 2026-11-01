@@ -155,7 +155,11 @@ services:
     restart: unless-stopped
     ports:
       # 8080 é do arquo-web neste host; o VSL usa 8081 (F6 do plano).
-      - "${DASHBOARD_PORT:-8081}:8000"
+      # `DASHBOARD_BIND` existe para o modo troca pela tela: com o socket do
+      # Docker montado (root-equivalente) e token em HTTP claro, o painel NÃO
+      # deve escutar na LAN — `make up-switch` fixa 127.0.0.1 e o acesso é por
+      # túnel SSH (H1 da revisão independente do E4, 2026-11-01).
+      - "${DASHBOARD_BIND:-0.0.0.0}:${DASHBOARD_PORT:-8081}:8000"
     environment:
       - TELEMETRY_FILE=/app/data/logs/live.jsonl
       # Catálogo de fontes (E4-T1): o dashboard lista as três fontes mesmo

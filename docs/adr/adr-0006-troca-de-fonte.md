@@ -263,6 +263,40 @@ Consequência aceita: um dashboard comprometido passa a ter acesso
 root-equivalente ao host (socket do Docker). O mitigante é o deploy padrão
 seguir **sem** o overlay e sem token.
 
+### Emenda à emenda (2026-11-01, pós-revisão independente)
+
+A revisão independente do E4 (`architecture-reviewer`, mesmo dia) reprovou
+quatro pontos que a versão original do E4-T3 não cobria. Nenhum muda decisão
+de arquitetura; três mudam **implementação** e um muda o **deploy**:
+
+1. **Transporte do token (H1).** O token ia em HTTP claro para um endpoint com
+   socket do Docker, e o painel escutava na LAN. Com o overlay ativo, o
+   dashboard passa a ser publicado em **`127.0.0.1`**
+   (`DASHBOARD_BIND`, fixado por `make up-switch`); o acesso é por túnel SSH.
+   O modo leitura (compose padrão) continua na LAN. Expor o endpoint de troca
+   na rede passa a ser escolha explícita (`SWITCH_BIND=0.0.0.0`), com o risco
+   registrado em DIV-004.
+2. **Exclusão mútua entre os dois caminhos de troca (H2).** O marcador
+   `data/config/switch_in_progress` vira **mutex entre processos**: reivindicado
+   com `O_EXCL` (dashboard) e `noclobber` (script), com `expires_at` e `owner`,
+   e cada lado só apaga **o próprio** marcador. Troca em curso de qualquer
+   origem → `409` (tela) ou `exit 3` (script), com `GET` informando
+   `in_progress_by`. Sem isso, dois `restart`s podiam se sobrepor e uma troca
+   podia terminar "PASS" sem o pós-check de ninguém.
+3. **Falha do restart depois da escrita (H3).** Se o `restart` falhar depois de
+   gravar `active_source`, a fonte anterior é **restaurada** (com nova tentativa
+   de restart) e a execução é auditada como `FAIL restart_falhou`. Antes, o
+   arquivo ficava apontando para uma fonte que nunca passou pelo pós-check.
+4. **Teto de tempo na sonda (H4).** O pré-check roda sob `timeout`
+   (`PRECHECK_TIMEOUT_S`, 20 s). Sonda pendurada vira `precheck:timeout` com
+   auditoria e o lock é liberado — antes, todo `POST` respondia `409` até
+   reiniciar o dashboard.
+
+Contratos preservados: D4, D7 e a proibição de reconfiguração em runtime (A3)
+seguem intactos; o `switch.jsonl` continua com uma linha por execução, agora
+com o motivo normalizado no mesmo vocabulário do script
+(`precheck:no_frames_on_path`, `precheck:timeout`, `restart_falhou`).
+
 ## Referências
 
 - Plano executável: `docs/plans/2026-10-30-troca-de-fonte-vsl.md`

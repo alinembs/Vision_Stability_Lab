@@ -22,6 +22,11 @@ COMPOSE_OVERLAY := docker compose -f docker-compose.yml -f docker-compose.switch
 APP := vision-stability-app
 DASHBOARD := vision-dashboard
 DASHBOARD_URL ?= http://localhost:8081
+# Onde o painel é publicado. 0.0.0.0 = LAN (modo leitura). No modo troca
+# (`make up-switch`) o padrão vira loopback: o socket do Docker é
+# root-equivalente e o token viaja em HTTP claro (H1 da revisão do E4).
+DASHBOARD_BIND ?= 0.0.0.0
+SWITCH_BIND ?= 127.0.0.1
 PYTHON ?= python3
 
 # -- plataforma ---------------------------------------------------------------
@@ -119,9 +124,14 @@ up-switch: doctor ## Sobe com o overlay de troca pela tela (exige SWITCH_TOKEN)
 		echo "      (o endpoint fica 503 sem token; o socket do Docker só é montado com o overlay)"; \
 		exit 1; \
 	fi
-	cd $(COMPOSE_DIR) && SWITCH_TOKEN=$(SWITCH_TOKEN) \
+	@# H1 da revisão do E4: com socket do Docker (root-equivalente) e token em
+	@# HTTP claro, o painel NÃO escuta na LAN. Acesso por túnel SSH.
+	cd $(COMPOSE_DIR) && DASHBOARD_BIND=$(SWITCH_BIND) SWITCH_TOKEN=$(SWITCH_TOKEN) \
 		SWITCH_ENABLED=1 $(COMPOSE_OVERLAY) up -d --build dashboard
-	@echo "troca pela tela ligada em $(DASHBOARD_URL) (POST /api/source/switch)"
+	@echo "troca pela tela ligada (POST /api/source/switch)"
+	@echo "painel escutando em $(SWITCH_BIND):8081 — acesse por túnel:"
+	@echo "  ssh -L 8081:127.0.0.1:8081 <usuario>@$$(hostname -I | awk '{print $$1}')"
+	@echo "  depois abra http://localhost:8081 no seu navegador"
 
 down: ## Para o stack (containers removidos, dados preservados)
 	cd $(COMPOSE_DIR) && $(COMPOSE_OVERLAY) down --remove-orphans
