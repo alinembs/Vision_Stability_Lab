@@ -1,7 +1,7 @@
 """Vision Stability Lab — Fases 2 e 3.
 
 Pipeline: RTSP (fonte ativa, H.265 ou H.264) -> decode HW (nvv4l2decoder) ->
-nvstreammux -> nvinfer (YOLO11 person) -> nvtracker (IOU) -> probe de metadados
+nvstreammux -> nvinfer (YOLO11 COCO 80 classes) -> nvtracker (IOU) -> probe de metadados
 pyds -> nvdsosd -> tee:
   ramo análise:  queue -> fakesink (probes de métricas)
   ramo preview:  queue leaky(downstream, max-size-buffers=1)
@@ -133,6 +133,11 @@ def begin_session(source_id):
     return SESSION
 
 
+# O modelo está liberado para as 80 classes COCO (`deepstream/config/infer.txt`)
+# e o OSD desenha **tudo** o que o nvinfer entrega. A telemetria de ocupação,
+# porém, continua sendo de pessoas: `AreaMonitor`/`persons_*` só contam a
+# classe 0, que é a métrica do produto (estabilidade de detecção de pessoas).
+# Se um dia a ocupação passar a considerar outras classes, este é o ponto.
 PERSON_CLASS_ID = 0
 METRICS_INTERVAL_SECONDS = int(os.environ.get("METRICS_INTERVAL_S", "30"))
 TRACK_TTL_SECONDS = float(os.environ.get("TRACK_TTL_S", "10"))
