@@ -12,10 +12,12 @@ webrtcLocalTCPAddress: :8189
 
 # `no` evita anunciar `docker0`/`br-*` (172.x) como candidato: o navegador
 # escolheria um caminho inalcançável e ficaria em tela preta (ADR-0005, T0.2).
+# A lista fica vazia de propósito: o compose injeta
+# `MTX_WEBRTCADDITIONALHOSTS=${LAN_IP}` (IP atual do host, detectado por
+# `scripts/host_ip.sh`). Fixar o IP aqui quebrava o WebRTC quando o roteador
+# entregava outro endereço ao Jetson (2026-11-02).
 webrtcIPsFromInterfaces: no
-# Anuncia explicitamente o IP da LAN do Jetson. O endereço é o do host onde o
-# stack roda (enxd0c857009d17); se a máquina mudar de rede, atualizar aqui.
-webrtcAdditionalHosts: [192.168.59.102]
+webrtcAdditionalHosts: []
 
 # RTSP por TCP: casa com `protocols=4` (tcp) usado pelo pipeline
 # (deepstream/pipeline_real.py).

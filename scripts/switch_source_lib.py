@@ -36,10 +36,12 @@ Credencial: a URI usada pelo pré-check nunca é impressa por este módulo — a
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import pathlib
 import re
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -58,7 +60,6 @@ DEFAULT_ENV_FILE = REPO_ROOT / "deploy" / ".env"
 DEFAULT_TELEMETRY = REPO_ROOT / "data" / "logs" / "live.jsonl"
 DEFAULT_TIMEOUT_S = 90.0
 DEFAULT_POLL_S = 0.5
-DEFAULT_LAN_IP = "192.168.59.102"
 # Folga entre o `StartedAt` do Docker e o `session_epoch` do pipeline (que é o
 # instante do import do módulo, ~3 s depois do start do container). 2 s cobre
 # jitter de relógio sem deixar passar amostra de um processo encerrado há
@@ -158,12 +159,34 @@ def resolve_source(source_id: str, env: Mapping[str, str],
     return source
 
 
+@functools.lru_cache(maxsize=1)
+def _default_lan_ip() -> str:
+    """IP da LAN deste host — sem IP fixo no código (ver `scripts/host_ip.sh`).
+
+    Fallback de `precheck_url` quando nem `MTX_HOST` nem `LAN_IP` estão no
+    ambiente (o `make up`/`make switch` exportam `LAN_IP`, mas rodar o script
+    direto não). Antes era a constante `192.168.59.102`: num host com outro
+    endereço o pré-check sondava um IP que não existe e a troca de fonte
+    falhava por "inacessível" — o mesmo erro que derrubou o compose em campo
+    (INC-009). `lru_cache` evita um processo por chamada (o relatório usa a
+    URI duas vezes).
+    """
+    script = REPO_ROOT / "scripts" / "host_ip.sh"
+    try:
+        saida = subprocess.run([str(script)], capture_output=True, text=True,
+                               timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return "127.0.0.1"
+    linhas = [linha.strip() for linha in saida.stdout.splitlines() if linha.strip()]
+    return linhas[0] if linhas else "127.0.0.1"
+
+
 def precheck_url(uri: str, env: Mapping[str, str]) -> str:
     """URI da fonte trocando o host do compose pelo host alcançável do host.
 
     No YAML, drone e celular usam `mediamtx` (DNS do serviço dentro do compose).
     No host esse nome não resolve, então o pré-check usa `MTX_HOST`, `LAN_IP` ou
-    o IP da LAN do laboratório — as portas do MediaMTX são publicadas nele
+    o IP da LAN **atual** deste host — as portas do MediaMTX são publicadas nele
     (E0-T2). A credencial, se houver, é preservada; nada aqui imprime a URI.
     """
     parts = urlsplit((uri or "").strip())
@@ -171,9 +194,9 @@ def precheck_url(uri: str, env: Mapping[str, str]) -> str:
     if host not in COMPOSE_ONLY_HOSTS:
         return uri
     reachable = (env.get("MTX_HOST") or env.get("LAN_IP")
-                 or DEFAULT_LAN_IP).strip()
+                 or _default_lan_ip()).strip()
     if not reachable:
-        reachable = DEFAULT_LAN_IP
+        reachable = _default_lan_ip()
     userinfo = ""
     if "@" in parts.netloc:
         userinfo = parts.netloc.rsplit("@", 1)[0] + "@"

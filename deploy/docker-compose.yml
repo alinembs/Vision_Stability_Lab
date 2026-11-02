@@ -6,19 +6,27 @@ services:
     image: bluenviron/mediamtx:1.21.3
     container_name: vision-mediamtx
     restart: unless-stopped
+    environment:
+      # O `mediamtx.yml` versionado não fixa IP: o compose injeta
+      # `MTX_WEBRTCADDITIONALHOSTS` com o endereço que o host tem **agora**
+      # (LAN_IP detectado pelo Makefile a cada `make up`). Env do MediaMTX
+      # vence o arquivo; sem isso o SDP sairia com um IP que o host não tem
+      # mais e o WebRTC não completaria depois de uma troca de DHCP.
+      - MTX_WEBRTCADDITIONALHOSTS=${LAN_IP:?defina LAN_IP (rode make up)}
     ports:
       # Publicação amarrada ao IP da LAN, nunca em 0.0.0.0: RTSP/RTMP/WebRTC
       # do MediaMTX não têm autenticação (DIV-003, docs/incident-log.md) e não
       # devem escutar em todas as interfaces do host (tailscale0, bridges).
-      # LAN_IP tem default versionado para o host atual; sobrescreva via
-      # deploy/.env (ou `LAN_IP=<ip> docker compose ...`) se a LAN mudar.
-      - "${LAN_IP:-192.168.59.102}:8554:8554"
-      - "${LAN_IP:-192.168.59.102}:1935:1935"
-      - "${LAN_IP:-192.168.59.102}:8888:8888"
-      - "${LAN_IP:-192.168.59.102}:8889:8889"
-      - "${LAN_IP:-192.168.59.102}:8890:8890/udp"
-      - "${LAN_IP:-192.168.59.102}:8189:8189/udp"
-      - "${LAN_IP:-192.168.59.102}:8189:8189/tcp"
+      # LAN_IP é detectado por `scripts/host_ip.sh` no `make up`; não fica
+      # gravado no repositório nem exige editar arquivo quando o roteador
+      # entrega outro endereço (2026-11-02). Forçar: `LAN_IP=<ip> make up`.
+      - "${LAN_IP:?defina LAN_IP (rode make up)}:8554:8554"
+      - "${LAN_IP:?defina LAN_IP (rode make up)}:1935:1935"
+      - "${LAN_IP:?defina LAN_IP (rode make up)}:8888:8888"
+      - "${LAN_IP:?defina LAN_IP (rode make up)}:8889:8889"
+      - "${LAN_IP:?defina LAN_IP (rode make up)}:8890:8890/udp"
+      - "${LAN_IP:?defina LAN_IP (rode make up)}:8189:8189/udp"
+      - "${LAN_IP:?defina LAN_IP (rode make up)}:8189:8189/tcp"
     volumes:
       - ../mediamtx/mediamtx.yml:/mediamtx.yml
       # Certificado e chave do WHIP (E0-T4). Gerados por
@@ -39,7 +47,7 @@ services:
     ports:
       # Amarrado ao IP da LAN, como as portas do MediaMTX (DIV-003): a página
       # entrega a câmera de quem a abrir, não é serviço para a internet.
-      - "${LAN_IP:-192.168.59.102}:8443:8443"
+      - "${LAN_IP:?defina LAN_IP (rode make up)}:8443:8443"
     volumes:
       - ../deploy/nginx/capture-web.conf:/etc/nginx/conf.d/default.conf:ro
       # Mesmo diretório que o backend do dashboard serve em /static.

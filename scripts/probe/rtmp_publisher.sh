@@ -19,6 +19,8 @@
 # chamador.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 PATH_NAME="drone"
 RUN_SECONDS=0
 BITRATE=2500000
@@ -27,7 +29,11 @@ HEIGHT=720
 FPS=30
 # Atenção: as portas do MediaMTX são publicadas no IP da LAN (deploy/
 # docker-compose.yml, E0-T2), não em 0.0.0.0 — 127.0.0.1 é recusado aqui.
-HOST="192.168.59.102"
+# O IP não é fixo: `LAN_IP`/`VSL_LAN_IP` explícito vence, senão vale o endereço
+# atual do host (`scripts/host_ip.sh`, a mesma detecção do `make up`). Fixar o
+# IP de bancada quebrava o publisher quando o roteador trocava o DHCP
+# (INC-009).
+HOST="${LAN_IP:-${VSL_LAN_IP:-$("$SCRIPT_DIR/../host_ip.sh" 2>/dev/null || echo 127.0.0.1)}}"
 PORT=1935
 PATTERN="smpte"
 # Padrões válidos do videotestsrc (`gst-inspect-1.0 videotestsrc`, enum
@@ -49,7 +55,8 @@ Opções:
   --width <px>        largura do vídeo (default: 1280)
   --height <px>       altura do vídeo (default: 720)
   --fps <n>           quadros por segundo (default: 30)
-  --host <ip>         host do MediaMTX (default: 192.168.59.102)
+  --host <ip>         host do MediaMTX (default: IP atual do host, via
+                      scripts/host_ip.sh; LAN_IP/VSL_LAN_IP vence)
                       use 127.0.0.1 só se o MediaMTX estiver publicado em loopback
   --port <n>          porta RTMP do MediaMTX (default: 1935)
   --pattern <nome>    padrão do videotestsrc (default: smpte).

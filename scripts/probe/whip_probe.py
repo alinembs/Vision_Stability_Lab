@@ -34,7 +34,7 @@ certificado errado, nunca para validar.
 Uso:
     python3 scripts/probe/whip_probe.py --cacert deploy/certs/ca.crt
     python3 scripts/probe/whip_probe.py --cacert deploy/certs/ca.crt --path phone
-    python3 scripts/probe/whip_probe.py --base http://192.168.59.102:8889  # instalação sem TLS
+    python3 scripts/probe/whip_probe.py --base http://<ip-da-LAN>:8889  # instalação sem TLS
 
 Atenção: `--path phone` cria e encerra uma sessão WHIP de verdade no path
 informado. Com `urllib` + `ssl` apenas — sem dependência nova.
@@ -55,6 +55,7 @@ import json
 import os
 import re
 import ssl
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -66,9 +67,36 @@ CANDIDATE_RE = re.compile(r"^a=candidate:(.+?)\r?$", re.MULTILINE)
 MLINE_RE = re.compile(r"^(m=\S+.*?)\r?$", re.MULTILINE)
 RTPMAP_RE = re.compile(r"^a=rtpmap:(\d+ [^\r\n]+?)\r?$", re.MULTILINE)
 
-# Base default da sonda: o MediaMTX do VSL com TLS (E0-T4). Sobrescreva com
-# `--base` para uma instalação sem `webrtcEncryption`, ou para outro host.
-DEFAULT_BASE = "https://192.168.59.102:8889"
+# Base default da sonda: o MediaMTX do VSL com TLS (E0-T4). O host **não** é
+# fixo: vem de `LAN_IP`/`VSL_LAN_IP` (quando presente) ou do `scripts/host_ip.sh`,
+# a mesma detecção que o `make up` usa. Fixar o IP de bancada fazia a sonda
+# apontar para um endereço que o host não tem mais quando o roteador trocava o
+# DHCP (INC-009) e o diagnóstico acusava "inacessível" em vez de "sem vídeo".
+# Sobrescreva com `--base` para uma instalação sem `webrtcEncryption`, outro
+# host ou loopback.
+DEFAULT_PORT = 8889
+
+
+def _host_ip() -> str:
+    """IPv4 da LAN deste host, sem IP fixo no código (ver `scripts/host_ip.sh`)."""
+    for variavel in ("LAN_IP", "VSL_LAN_IP"):
+        valor = (os.environ.get(variavel) or "").strip()
+        if valor and valor != "auto":
+            return valor
+    script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "host_ip.sh")
+    try:
+        saida = subprocess.run([script], capture_output=True, text=True,
+                               timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return "127.0.0.1"
+    linhas = [linha.strip() for linha in saida.stdout.splitlines() if linha.strip()]
+    return linhas[0] if linhas else "127.0.0.1"
+
+
+def default_base() -> str:
+    """Base HTTPS do MediaMTX no IP atual do host (porta 8889, TLS)."""
+    return f"https://{_host_ip()}:{DEFAULT_PORT}"
 
 
 
@@ -253,8 +281,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
             "e os codecs devolvidos pelo MediaMTX e encerra a sessão com DELETE."
         ),
         epilog=(
-            "Defaults do Vision Stability Lab: --base https://192.168.59.102:8889 "
-            "--path phone. As portas do MediaMTX são publicadas no IP da LAN "
+            "Defaults do Vision Stability Lab: --base https://<ip-da-LAN>:8889 "
+            "(o IP vem de LAN_IP ou de scripts/host_ip.sh), --path phone. "
+            "As portas do MediaMTX são publicadas no IP da LAN "
             "(E0-T2), então 127.0.0.1 não responde. Desde o E0-T4 o WebRTC exige "
             "TLS com a CA interna: passe --cacert deploy/certs/ca.crt.\n\n"
             "Exit codes: 0 = sessão WHIP aceita (2xx) e DELETE executado; "
@@ -271,8 +300,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     ap.add_argument(
         "--base",
-        default=DEFAULT_BASE,
-        help=f"base HTTP(S) do MediaMTX (default: {DEFAULT_BASE})",
+        default=default_base(),
+        help="base HTTP(S) do MediaMTX (default: https://<ip-da-LAN>:8889, "
+             f"detectado por scripts/host_ip.sh)",
     )
     ap.add_argument(
         "--path",

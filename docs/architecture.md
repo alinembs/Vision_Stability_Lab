@@ -11,7 +11,8 @@ rtspsrc (latency=200, drop-on-latency, protocols=tcp+udp)
   → rtph265depay / h265parse      [alternável para h264 via RTSP_CODEC]
   → nvv4l2decoder                 [saída NVMM]
   → nvstreammux (batch=1, 1280x720, live-source)
-  → nvinfer (config/infer.txt — YOLO11m fp16, classe única "person")
+  → nvinfer (config/infer.txt — YOLO11m fp16, 80 classes COCO; OSD desenha tudo,
+             a telemetria de ocupação conta só `person`)
   → nvtracker (IOU, config_tracker_IOU.yml)
   → nvdsosd (display-bbox + display-text, process-mode=1/GPU)
   → tee
@@ -43,10 +44,10 @@ navegador ──► http://192.168.59.102:8888/live/     (HLS fallback, latênci
 celular   ──► https://192.168.59.102:8443/capture.html (página de captura; WHIP em https://…:8889/phone/whip)
 ```
 
-> **Acesse o dashboard pelo IP da LAN** (`http://192.168.59.102:8081` no Orin NX,
-> `http://192.168.59.129:8081` no Orin Nano), não por `http://localhost:8081`.
+> **Acesse o dashboard pelo IP da LAN atual do host** (`make ip` mostra o
+> endereço e as URLs do momento), não por `http://localhost:8081`.
 > Dois motivos: (1) as portas do MediaMTX são publicadas amarradas no `LAN_IP`
-> do host (`${LAN_IP:-192.168.59.102}`), não em `0.0.0.0` (DIV-003,
+> detectado por `make up` (`${LAN_IP:?}`, nunca `0.0.0.0` — DIV-003,
 > `docs/incident-log.md`), então `127.0.0.1:8889` não responde; (2)
 > `dashboard/frontend/app.js` deriva a URL do WHEP do hostname da página
 > (`location.hostname:8889`), logo abrir o dashboard em `localhost` faz o player
@@ -58,15 +59,17 @@ celular   ──► https://192.168.59.102:8443/capture.html (página de captura
 > página de captura do celular usa a 8443 pelo mesmo motivo.
 >
 > **Requisito de CA na máquina do dashboard (não é do servidor).** Cada Jetson
-> tem a sua CA — `deploy/certs/` é gitignored e o SAN lista o `LAN_IP` do host —
-> e as duas têm o mesmo `CN`, então a CA do NX **não** habilita o dashboard do
+> tem a sua CA — `deploy/certs/` é gitignored e o SAN lista os IPs/nomes do host
+> — e as duas têm o mesmo `CN`, então a CA do NX **não** habilita o dashboard do
 > Nano (INC-008). Pegue o arquivo no **host que serve** e prove que é ele antes
-> de instalar:
+> de instalar. Trocar de IP no **mesmo** host não exige reinstalar: `make up`
+> reemite só o certificado do servidor e preserva a CA (INC-009).
 >
 > ```bash
-> ssh <usuario>@192.168.59.129 'docker exec vision-mediamtx cat /certs/ca.crt' > ca.crt
+> IP=$(ssh <usuario>@<host> 'cd ~/Vision_Stability_Lab && make -s ip' | awk '/^IP da LAN:/ {print $4}')
+> ssh <usuario>@<host> 'docker exec vision-mediamtx cat /certs/ca.crt' > ca.crt
 > openssl x509 -in ca.crt -noout -dates -fingerprint -sha256   # notBefore = data do host
-> curl --cacert ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.129:8889/   # 404 = ok
+> curl --cacert ca.crt -s -o /dev/null -w '%{http_code}\n' "https://$IP:8889/"   # 404 = ok
 > sudo cp ca.crt /usr/local/share/ca-certificates/vsl-ca.crt
 > sudo update-ca-certificates   # "1 added"; "0 added" = arquivo já instalado (CA de outro host)
 > ```
@@ -83,7 +86,7 @@ celular   ──► https://192.168.59.102:8443/capture.html (página de captura
 
 - **Saúde derivada** no backend: `healthy` se `interval_metrics` fresco (<90 s) com `fps_processed > 0`; `stale` se telemetria velha; `down` sem telemetria.
 - **Sem persistência além do JSONL**: o histórico dos gráficos é reconstruído replayando o arquivo na partida do backend; SQLite fica para fase futura.
-- **webrtcAdditionalHosts** no `mediamtx.yml` anuncia o IP LAN do Jetson para o ICE fechar com navegadores fora do host.
+- **`MTX_WEBRTCADDITIONALHOSTS`** (injetado pelo compose com o `LAN_IP` do momento; `webrtcAdditionalHosts: []` no `mediamtx.yml`) anuncia o IP LAN atual do Jetson para o ICE fechar com navegadores fora do host.
 
 ### Componentes
 1. **`deepstream/pipeline_real.py`** — pipeline instrumentado (OSD, preview H.264 RTSP/UDP, probes, telemetria JSONL).

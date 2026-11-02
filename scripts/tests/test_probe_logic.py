@@ -595,11 +595,19 @@ class TestWhipProbeTls(unittest.TestCase):
     """E0-T4: a sonda fala HTTPS e o default não é confiar em qualquer host."""
 
     def test_default_e_https_no_ip_da_lan(self):
-        args = whip_probe.parse_args([])
-        self.assertEqual(args.base, "https://192.168.59.102:8889")
+        # O host do default é o IP atual (LAN_IP ou scripts/host_ip.sh), nunca
+        # um IP de bancada fixo no código — ver INC-009.
+        with patch.dict("os.environ", {"LAN_IP": "10.0.0.7"}):
+            args = whip_probe.parse_args([])
+        self.assertEqual(args.base, "https://10.0.0.7:8889")
         self.assertEqual(args.path, "phone")
         self.assertFalse(args.insecure)
         self.assertIsNone(args.cacert)
+
+    def test_default_sem_ip_explicito_nao_e_ip_de_bancada(self):
+        with patch.dict("os.environ", {"LAN_IP": "", "VSL_LAN_IP": ""}), \
+                patch.object(whip_probe, "_host_ip", return_value="172.20.0.9"):
+            self.assertEqual(whip_probe.default_base(), "https://172.20.0.9:8889")
 
     def test_base_http_nao_monta_contexto(self):
         # Instalação sem `webrtcEncryption`: nada de TLS no caminho.

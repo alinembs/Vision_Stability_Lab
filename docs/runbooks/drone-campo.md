@@ -20,7 +20,7 @@ drone ──RTMP──▶ rtmp://192.168.59.102:1935/drone   (MediaMTX: vision-m
 
 | Item | Valor real | Fonte |
 |---|---|---|
-| Push do drone | `rtmp://192.168.59.102:1935/drone` | `deploy/docker-compose.yml` (`${LAN_IP:-192.168.59.102}:1935:1935`) |
+| Push do drone | `rtmp://<ip-da-LAN>:1935/drone` (`make ip` mostra o IP atual) | `deploy/docker-compose.yml` (`${LAN_IP:?}:1935:1935`, IP detectado no `make up`) |
 | Leitura do pipeline | `rtsp://${MTX_HOST:-mediamtx}:8554/drone` (no host: `192.168.59.102`) | `deepstream/config/sources.yaml` |
 | Path declarado | `drone:` em `paths:` | `mediamtx/mediamtx.yml` |
 | Codec exigido | `codec: h264` | `sources.yaml` (drone) |
@@ -102,16 +102,17 @@ quem diz isso (`[RTMP] ... path 'drone' is not configured`), não o app do drone
 ss -lntu | awk 'NR>1 {print $5}' | grep -E ':(1935|8554)$' | sort
 ```
 
-Esperado, e **nada além disso**:
+Esperado, e **nada além disso** (o IP é o que `make ip` mostrar):
 
 ```text
-192.168.59.102:1935
-192.168.59.102:8554
+<ip-da-LAN>:1935
+<ip-da-LAN>:8554
 ```
 
-Se aparecer `0.0.0.0:1935` ou `*:1935`, o `LAN_IP` do `deploy/.env` não está
-valendo (DIV-003: publish anônimo exposto em todas as interfaces). **Não saia
-de casa assim.**
+Se aparecer `0.0.0.0:1935` ou `*:1935`, o compose não recebeu `LAN_IP` — rode
+`make up` (que detecta o IP e valida no `make doctor`) em vez de
+`docker compose up` direto (DIV-003: publish anônimo exposto em todas as
+interfaces). **Não saia de casa assim.**
 
 ### 2.4 Publisher sintético — a linha de base
 

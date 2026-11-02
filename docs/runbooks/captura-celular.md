@@ -46,14 +46,21 @@ codec roda no navegador antes do `POST`.
 > Rode este script **antes** do primeiro `docker compose up`.
 
 ```bash
-deploy/certs/generate-certs.sh                  # IP da LAN 192.168.59.102
-VSL_LAN_IP=<ip-do-campo> deploy/certs/generate-certs.sh --force
+deploy/certs/generate-certs.sh                  # IPs/nomes atuais do host
+VSL_LAN_IP=<ip-do-campo> deploy/certs/generate-certs.sh   # força um IP extra no SAN
 ```
 
 Saída em `deploy/certs/`: `ca.crt` (vai para o celular) e `server.crt` /
 `server.key` (montados em `/certs`, read-only, no **MediaMTX** e no **nginx da
 8443**). **Nada disso entra no Git** — a pasta é ignorada por inteiro, exceto o
 `.gitignore` dela.
+
+O modo padrão é `--ensure`: o script reaproveita a CA existente e só reemite o
+certificado do servidor quando o SAN não cobre os IPs/nomes **atuais** do host.
+Na prática você não precisa rodar isto na mão — `make up` chama `make certs`
+antes de subir. Trocar de rede (o roteador entrega outro IP por DHCP) reemite
+o certificado do servidor **preservando a CA**, então o celular que já instalou
+o `ca.crt` continua confiando, sem reinstalar nada (INC-009).
 
 `VSL_LAN_IP` é validado antes de qualquer arquivo ser escrito: precisa ser um
 IPv4 com cada octeto entre 0 e 255 (o valor entra no `subjectAltName`, e sem
@@ -63,14 +70,17 @@ com código 2 e **não deixa arquivo no diretório de saída** — a geração a
 num diretório temporário e só o conjunto completo é movido no fim, então uma
 falha no meio não exige `--force` (que invalidaria a CA já instalada).
 
-`--force` regera tudo e **invalida a CA já instalada nos celulares**. Se o IP da
-LAN mudar, é esse o caminho (e todo device precisa receber o novo `ca.crt`).
+`--force` regera **tudo, inclusive a CA**, e é o único caminho que obriga todo
+device a receber o novo `ca.crt`. Use-o para CA perdida/corrompida ou para
+rotacionar a CA de propósito — **não** para troca de IP.
 
 Conferir o SAN:
 
 ```bash
 openssl x509 -in deploy/certs/server.crt -noout -text | grep -A1 'Subject Alternative Name'
-# DNS:vsl.local, DNS:localhost, IP Address:192.168.59.102, IP Address:127.0.0.1
+# DNS:localhost, DNS:<hostname>, DNS:<hostname>.local, DNS:vsl.local,
+# IP Address:<ip-atual-da-LAN>, IP Address:127.0.0.1 (as bridges do Docker ficam
+# fora de propósito: mudam a cada `docker compose` e ninguém acessa por elas)
 ```
 
 ## 2. Subir os serviços
@@ -118,7 +128,9 @@ aparece.
 
 ## 4. Capturar (no celular)
 
-1. Abra **`https://192.168.59.102:8443/capture.html`** — HTTPS, porta **8443**.
+1. Abra **`https://<ip-do-host>:8443/capture.html`** — HTTPS, porta **8443**.
+   Rode `make ip` no host para ver o endereço do momento; com mDNS na rede,
+   `https://<hostname>.local:8443/capture.html` sobrevive à troca de DHCP.
    O cadeado tem de estar presente, sem aviso.
 2. Confira a linha **contexto seguro**: `sim (...)`. Se estiver `NÃO`, o Chrome
    não vai liberar a câmera (ver a seção 6).
@@ -170,7 +182,7 @@ O relatório tem de trazer:
   está inacessível. Script que só olha "rodou" precisa olhar o código;
 - `tls: verify:deploy/certs/ca.crt` — se estiver `verify:sistema`, faltou
   `--cacert` e a sonda está falhando fechada de propósito;
-- `candidate_hosts: ["192.168.59.102"]` — **nenhum** `127.0.0.1` nem `172.x`;
+- `candidate_hosts: ["<ip-da-LAN>"]` — **nenhum** `127.0.0.1` nem `172.x`;
 - `answer_codecs: ["96 H264/90000"]`.
 
 Autoteste do gate de codec (executável, 13 casos): abra
@@ -208,7 +220,7 @@ cobre as duas portas.
 |---|---|---|
 | **Página abre com aviso de certificado / `ERR_CERT_AUTHORITY_INVALID`** | a CA não está instalada no Android (ou é a antiga: `--force` regerou) | `openssl x509 -in deploy/certs/ca.crt -noout -fingerprint -sha256` contra o que aparece na tela do aparelho; reinstalar em Configurações → Segurança → CA |
 | **"contexto seguro: NÃO" / câmera não abre** | a página foi aberta em `http://` ou pela porta errada | barra de endereço: tem de ser `https://…:8443/capture.html`. `chrome://flags` não resolve — precisa da CA + HTTPS |
-| **WHIP conecta e não há vídeo** | candidato ICE apontando para `127.0.0.1` ou para IP de bridge (`172.x`) | `candidate_hosts` do `whip_probe.py --cacert …`: só pode aparecer **`192.168.59.102`**. Config: `webrtcAdditionalHosts` + `webrtcIPsFromInterfaces: no` (`mediamtx/mediamtx.yml`) |
+| **WHIP conecta e não há vídeo** | candidato ICE apontando para `127.0.0.1` ou para IP de bridge (`172.x`) | `candidate_hosts` do `whip_probe.py --cacert …`: só pode aparecer o **IP da LAN atual** (`make ip`). Config: `MTX_WEBRTCADDITIONALHOSTS=${LAN_IP}`, injetado pelo compose, + `webrtcIPsFromInterfaces: no` (`mediamtx/mediamtx.yml`) |
 | **Vídeo em VP8/VP9** | aparelho sem H.264, ou navegador ignorou a preferência | a tela mostra "sem H.264" e a captura **não** começa (é o gate, não um bug). `ffprobe rtsp://192.168.59.102:8554/phone` confirma o codec no path. Não há conversão no servidor (D-2) |
 | **`POST` responde `404` e o log do MediaMTX fica vazio** | endpoint sem o `/whip` final | a linha "endpoint WHIP" na tela tem de terminar em `/phone/whip`. `POST /phone` é rota inexistente |
 | **`POST` responde `409`** | o path ainda está publicado por uma sessão anterior (aba fechada sem `DELETE`, ou celular dormiu) | `docker logs vision-mediamtx` (`[path phone] stream is already available`); aguarde o ICE expirar (~30 s) ou reinicie o `vision-mediamtx`; confira se a aba antiga segue aberta |

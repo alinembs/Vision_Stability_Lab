@@ -33,6 +33,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -40,7 +41,6 @@ import switch_source_lib as lib  # noqa: E402
 
 RAIZ = Path(__file__).resolve().parents[2]
 URI_DRONE_MEDIA = "rtsp://mediamtx:8554/drone"
-URI_DRONE_HOST = "rtsp://192.168.59.102:8554/drone"
 
 
 def _iso(epoch: float) -> str:
@@ -209,10 +209,21 @@ class ValidacaoDoIdTest(BaseTest):
 # ---------------------------------------------------------------------------
 class PrecheckUrlTest(unittest.TestCase):
     def test_host_do_compose_vira_lan_ip(self) -> None:
-        self.assertEqual(lib.precheck_url(URI_DRONE_MEDIA, {}), URI_DRONE_HOST)
+        # Sem IP fixo no lib: o host alcançável vem de `MTX_HOST`/`LAN_IP` ou,
+        # na ausência de ambos, do IP atual do host (`scripts/host_ip.sh`).
         self.assertEqual(
             lib.precheck_url(URI_DRONE_MEDIA, {"LAN_IP": "10.0.0.7"}),
             "rtsp://10.0.0.7:8554/drone")
+
+    def test_sem_lan_ip_no_ambiente_usa_o_ip_atual_do_host(self) -> None:
+        with mock.patch.object(lib, "_default_lan_ip",
+                              return_value="172.20.0.9"):
+            self.assertEqual(lib.precheck_url(URI_DRONE_MEDIA, {}),
+                             "rtsp://172.20.0.9:8554/drone")
+
+    def test_default_detectado_e_um_ipv4(self) -> None:
+        self.assertRegex(lib._default_lan_ip(),
+                         r"^\d{1,3}(\.\d{1,3}){3}$")
 
     def test_mtx_host_tem_precedencia_sobre_lan_ip(self) -> None:
         self.assertEqual(

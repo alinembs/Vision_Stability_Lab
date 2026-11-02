@@ -13,7 +13,7 @@
   moram em `codec-gate.js` (`CodecGate.FIXTURES`) e esta página roda todos e
   imprime PASS/FAIL. Abrir aqui é a evidência:
 
-    https://192.168.59.102:8443/codec-gate-selftest.html
+    https://<ip-do-host>:8443/codec-gate-selftest.html   (`make ip` mostra o IP)
 
   A página imprime o resultado agregado em `#summary`, para que a leitura por
   `curl` (ou uma captura de tela) sirva de registro.
@@ -99,7 +99,7 @@
     um offer que o MediaMTX vai recusar (ele não transcodifica).
     <br>
     Também é verificável sem navegador no host:
-    <code>curl -s --cacert deploy/certs/ca.crt https://192.168.59.102:8443/codec-gate.js | node --check</code>
+    <code>curl -s --cacert deploy/certs/ca.crt https://&lt;ip-do-host&gt;:8443/codec-gate.js | node --check</code>
     (sintaxe) — a execução dos casos, só no navegador.
   </p>
 </main>

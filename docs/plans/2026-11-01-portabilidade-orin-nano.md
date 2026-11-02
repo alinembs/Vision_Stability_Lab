@@ -153,18 +153,21 @@ foi mudado neste ciclo altera o comportamento dele (padrão de imagem DS 7.1,
 
 ### P3 — Dashboard, watchdog e certificados (0,5 d)
 
-- `deploy/.env` com `LAN_IP=192.168.59.129`; regenerar o certificado do painel
-  (`deploy/certs/generate-certs.sh --force` com `VSL_LAN_IP=192.168.59.129`) —
-  o certificado atual está amarrado ao IP do NX.
+- `deploy/.env` sem `LAN_IP`: o `make up` detecta o IP atual
+  (`scripts/host_ip.sh`) e reemite o certificado do servidor se o SAN não
+  cobrir o endereço novo — preservando a CA. O certificado antigo estava
+  amarrado ao IP do NX; o `--ensure` resolve sem `--force`.
 - **Distribuir a CA do Nano** para cada máquina que abre o dashboard
-  (`ssh …@192.168.59.129 'docker exec vision-mediamtx cat /certs/ca.crt'`,
-  validar com `curl --cacert … → 404`, instalar no store e reiniciar o
-  navegador). A CA do NX **não serve**: mesmo `CN`, chave diferente — INC-008.
-- `make status`, `make sources`, player WHEP no path `live`.
-- **Critério de aceite:** `http://192.168.59.129:8081` abre, fontes listadas,
-  preview toca no dashboard **na máquina do operador, com a CA do Nano
-  instalada** (não basta `docker ps` saudável: a verificação de certificado é do
-  navegador).
+  (no host: `scp …'~/Vision_Stability_Lab/deploy/certs/ca.crt'`; validar com
+  `curl --cacert … → 404`, instalar no store e reiniciar o navegador). A CA do
+  NX **não serve**: mesmo `CN`, chave diferente — INC-008. Trocar o IP depois
+  não exige redistribuir de novo (só o certificado do servidor muda).
+- `make status`, `make sources`, `make ip` (URLs do momento), player WHEP no
+  path `live`.
+- **Critério de aceite:** `make ip` mostra o painel, `http://<ip>:8081` abre,
+  fontes listadas, preview toca no dashboard **na máquina do operador, com a CA
+  do Nano instalada** (não basta `docker ps` saudável: a verificação de
+  certificado é do navegador).
 
 ### P4 — Gate de aceitação (0,5 d)
 
@@ -181,7 +184,7 @@ foi mudado neste ciclo altera o comportamento dele (padrão de imagem DS 7.1,
 | Memória unificada (~8 GB) com imagem `-triton-multiarch` | OOM/137 no boot | medir em P0; se estourar, usar variante enxuta ou `batch_size`/intervalo de inferência já configurados |
 | DS 9.1 muda configs de `nvinfer`/`nvtracker` | pipeline não sobe | P2 ajusta configs; telemetria e testes não mudam |
 | `pyds` cp312 ausente/quebrado | sem bindings | P1 traz o wheel do release v1.2.2 e valida `import pyds` |
-| Certificado amarrado ao IP do NX | painel não abre no Nano | P3 regenera com `VSL_LAN_IP` do Nano |
+| Certificado amarrado a um IP | painel não abre depois de troca de DHCP | SAN gerado dos IPs atuais + nome `<hostname>.local`; `make up` reemite o certificado preservando a CA |
 | `jtop` com `Jetpack: MISSING` | dúvida sobre o estado da instalação | P0 confirma com `dpkg`/`nv_tegra_release` antes de investir o resto |
 
 ## Rollback

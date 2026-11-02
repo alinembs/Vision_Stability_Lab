@@ -29,7 +29,7 @@
   var CODEC_GATE_MESSAGES = {
     api_missing:
       "Este navegador não expõe a escolha de codec. Abra esta página em HTTPS " +
-      "(https://192.168.59.102:8443) no Chrome do Android e recarregue.",
+      "(https://<ip-do-host>:8443) no Chrome do Android e recarregue.",
     h264_unavailable:
       "Este aparelho não oferece H.264 para publicação ao vivo, e o servidor não " +
       "converte vídeo. Use um Android com Chrome atualizado.",

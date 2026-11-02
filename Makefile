@@ -29,6 +29,16 @@ DASHBOARD_BIND ?= 0.0.0.0
 SWITCH_BIND ?= 127.0.0.1
 PYTHON ?= python3
 
+# -- IP da LAN ----------------------------------------------------------------
+# Detectado **a cada execução** (`scripts/host_ip.sh`): em campo o roteador
+# pode entregar outro endereço ao Jetson (2026-11-02: o Nano saiu de .129 para
+# 192.168.0.2) e as portas do MediaMTX ficam amarradas a `LAN_IP` — com o IP
+# antigo o `docker compose up` morre em `cannot assign requested address`.
+# `LAN_IP=<ip> make up` força um valor; `deploy/.env` não precisa mais dele
+# (variável de ambiente vence o `.env` no compose).
+LAN_IP ?= $(shell ./scripts/host_ip.sh 2>/dev/null)
+export LAN_IP
+
 # -- plataforma ---------------------------------------------------------------
 # L4T R36 = JetPack 6 (DeepStream 7.1, imagem `deepstream-l4t`).
 # L4T R39 = JetPack 7 (DeepStream 9.1, imagem consolidada `deepstream`).
@@ -51,7 +61,7 @@ DS_BASE_IMAGE_EFF := $(or $(shell sed -n 's/^DS_BASE_IMAGE=//p' \
 
 .PHONY: help doctor up up-build build up-switch down restart restart-app \
 	status logs logs-app health test test-host test-dashboard source sources \
-	switch shell
+	switch shell certs ip url
 
 help: ## Mostra esta ajuda
 	@echo "Vision Stability Lab — comandos:"
@@ -66,6 +76,7 @@ doctor: ## Diagnostica a plataforma antes de subir (bloqueia só o que impede)
 	@echo "  L4T:            $(or $(L4T),desconhecido)"
 	@echo "  DS esperado:    $(DS_ESPERADO)"
 	@echo "  imagem base:    $(DS_BASE_IMAGE_EFF)"
+	@echo "  IP da LAN:      $(LAN_IP)"
 	@echo "  memória livre:  $$(free -m | awk 'NR==2 {print $$7 " MB"}')"
 	@echo ""
 	@echo "== pré-requisitos =="
@@ -82,6 +93,16 @@ doctor: ## Diagnostica a plataforma antes de subir (bloqueia só o que impede)
 	else echo "  [FALHA] $(COMPOSE_DIR)/.env ausente (copie de .env.example e preencha RTSP_URI)"; exit 1; fi; \
 	if grep -q '^RTSP_URI=.\+' $(COMPOSE_DIR)/.env; then echo "  [ok] RTSP_URI definida"; \
 	else echo "  [FALHA] RTSP_URI vazia em $(COMPOSE_DIR)/.env"; exit 1; fi; \
+	if [ -z "$(LAN_IP)" ] || [ "$(LAN_IP)" = "127.0.0.1" ] || [ "$(LAN_IP)" = "0.0.0.0" ]; then \
+		echo "  [FALHA] IP da LAN não detectado (scripts/host_ip.sh) — defina LAN_IP=<ip>"; exit 1; \
+	fi; echo "  [ok] LAN_IP=$(LAN_IP)"; \
+	env_lan_ip=$$(sed -n 's/^LAN_IP=//p' $(COMPOSE_DIR)/.env 2>/dev/null | tail -1 | tr -d '" \r'); \
+	if [ -n "$$env_lan_ip" ] && [ "$$env_lan_ip" != "$(LAN_IP)" ]; then \
+		echo "  [aviso] $(COMPOSE_DIR)/.env tem LAN_IP=$$env_lan_ip (ignorado: vale o detectado) — remova a linha"; \
+	fi; \
+	if command -v ip >/dev/null 2>&1 && ! ip -4 addr show | grep -q "inet $(LAN_IP)/"; then \
+		echo "  [FALHA] $(LAN_IP) não está em nenhuma interface deste host (confira o IP do roteador)"; exit 1; \
+	fi; \
 	porta_usada=$$(ss -ltn 2>/dev/null | awk '{print $$4}' | grep -c ':8081$$' || true); \
 	if [ "$$porta_usada" -gt 0 ] && ! curl -fsS -m 2 $(DASHBOARD_URL)/api/snapshot >/dev/null 2>&1; then \
 		echo "  [FALHA] porta 8081 ocupada por outro processo (o VSL usa 8081 porque 8080 é do arquo-web)"; exit 1; \
@@ -107,11 +128,30 @@ doctor: ## Diagnostica a plataforma antes de subir (bloqueia só o que impede)
 	@echo ""
 	@echo "doctor: ok"
 
-up: doctor ## Sobe o stack (use `make up-build` quando mudou imagem/Dockerfile)
+certs: ## Garante o certificado do servidor para o IP atual (preserva a CA)
+	@rc=0; VSL_LAN_IP=$(LAN_IP) ./deploy/certs/generate-certs.sh --ensure || rc=$$?; \
+	case $$rc in \
+		0) echo "  [ok] certificado já cobre o IP atual ($(LAN_IP))";; \
+		10) echo "  [ok] certificado do servidor reemitido para $(LAN_IP) (CA preservada: nada a reinstalar nos clientes)";; \
+		11) echo "  [aviso] CA regerada: reinstale deploy/certs/ca.crt nos navegadores/celulares";; \
+		*) echo "  [FALHA] generate-certs.sh saiu com $$rc"; exit $$rc;; \
+	esac; \
+	if [ "$$rc" = "10" ] || [ "$$rc" = "11" ]; then \
+		(cd $(COMPOSE_DIR) && $(COMPOSE) restart mediamtx capture-web >/dev/null 2>&1) || true; \
+	fi
+
+ip url: ## Mostra o IP detectado e as URLs para abrir no navegador
+	@echo "IP da LAN:      $(LAN_IP)"
+	@echo "painel:         http://$(LAN_IP):8081"
+	@echo "captura:        https://$(LAN_IP):8443/capture.html"
+	@echo "WHIP (celular): https://$(LAN_IP):8889/<path>/whip"
+	@echo "nome estável:   https://$$(hostname).local:8443/capture.html  (se houver mDNS na rede)"
+
+up: doctor certs ## Sobe o stack (use `make up-build` quando mudou imagem/Dockerfile)
 	cd $(COMPOSE_DIR) && $(COMPOSE) up -d
 	@$(MAKE) --no-print-directory status
 
-up-build: doctor ## Constrói as imagens e sobe o stack (Dockerfile/deps mudaram)
+up-build: doctor certs ## Constrói as imagens e sobe o stack (Dockerfile/deps mudaram)
 	cd $(COMPOSE_DIR) && $(COMPOSE) up -d --build
 	@$(MAKE) --no-print-directory status
 

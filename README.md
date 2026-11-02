@@ -28,8 +28,8 @@ imagem, que o `make doctor` valida contra a plataforma.
 
 | Ambiente | IP na LAN | Papel | Plataforma | Base do stack |
 |---|---|---|---|---|
-| **Orin NX** | `192.168.59.102` | produção e referência dos gates | L4T R36.4.7 · JetPack 6 · DeepStream **7.1** · Python 3.10 no container | `deploy/Dockerfile` padrão (DS 7.1, wheel `pyds` cp310) |
-| **Orin Nano** (`pr3via-jetson`) | `192.168.59.129` | validação de portabilidade | L4T R39.2.1 · JetPack 7.2.1 · DeepStream **9.1** · CUDA 13 · TRT 10.16.2.10 · Ubuntu 24.04 · Python 3.12.3 · GStreamer 1.24.2 | `DS_BASE_IMAGE=nvcr.io/nvidia/deepstream:9.1-triton-multiarch` + wheel `pyds` cp312 |
+| **Orin NX** | DHCP — `make ip` | produção e referência dos gates | L4T R36.4.7 · JetPack 6 · DeepStream **7.1** · Python 3.10 no container | `deploy/Dockerfile` padrão (DS 7.1, wheel `pyds` cp310) |
+| **Orin Nano** (`pr3via-jetson`) | DHCP — `make ip` | validação de portabilidade | L4T R39.2.1 · JetPack 7.2.1 · DeepStream **9.1** · CUDA 13 · TRT 10.16.2.10 · Ubuntu 24.04 · Python 3.12.3 · GStreamer 1.24.2 | `DS_BASE_IMAGE=nvcr.io/nvidia/deepstream:9.1-triton-multiarch` + wheel `pyds` cp312 |
 
 Estado em 2026-11-01: o **NX** é o ambiente de produção do VSL e onde os gates
 são fechados (E4 PASS). O **Nano** sobe o stack completo com `make up` e serve
@@ -43,14 +43,22 @@ Cada host é um **stack independente** — não é cluster nem distribuição:
 - **Um** container DeepStream por host (regra global do projeto). Os dois
   Jetsons podem rodar ao mesmo tempo porque são hosts distintos; dois
   containers do projeto no **mesmo** host continuam proibidos.
-- `deploy/.env` é por host: `LAN_IP`, `RTSP_URI` e `DASHBOARD_PORT`. O `LAN_IP`
-  amarra a publicação das portas do MediaMTX e alimenta o
-  `MTX_WEBRTCADDITIONALHOSTS` (o IP que o SDP anuncia ao navegador).
-- O dashboard é sempre `http://<LAN_IP do host>:8081` — `192.168.59.102:8081`
-  no NX, `192.168.59.129:8081` no Nano. `localhost` não serve (ver Fase 4).
-- O certificado é **por host**: `deploy/certs/generate-certs.sh` roda com o
-  `VSL_LAN_IP` do próprio host, porque o SAN lista o IP. A pasta é gitignored:
-  nunca copie o par `server.crt`/`server.key` de um host para o outro.
+- `deploy/.env` é por host: `RTSP_URI`, `DASHBOARD_PORT` e, opcionalmente,
+  `LAN_IP`. O IP **não** é mais fixo no repositório nem obrigatório no `.env`:
+  `make up` detecta o endereço atual (`scripts/host_ip.sh`: rota default e,
+  depois, `hostname -I`) e exporta `LAN_IP` para o compose — é ele que amarra a
+  publicação das portas do MediaMTX e alimenta o `MTX_WEBRTCADDITIONALHOSTS` (o
+  IP que o SDP anuncia ao navegador). Se o roteador trocar o IP, basta
+  `make up`; nada de editar arquivo.
+- O dashboard é sempre `http://<IP atual do host>:8081`. Use `make ip` para ver
+  o endereço do momento (e as URLs de captura). `localhost` não serve (ver
+  Fase 4).
+- O certificado é **por host**: `deploy/certs/generate-certs.sh` monta o SAN a
+  partir dos IPv4 atuais do host + `<hostname>.local` + `vsl.local`. Quando o
+  IP muda, `make up` reemite **só o certificado do servidor**, preservando a
+  CA: quem já instalou o `ca.crt` continua confiando, sem reinstalar nada.
+  A pasta é gitignored: nunca copie o par `server.crt`/`server.key` de um host
+  para o outro.
 - As duas CAs têm o **mesmo CN** (`Vision Stability Lab Internal CA`), mas
   chaves diferentes. Uma máquina que abre os dois dashboards precisa das duas
   instaladas; regenerar (`--force`) num host invalida **só** aquela CA para os
@@ -204,7 +212,7 @@ Deixe estes recursos para etapas posteriores:
 - Kubernetes.
 - Distribuição/orquestração em vários Jetsons — o Orin NX e o Orin Nano são dois ambientes de teste independentes, não um cluster.
 
-O escopo deve ter **uma fonte ativa por vez**, uma classe de objeto e uma regra temporal. Isso permite concentrar o aprendizado em lifecycle, backpressure, observabilidade e recuperação de falhas.
+O escopo deve ter **uma fonte ativa por vez**, uma métrica de ocupação (pessoas — o modelo detecta e desenha as 80 classes COCO, mas a telemetria conta só `person`) e uma regra temporal. Isso permite concentrar o aprendizado em lifecycle, backpressure, observabilidade e recuperação de falhas.
 
 ## 3. Arquitetura recomendada
 
@@ -664,32 +672,42 @@ Entregáveis:
 
 Para baixa latência, prefira WebRTC. Para a primeira integração, HLS pode ser mais simples, embora normalmente introduza mais atraso.
 
-> **Acesse o dashboard pelo IP da LAN do host que serve o painel** —
-> `http://192.168.59.102:8081` no Orin NX, `http://192.168.59.129:8081` no Orin
-> Nano —, não por `http://localhost:8081`. O MediaMTX é publicado amarrado no
-> `LAN_IP` do `deploy/.env` de cada host (nunca `0.0.0.0` — DIV-003 em
-> `docs/incident-log.md`), então `127.0.0.1:8889` não responde; e o frontend
-> deriva a URL do WHEP do hostname da página (`dashboard/frontend/app.js`:
-> `${location.hostname}:8889`), logo em `localhost` o player negocia contra uma
-> porta fechada e o vídeo não aparece. Vale também para o IP: o certificado de
-> um host não cobre o outro.
+> **Acesse o dashboard pelo IP da LAN atual do host que serve o painel** —
+> rode `make ip` no host para ver o endereço do momento (ex.:
+> `http://192.168.59.102:8081`) —, não por `http://localhost:8081`. O MediaMTX
+> é publicado amarrado no `LAN_IP` **detectado no `make up`** (nunca `0.0.0.0`
+> — DIV-003 em `docs/incident-log.md`), então `127.0.0.1:8889` não responde; e
+> o frontend deriva a URL do WHEP do hostname da página
+> (`dashboard/frontend/app.js`: `${location.hostname}:8889`), logo em
+> `localhost` o player negocia contra uma porta fechada e o vídeo não aparece.
+> Se o roteador trocar o IP, rode `make up` de novo: as portas são republicadas
+> no endereço novo e o certificado do servidor é reemitido para ele (a CA é
+> preservada, então nada a reinstalar nos clientes).
 
 > **A máquina que abre o dashboard precisa confiar na CA daquele host.** Desde o
 > E0-T4 a 8889 é TLS (`webrtcEncryption: yes`) e o certificado é assinado pela CA
 > de `deploy/certs/` **do host que serve** — que não está no store do sistema e
-> é diferente em cada Jetson (o SAN lista o `LAN_IP` do host). Sem instalar o
+> é diferente em cada Jetson (o SAN lista os IPs do host e os nomes locais
+> `<hostname>.local`/`vsl.local`). Sem instalar o
 > `ca.crt` certo nessa máquina, o `fetch` do WHEP falha na verificação de
 > certificado e o player anuncia "certificado do MediaMTX não é confiável neste
 > navegador" (antes o sintoma era "sem stream do mediamtx", com tudo `healthy`
 > no `docker ps`).
+>
+> Trocar o IP **não** exige novo `ca.crt`: `make up` reemite o certificado do
+> servidor com o SAN novo usando a mesma CA. Só `generate-certs.sh --force`
+> (ou uma CA perdida) obriga a reinstalar o arquivo. Em rede com mDNS, prefira
+> o nome estável — `https://<hostname>.local:8443/capture.html` ou
+> `https://vsl.local:8443/capture.html` — que sobrevive ao DHCP.
 >
 > Antes de instalar, pegue o arquivo **no host que serve** — o `deploy/certs/` é
 > gitignored e diferente em cada Jetson — e confirme que é a CA que assinou
 > aquele host, da máquina do navegador:
 >
 > ```bash
-> scp usuario@192.168.59.129:'~/caminho/do/repo/deploy/certs/ca.crt' ./ca.crt
-> curl --cacert ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.129:8889/
+> IP=$(ssh usuario@<host> 'cd ~/Vision_Stability_Lab && make -s ip' | awk '/^IP da LAN:/ {print $4}')
+> scp usuario@<host>:'~/Vision_Stability_Lab/deploy/certs/ca.crt' ./ca.crt
+> curl --cacert ca.crt -s -o /dev/null -w '%{http_code}\n' "https://$IP:8889/"
 > # 404 = TLS validou (404 é a raiz do MediaMTX); erro de certificado = CA errada
 > ```
 >
@@ -716,10 +734,9 @@ Para baixa latência, prefira WebRTC. Para a primeira integração, HLS pode ser
 > aviso de certificado é só do lado do navegador: o pipeline e o
 > `whip_probe.py --cacert` não dependem disso.
 >
-> O `ca.crt` de um host **não** serve para o outro: NX (`.102`) e Nano (`.129`)
-> têm CAs distintas com o mesmo CN. Uma máquina que abre os dois dashboards
-> instala as duas; `generate-certs.sh --force` num host invalida só aquela CA
-> para os clientes.
+> O `ca.crt` de um host **não** serve para o outro: NX e Nano têm CAs distintas
+> com o mesmo CN. Uma máquina que abre os dois dashboards instala as duas;
+> `generate-certs.sh --force` num host invalida só aquela CA para os clientes.
 
 ### Fase 5 — Testes de estabilidade
 
@@ -842,7 +859,7 @@ vision-stability-lab/
 │   ├── docker-compose.switch.yml # overlay opt-in da troca pela tela
 │   ├── nginx/capture-web.conf    # página de captura do celular (8443)
 │   ├── certs/                    # gitignored: ca.crt/server.crt por host
-│   └── .env                      # por host: LAN_IP, RTSP_URI, DASHBOARD_PORT
+│   └── .env                      # por host: RTSP_URI, DASHBOARD_PORT (LAN_IP opcional: auto)
 ├── scripts/
 │   ├── switch_source.sh          # troca com pré-check, pós-check e rollback
 │   ├── switch_source_lib.py
