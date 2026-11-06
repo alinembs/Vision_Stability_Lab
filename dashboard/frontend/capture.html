@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#14161a">
+<meta name="theme-color" content="#f4f1ea">
 <title>Captura pelo celular · Vision Stability Lab</title>
 <!--
   Página de captura do E0-T4: publica o vídeo do celular por WHIP no MediaMTX.
@@ -19,6 +19,20 @@
   para `http://` (mixed content é bloqueado). Só carrega `style.css`,
   `codec-gate.js` e `capture.js`, deste mesmo diretório.
 -->
+<script>
+  // Mesma preferência de tema do dashboard; satélites não têm botão próprio.
+  (function () {
+    try {
+      document.documentElement.dataset.theme =
+        localStorage.getItem("vsl-theme") === "dark" ? "dark" : "light";
+    } catch (e) {
+      document.documentElement.dataset.theme = "light";
+    }
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/style.css">
 <style>
   /* Só o que esta página acrescenta ao estilo do dashboard: formulário,
@@ -39,11 +53,11 @@
   .alert {
     margin: 0 22px 8px;
     padding: 10px 14px;
-    border: 1px solid var(--red);
+    border: 1px solid var(--bad);
     border-left-width: 4px;
     border-radius: 4px;
-    background: #26181a;
-    color: #ffb3ae;
+    background: var(--alert-bg);
+    color: var(--alert-text);
     font-size: 12px;
     line-height: 1.5;
   }
@@ -72,19 +86,15 @@
     padding: 5px 8px;
     width: 120px;
   }
-  .field input:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
-  .btn[disabled] { opacity: .45; cursor: not-allowed; }
-  .btn[disabled]:hover { background: none; color: var(--amber); }
+  .field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .btn[disabled] { cursor: not-allowed; }
   #status { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--dim); }
-  #status.status-ok { color: var(--green); }
-  #status.status-warn { color: var(--amber); }
-  #status.status-bad { color: var(--red); }
-  #status.status-busy { color: var(--amber); }
+  #status.status-ok { color: var(--accent); }
+  #status.status-warn { color: var(--warn); }
+  #status.status-bad { color: var(--bad); }
+  #status.status-busy { color: var(--accent); }
   .diag-rows .row output { text-align: right; overflow: hidden; text-overflow: ellipsis; max-width: 60%; }
-  .note { padding: 10px 14px; color: var(--dim); font-size: 10px; line-height: 1.6; border-top: 1px solid var(--line); }
-  .note code { color: var(--amber); }
-  .link { color: var(--amber); font-size: 11px; text-decoration: none; border-bottom: 1px dotted var(--amber-dim); }
-  .link:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+  /* .note e .link vêm de style.css (componentes compartilhados com a página de codec) */
 </style>
 </head>
 <body>

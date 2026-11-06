@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#14161a">
+<meta name="theme-color" content="#f4f1ea">
 <title>Autoteste do gate de codec · Vision Stability Lab</title>
 <!--
   Prova executável do gate H.264 (E0-T4), sem framework de teste.
@@ -18,20 +18,34 @@
   A página imprime o resultado agregado em `#summary`, para que a leitura por
   `curl` (ou uma captura de tela) sirva de registro.
 -->
+<script>
+  // Mesma preferência de tema do dashboard; satélites não têm botão próprio.
+  (function () {
+    try {
+      document.documentElement.dataset.theme =
+        localStorage.getItem("vsl-theme") === "dark" ? "dark" : "light";
+    } catch (e) {
+      document.documentElement.dataset.theme = "light";
+    }
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/style.css">
 <style>
   .wrap { padding: 16px 22px 24px; display: flex; flex-direction: column; gap: 12px; flex: 1; }
   .summary {
     font-family: var(--condensed);
-    font-size: 22px;
+    font-size: 21px;
     letter-spacing: .06em;
   }
-  .summary.pass { color: var(--green); }
-  .summary.fail { color: var(--red); }
+  .summary.pass { color: var(--accent); }
+  .summary.fail { color: var(--bad); }
   #selftest { width: 100%; border-collapse: collapse; font-size: 12px; }
   #selftest th, #selftest td {
     text-align: left;
-    padding: 8px 10px;
+    padding: 9px 16px;
     border-bottom: 1px solid var(--line);
     vertical-align: top;
   }
@@ -43,13 +57,10 @@
     border-bottom-color: var(--line);
   }
   #selftest td.result { font-weight: 700; white-space: nowrap; }
-  #selftest tr.pass td.result { color: var(--green); }
-  #selftest tr.fail td.result { color: var(--red); }
+  #selftest tr.pass td.result { color: var(--accent); }
+  #selftest tr.fail td.result { color: var(--bad); }
   #selftest td.detail { color: var(--dim); }
-  .note { color: var(--dim); font-size: 11px; line-height: 1.6; }
-  .note code { color: var(--amber); }
-  .link { color: var(--amber); font-size: 11px; text-decoration: none; border-bottom: 1px dotted var(--amber-dim); }
-  .link:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+  /* .note e .link vêm de style.css (componentes compartilhados com a página de captura) */
 </style>
 </head>
 <body>

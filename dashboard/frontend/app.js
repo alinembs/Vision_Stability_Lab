@@ -2,6 +2,57 @@
 
 const $ = (id) => document.getElementById(id);
 
+// Paleta do canvas: lida de style.css para que os tokens continuem sendo a
+// única fonte de verdade das cores. Mudar --accent no CSS muda o gráfico.
+const tokenCache = new Map();
+function token(name) {
+  if (!tokenCache.has(name)) {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    tokenCache.set(name, v);
+  }
+  return tokenCache.get(name);
+}
+const withAlpha = (hex, alpha) => {
+  const h = hex.replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  const n = parseInt(full, 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+};
+
+/* ---------------- tema (claro por padrão, escuro opcional) ---------------- */
+
+const THEME_KEY = "vsl-theme";
+
+function currentTheme() {
+  return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+}
+
+/** Rótulo do botão e `theme-color` acompanham o tema; o resto é CSS. */
+function syncThemeChrome() {
+  const dark = currentTheme() === "dark";
+  const btn = $("btn-theme");
+  if (btn) {
+    btn.textContent = dark ? "tema claro" : "tema escuro";
+    btn.setAttribute("aria-pressed", String(dark));
+    btn.title = dark ? "voltar ao tema claro" : "usar o tema escuro";
+  }
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = token("--bg");
+}
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme === "dark" ? "dark" : "light";
+  try {
+    localStorage.setItem(THEME_KEY, currentTheme());
+  } catch {
+    // aba privada com storage bloqueado: o tema vale só para esta sessão
+  }
+  // o canvas lê os tokens do CSS: sem limpar o cache ele fica na paleta antiga
+  tokenCache.clear();
+  syncThemeChrome();
+  drawCharts();
+}
+
 const state = {
   baseline: null,
   lastMetrics: null,
@@ -227,6 +278,85 @@ $("btn-play").addEventListener("click", () => {
   player.playing ? player.disconnect() : player.connect();
 });
 
+/* ---------------- tela cheia do vídeo ----------------
+ *
+ * O alvo é o cartão inteiro, não o `<video>`: assim o cabeçalho (e o próprio
+ * botão de sair) continua na tela. A moldura preenche o resto via CSS
+ * (`:fullscreen` em style.css) e o `object-fit: contain` do vídeo cuida da
+ * proporção. No iOS, onde `requestFullscreen` não vale para `<div>`, cai no
+ * fullscreen nativo do elemento de vídeo.
+ */
+
+// iOS: o fullscreen é do <video> e não passa pela Fullscreen API do documento
+let iosFullscreen = false;
+
+function fullscreenElement() {
+  return document.fullscreenElement || document.webkitFullscreenElement ||
+    (iosFullscreen ? $("video") : null);
+}
+
+function syncFullscreenUi() {
+  const ativo = !!fullscreenElement();
+  const btn = $("btn-full");
+  if (!btn) return;
+  btn.textContent = ativo ? "sair" : "tela cheia";
+  btn.title = ativo ? "sair da tela cheia (Esc)" : "tela cheia (F)";
+  btn.setAttribute("aria-pressed", String(ativo));
+}
+
+async function toggleFullscreen() {
+  const card = $("panel-video");
+  try {
+    if (fullscreenElement()) {
+      if (iosFullscreen) $("video").webkitExitFullscreen();
+      else if (document.exitFullscreen) await document.exitFullscreen();
+      else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+    } else if (card.requestFullscreen) {
+      await card.requestFullscreen();
+    } else if (card.webkitRequestFullscreen) {
+      card.webkitRequestFullscreen();
+    } else if ($("video").webkitEnterFullscreen) {
+      $("video").webkitEnterFullscreen();  // iOS: só o <video> aceita
+    }
+  } catch (err) {
+    // política do navegador (iframe sem allowfullscreen) ou gesto inválido
+    console.warn("tela cheia recusada pelo navegador", err);
+  }
+  syncFullscreenUi();
+}
+
+$("btn-full").addEventListener("click", toggleFullscreen);
+document.addEventListener("fullscreenchange", syncFullscreenUi);
+document.addEventListener("webkitfullscreenchange", syncFullscreenUi);
+// iOS: o fullscreen é do <video> e não passa pela Fullscreen API do documento
+$("video").addEventListener("webkitbeginfullscreen", () => {
+  iosFullscreen = true;
+  syncFullscreenUi();
+});
+$("video").addEventListener("webkitendfullscreen", () => {
+  iosFullscreen = false;
+  syncFullscreenUi();
+});
+
+// atalho `F`, ignorado enquanto o operador digita (token, path da captura…)
+document.addEventListener("keydown", (ev) => {
+  if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  if (ev.key !== "f" && ev.key !== "F") return;
+  const alvo = ev.target;
+  const digitando = alvo && (alvo.tagName === "INPUT" ||
+    alvo.tagName === "TEXTAREA" || alvo.tagName === "SELECT" ||
+    alvo.isContentEditable);
+  if (digitando) return;
+  ev.preventDefault();
+  toggleFullscreen();
+});
+
+// sem suporte (iframe sem allowfullscreen e sem o fallback do iOS): não anuncia
+if (!document.fullscreenEnabled && !$("panel-video").webkitRequestFullscreen &&
+    !$("video").webkitEnterFullscreen) {
+  $("btn-full").hidden = true;
+}
+
 /* ---------------- fontes (E4) ---------------- */
 
 /**
@@ -284,8 +414,11 @@ function sourceMetaText(source) {
   const sinceMs = session.since ? new Date(session.since).getTime() : NaN;
   const uptime = Number.isNaN(sinceMs)
     ? "—"
-    : fmtAgo((Date.now() - sinceMs) / 1000);
-  return `há ${uptime} (desde ${fmtEpoch(session.since)}) · epoch ${fmtEpoch(session.session_epoch)} · ${samples}`;
+    : `há ${fmtAgo((Date.now() - sinceMs) / 1000)}`;
+  // o cartão tem 248px de largura: "desde"/"epoch" (quase sempre o mesmo
+  // instante) ocupavam a linha toda e cortavam a contagem de amostras.
+  // O detalhe completo continua no `title` do elemento.
+  return `${uptime} · ${samples}`;
 }
 
 function renderSources() {
@@ -353,9 +486,10 @@ function renderSources() {
     const meta = document.createElement("span");
     meta.className = "source-meta";
     meta.textContent = sourceMetaText(source);
-    if (source.session?.session_epoch) {
-      meta.title = `session_epoch ${source.session.session_epoch}`;
-    }
+    meta.title = source.session
+      ? `${source.session.points ?? 0} amostras · desde ${fmtEpoch(source.session.since)}` +
+        ` · epoch ${fmtEpoch(source.session.session_epoch)}`
+      : "sem sessão registrada";
 
     body.append(line, id, path, meta);
     view.append(icon, body);
@@ -389,6 +523,7 @@ function updateChartTitles() {
   const label = source ? source.name : "fonte ativa";
   $("chart-fps-title").textContent = `fps · ${label} · últimos 30 min`;
   $("chart-rss-title").textContent = `rss mb · ${label} · últimos 30 min`;
+  $("top-source").textContent = label;
 }
 
 async function refreshSources() {
@@ -779,7 +914,6 @@ function applyMetrics(m) {
   $("r-fps-proc").textContent = (m.fps_processed ?? 0).toFixed(1);
   $("r-fps-prev").textContent = (m.fps_preview ?? 0).toFixed(1);
   $("r-drop").textContent = Math.max(m.preview_dropped_fps ?? 0, 0).toFixed(2);
-  $("r-people").textContent = m.persons_max_concurrent ?? 0;
 
   const area = m.area_state ?? "—";
   const word = $("area-word");
@@ -798,28 +932,33 @@ function applyMetrics(m) {
   $("s-entries").textContent = m.total_entries ?? 0;
   $("s-exits").textContent = m.total_exits ?? 0;
   $("s-dwell").textContent = `${(m.avg_dwell_s ?? 0).toFixed(1)} s`;
+  // `persons_max_concurrent` é o pico do intervalo de telemetria (o pipeline
+  // zera o acumulador a cada relatório) — é exatamente "pico simultâneo".
+  $("s-peak").textContent = m.persons_max_concurrent ?? 0;
 
   $("h-rss").textContent = `${(m.rss_mb ?? 0).toFixed(1)} mb`;
   const growth = rssGrowthMb(m);
   const growthEl = $("h-growth");
   growthEl.textContent = growth === null ? "—" :
     `${growth >= 0 ? "+" : ""}${growth.toFixed(1)} mb`;
-  growthEl.className = rssGrowthBad(growth) ? "bad" : "";
+  growthEl.classList.toggle("bad", rssGrowthBad(growth));
   $("h-proc").textContent = `${m.threads ?? "—"} / ${m.open_fds ?? "—"}`;
   $("h-frames").textContent = (m.frames_total_processed ?? 0).toLocaleString("pt-BR");
 
   const ageSec = Math.max(0, (Date.now() - new Date(m.ts).getTime()) / 1000);
   $("h-age").textContent = `${fmtAgo(ageSec)} atrás`;
-  $("h-age").className = ageSec > 90 ? "bad" : "";
+  $("h-age").classList.toggle("bad", ageSec > 90);
 }
 
 function updateDerived(snap) {
   const health = snap.health || {};
   const el = $("h-status");
   el.textContent = health.status ?? "—";
-  el.className = { healthy: "ok", degraded: "warn", stale: "warn", down: "bad" }[health.status] ?? "";
+  el.classList.remove("ok", "warn", "bad");
+  const tone = { healthy: "ok", degraded: "warn", stale: "warn", down: "bad" }[health.status];
+  if (tone) el.classList.add(tone);
   $("h-errors").textContent = snap.error_count ?? 0;
-  $("h-errors").className = (snap.error_count ?? 0) > 0 ? "bad" : "";
+  $("h-errors").classList.toggle("bad", (snap.error_count ?? 0) > 0);
 
   if (snap.pipeline_started_at) {
     startUptimeTicker(new Date(snap.pipeline_started_at));
@@ -887,9 +1026,20 @@ function eventDetail(r) {
     case "rtsp_reconnect_error":
     case "preview_branch_error":
       return r.error || "";
+    case "pipeline_playing":
+    case "pipeline_stopped":
+    case "preview_branch_ready":
+    case "eos":
+    case "test_duration_reached":
+    case "interrupted_by_user":
+      return r.source_name || r.source_id || "";
     default:
+      // campos internos (`_class`, `_group`) e a proveniência não são conteúdo
+      // para o operador: apareciam crus no log antes do filtro abaixo
       return Object.entries(r)
-        .filter(([k]) => !["ts", "event"].includes(k))
+        .filter(([k, v]) =>
+          !k.startsWith("_") && v !== null && v !== undefined &&
+          !["ts", "event", "run", "source_id", "source_name"].includes(k))
         .map(([k, v]) => `${k}=${v}`).join(" ");
   }
 }
@@ -948,9 +1098,11 @@ function renderEvents() {
   list.appendChild(frag);
 }
 
-document.querySelectorAll(".chip").forEach((chip) => {
+// Só os chips do filtro de eventos: os chips de fonte/token usam a mesma
+// classe e não podem trocar o filtro ao serem clicados.
+document.querySelectorAll(".event-filter .chip").forEach((chip) => {
   chip.addEventListener("click", () => {
-    document.querySelectorAll(".chip").forEach((c) => {
+    document.querySelectorAll(".event-filter .chip").forEach((c) => {
       c.classList.remove("active");
       c.setAttribute("aria-pressed", "false");
     });
@@ -977,12 +1129,13 @@ function drawLine(canvasId, values, color, fillColor, maxElId) {
   const maxV = Math.max(...values, 0.001) * 1.15;
   const minV = Math.min(...values, 0);
   const span = maxV - minV || 1;
+  const casas = maxV >= 50 ? 0 : 1;  // mesma precisão nos 4 rótulos do eixo
   const x = (i) => pad.l + (i / Math.max(values.length - 1, 1)) * (w - pad.l - pad.r);
   const y = (v) => pad.t + (1 - (v - minV) / span) * (h - pad.t - pad.b);
 
-  ctx.strokeStyle = "#262b31";
-  ctx.fillStyle = "#5b626b";
-  ctx.font = "9px 'JetBrains Mono', monospace";
+  ctx.strokeStyle = token("--divider");
+  ctx.fillStyle = token("--chart-axis");
+  ctx.font = "10px 'IBM Plex Mono', monospace";
   ctx.lineWidth = 1;
   for (let g = 0; g <= 3; g++) {
     const gy = pad.t + (g / 3) * (h - pad.t - pad.b);
@@ -991,7 +1144,7 @@ function drawLine(canvasId, values, color, fillColor, maxElId) {
     ctx.moveTo(pad.l, gy);
     ctx.lineTo(w - pad.r, gy);
     ctx.stroke();
-    ctx.fillText(gv.toFixed(gv < 10 ? 1 : 0), 4, gy + 3);
+    ctx.fillText(gv.toFixed(casas), 4, gy + 3);
   }
 
   if (values.length > 1) {
@@ -1016,9 +1169,9 @@ function drawLine(canvasId, values, color, fillColor, maxElId) {
 function drawCharts() {
   const rows = state.history || [];
   drawLine("chart-fps", rows.map((m) => m.fps_processed ?? 0),
-    "rgb(255,180,84)", "rgba(255,180,84,0.08)", "fps-max");
+    token("--accent"), withAlpha(token("--accent"), 0.12), "fps-max");
   drawLine("chart-rss", rows.map((m) => m.rss_mb ?? 0),
-    "rgb(110,168,254)", "rgba(110,168,254,0.08)", "rss-max");
+    token("--info"), withAlpha(token("--info"), 0.12), "rss-max");
   if (!rows.length) {
     $("fps-max").textContent = "";
     $("rss-max").textContent = "";
@@ -1064,6 +1217,11 @@ window.addEventListener("resize", () => {
 /* ---------------- boot ---------------- */
 
 state.sw.token = sessionStorage.getItem(SWITCH_TOKEN_KEY);
+
+$("btn-theme")?.addEventListener("click", () => {
+  applyTheme(currentTheme() === "dark" ? "light" : "dark");
+});
+applyTheme(currentTheme());
 
 wsConnect();
 refreshSources();
