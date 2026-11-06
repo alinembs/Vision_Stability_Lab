@@ -10,6 +10,8 @@ __pycache__/
 # Ferramentas locais
 .superpowers/
 .openclaude/
+# Grafo de conhecimento local (graphify): regenerável, fica fora do git
+graphify-out/
 
 # Sistema
 .DS_Store
