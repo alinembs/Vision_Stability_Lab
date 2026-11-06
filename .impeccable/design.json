@@ -1,0 +1,927 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-06T12:00:00.000Z",
+  "title": "Design System: Vision Stability Lab",
+  "extensions": {
+    "colorMeta": {
+      "paper": {
+        "role": "neutral",
+        "displayName": "Papel",
+        "canonical": "#f4f1ea",
+        "darkCanonical": "#101114",
+        "tonalRamp": [
+          "#6e6c69",
+          "#9f9d98",
+          "#cfcdc7",
+          "#f4f1ea",
+          "#f6f4ee",
+          "#f8f6f2",
+          "#faf9f6",
+          "#fcfbf9"
+        ],
+        "darkRamp": [
+          "#7c7c7e",
+          "#535456",
+          "#2d2e30",
+          "#101114",
+          "#0e0e11",
+          "#0b0c0e",
+          "#09090b",
+          "#060708"
+        ]
+      },
+      "card": {
+        "role": "neutral",
+        "displayName": "Folha",
+        "canonical": "#fffdf9",
+        "darkCanonical": "#181b21",
+        "tonalRamp": [
+          "#737270",
+          "#a6a4a2",
+          "#d9d7d4",
+          "#fffdf9",
+          "#fffdfa",
+          "#fffefb",
+          "#fffefc",
+          "#fffefd"
+        ],
+        "darkRamp": [
+          "#808285",
+          "#595b5f",
+          "#34363c",
+          "#181b21",
+          "#14171c",
+          "#111317",
+          "#0d0f12",
+          "#0a0b0d"
+        ]
+      },
+      "card-raised": {
+        "role": "neutral",
+        "displayName": "Folha Elevada",
+        "canonical": "#f8f3eb",
+        "darkCanonical": "#1f232b",
+        "tonalRamp": [
+          "#706d6a",
+          "#a19e99",
+          "#d3cfc8",
+          "#f8f3eb",
+          "#f9f5ef",
+          "#fbf7f2",
+          "#fcfaf6",
+          "#fdfcf9"
+        ],
+        "darkRamp": [
+          "#84868a",
+          "#5e6166",
+          "#3a3d44",
+          "#1f232b",
+          "#1a1e25",
+          "#16181e",
+          "#111318",
+          "#0c0e11"
+        ]
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#e4ddd2",
+        "darkCanonical": "#2a2e36",
+        "tonalRamp": [
+          "#67635e",
+          "#949088",
+          "#c2bcb2",
+          "#e4ddd2",
+          "#e9e3da",
+          "#eee9e2",
+          "#f3f0eb",
+          "#f7f5f2"
+        ],
+        "darkRamp": [
+          "#8a8c90",
+          "#66696e",
+          "#44474e",
+          "#2a2e36",
+          "#24272e",
+          "#1d2026",
+          "#17191e",
+          "#111216"
+        ]
+      },
+      "seam": {
+        "role": "neutral",
+        "displayName": "Costura",
+        "canonical": "#ece5da",
+        "darkCanonical": "#23272e",
+        "tonalRamp": [
+          "#6a6762",
+          "#99958e",
+          "#c9c3b9",
+          "#ece5da",
+          "#efeae1",
+          "#f3eee7",
+          "#f6f3ee",
+          "#faf8f5"
+        ],
+        "darkRamp": [
+          "#86888c",
+          "#616369",
+          "#3d4147",
+          "#23272e",
+          "#1e2127",
+          "#181b20",
+          "#131519",
+          "#0e1012"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Tinta",
+        "canonical": "#16181d",
+        "darkCanonical": "#f3f1ea",
+        "tonalRamp": [
+          "#0a0b0d",
+          "#0e1013",
+          "#131419",
+          "#16181d",
+          "#404246",
+          "#6a6b6e",
+          "#969799",
+          "#bebec0"
+        ],
+        "darkRamp": [
+          "#f8f7f3",
+          "#f6f5f0",
+          "#f4f3ed",
+          "#f3f1ea",
+          "#cfcdc7",
+          "#aaa9a4",
+          "#868581",
+          "#61605e"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Rótulo Apagado",
+        "canonical": "#6d675e",
+        "darkCanonical": "#a39c91",
+        "tonalRamp": [
+          "#312e2a",
+          "#47433d",
+          "#5d5850",
+          "#6d675e",
+          "#87827b",
+          "#a29e98",
+          "#bdbbb7",
+          "#d6d4d2"
+        ],
+        "darkRamp": [
+          "#ccc9c2",
+          "#bdb8b0",
+          "#aea89e",
+          "#a39c91",
+          "#8b857b",
+          "#726d66",
+          "#5a5650",
+          "#413e3a"
+        ]
+      },
+      "faint": {
+        "role": "neutral",
+        "displayName": "Rótulo Desbotado",
+        "canonical": "#776f63",
+        "darkCanonical": "#8e877c",
+        "tonalRamp": [
+          "#36322d",
+          "#4d4840",
+          "#655e54",
+          "#776f63",
+          "#8f897f",
+          "#a8a39b",
+          "#c2beb9",
+          "#d9d7d3"
+        ],
+        "darkRamp": [
+          "#c1bdb7",
+          "#aea9a1",
+          "#9c958c",
+          "#8e877c",
+          "#797369",
+          "#635e57",
+          "#4e4a44",
+          "#393632"
+        ]
+      },
+      "action": {
+        "role": "accent",
+        "displayName": "Verde de Ação",
+        "canonical": "#1f6b4a",
+        "darkCanonical": "#8dceb0",
+        "tonalRamp": [
+          "#0e3021",
+          "#144630",
+          "#1a5b3f",
+          "#1f6b4a",
+          "#47866b",
+          "#70a08b",
+          "#9abcae",
+          "#c0d6cc"
+        ],
+        "darkRamp": [
+          "#c0e4d4",
+          "#addcc6",
+          "#9bd4b9",
+          "#8dceb0",
+          "#78af96",
+          "#63907b",
+          "#4e7161",
+          "#385246"
+        ]
+      },
+      "action-hover": {
+        "role": "accent",
+        "displayName": "Verde de Ação Escuro",
+        "canonical": "#174f37",
+        "darkCanonical": "#a7dcc4",
+        "tonalRamp": [
+          "#0a2419",
+          "#0f3324",
+          "#14432f",
+          "#174f37",
+          "#416f5b",
+          "#6b8e7f",
+          "#97b0a5",
+          "#becec7"
+        ],
+        "darkRamp": [
+          "#cfecdf",
+          "#c0e6d5",
+          "#b2e0cb",
+          "#a7dcc4",
+          "#8ebba7",
+          "#759a89",
+          "#5c796c",
+          "#43584e"
+        ]
+      },
+      "action-border": {
+        "role": "accent",
+        "displayName": "Borda de Ação",
+        "canonical": "#9dc4b2",
+        "darkCanonical": "#3f6b57",
+        "tonalRamp": [
+          "#475850",
+          "#667f74",
+          "#85a797",
+          "#9dc4b2",
+          "#afcfc0",
+          "#c0d9ce",
+          "#d3e4dc",
+          "#e4eee9"
+        ],
+        "darkRamp": [
+          "#95aea3",
+          "#759486",
+          "#567d6b",
+          "#3f6b57",
+          "#365b4a",
+          "#2c4b3d",
+          "#233b30",
+          "#192b23"
+        ]
+      },
+      "action-wash": {
+        "role": "accent",
+        "displayName": "Lavagem de Ação",
+        "canonical": "#e7f3ec",
+        "darkCanonical": "#1c2c24",
+        "tonalRamp": [
+          "#686d6a",
+          "#969e99",
+          "#c4cfc9",
+          "#e7f3ec",
+          "#ebf5ef",
+          "#f0f7f3",
+          "#f4faf6",
+          "#f8fcfa"
+        ],
+        "darkRamp": [
+          "#828b87",
+          "#5c6761",
+          "#37453e",
+          "#1c2c24",
+          "#18251f",
+          "#141f19",
+          "#0f1814",
+          "#0b120e"
+        ]
+      },
+      "on-action": {
+        "role": "accent",
+        "displayName": "Texto sobre Ação",
+        "canonical": "#ffffff",
+        "darkCanonical": "#102018",
+        "tonalRamp": [
+          "#737373",
+          "#a6a6a6",
+          "#d9d9d9",
+          "#ffffff",
+          "#ffffff",
+          "#ffffff",
+          "#ffffff",
+          "#ffffff"
+        ],
+        "darkRamp": [
+          "#7c8480",
+          "#535e59",
+          "#2d3b34",
+          "#102018",
+          "#0e1b14",
+          "#0b1611",
+          "#09120d",
+          "#060d0a"
+        ]
+      },
+      "ok": {
+        "role": "state",
+        "displayName": "Verde de Aprovado",
+        "canonical": "#1f6b4a",
+        "darkCanonical": "#8dceb0",
+        "tonalRamp": [
+          "#0e3021",
+          "#144630",
+          "#1a5b3f",
+          "#1f6b4a",
+          "#47866b",
+          "#70a08b",
+          "#9abcae",
+          "#c0d6cc"
+        ],
+        "darkRamp": [
+          "#c0e4d4",
+          "#addcc6",
+          "#9bd4b9",
+          "#8dceb0",
+          "#78af96",
+          "#63907b",
+          "#4e7161",
+          "#385246"
+        ]
+      },
+      "warn": {
+        "role": "state",
+        "displayName": "Âmbar de Atenção",
+        "canonical": "#8a5a0f",
+        "darkCanonical": "#e2b15a",
+        "tonalRamp": [
+          "#3e2807",
+          "#5a3a0a",
+          "#754c0d",
+          "#8a5a0f",
+          "#9f783a",
+          "#b49565",
+          "#cab593",
+          "#ded1bc"
+        ],
+        "darkRamp": [
+          "#efd4a4",
+          "#eac788",
+          "#e5ba6e",
+          "#e2b15a",
+          "#c0964c",
+          "#9e7c3f",
+          "#7c6132",
+          "#5a4724"
+        ]
+      },
+      "warn-wash": {
+        "role": "state",
+        "displayName": "Lavagem de Atenção",
+        "canonical": "#f8efd8",
+        "darkCanonical": "#2c2416",
+        "tonalRamp": [
+          "#706c61",
+          "#a19b8c",
+          "#d3cbb8",
+          "#f8efd8",
+          "#f9f2df",
+          "#fbf5e6",
+          "#fcf8ed",
+          "#fdfbf4"
+        ],
+        "darkRamp": [
+          "#8b877f",
+          "#676157",
+          "#453e32",
+          "#2c2416",
+          "#251f13",
+          "#1f190f",
+          "#18140c",
+          "#120e09"
+        ]
+      },
+      "bad": {
+        "role": "state",
+        "displayName": "Vermelho de Falha",
+        "canonical": "#a32622",
+        "darkCanonical": "#f0a29c",
+        "tonalRamp": [
+          "#49110f",
+          "#6a1916",
+          "#8b201d",
+          "#a32622",
+          "#b44d4a",
+          "#c47472",
+          "#d69d9c",
+          "#e5c2c1"
+        ],
+        "darkRamp": [
+          "#f7ccc9",
+          "#f4bcb8",
+          "#f2ada8",
+          "#f0a29c",
+          "#cc8a85",
+          "#a8716d",
+          "#845956",
+          "#60413e"
+        ]
+      },
+      "bad-wash": {
+        "role": "state",
+        "displayName": "Lavagem de Falha",
+        "canonical": "#f8e6e4",
+        "darkCanonical": "#2c1817",
+        "tonalRamp": [
+          "#706767",
+          "#a19694",
+          "#d3c4c2",
+          "#f8e6e4",
+          "#f9eae9",
+          "#fbefee",
+          "#fcf4f3",
+          "#fdf8f7"
+        ],
+        "darkRamp": [
+          "#8b807f",
+          "#675958",
+          "#453433",
+          "#2c1817",
+          "#251414",
+          "#1f1110",
+          "#180d0d",
+          "#120a09"
+        ]
+      },
+      "info": {
+        "role": "state",
+        "displayName": "Azul de Transição",
+        "canonical": "#2f5f86",
+        "darkCanonical": "#8fb8e0",
+        "tonalRamp": [
+          "#152b3c",
+          "#1f3e57",
+          "#285172",
+          "#2f5f86",
+          "#547c9c",
+          "#7a99b2",
+          "#a1b7c9",
+          "#c5d2dd"
+        ],
+        "darkRamp": [
+          "#c1d8ee",
+          "#aecce9",
+          "#9cc1e4",
+          "#8fb8e0",
+          "#7a9cbe",
+          "#64819d",
+          "#4f657b",
+          "#394a5a"
+        ]
+      },
+      "axis": {
+        "role": "neutral",
+        "displayName": "Rótulo de Eixo",
+        "canonical": "#6d675e",
+        "darkCanonical": "#8e877c",
+        "tonalRamp": [
+          "#312e2a",
+          "#47433d",
+          "#5d5850",
+          "#6d675e",
+          "#87827b",
+          "#a29e98",
+          "#bdbbb7",
+          "#d6d4d2"
+        ],
+        "darkRamp": [
+          "#c1bdb7",
+          "#aea9a1",
+          "#9c958c",
+          "#8e877c",
+          "#797369",
+          "#635e57",
+          "#4e4a44",
+          "#393632"
+        ]
+      },
+      "video-pit": {
+        "role": "hardware",
+        "displayName": "Poço de Vídeo",
+        "canonical": "#1b1e24",
+        "darkCanonical": "#0c0e12",
+        "tonalRamp": [
+          "#0c0e10",
+          "#121417",
+          "#171a1f",
+          "#1b1e24",
+          "#44464b",
+          "#6d6f73",
+          "#989a9c",
+          "#bfc0c2"
+        ],
+        "darkRamp": [
+          "#797a7d",
+          "#505154",
+          "#292b2e",
+          "#0c0e12",
+          "#0a0c0f",
+          "#080a0d",
+          "#07080a",
+          "#050607"
+        ]
+      },
+      "video-letterbox": {
+        "role": "hardware",
+        "displayName": "Letterbox de Vídeo",
+        "canonical": "#0c0e12",
+        "darkCanonical": "#000000",
+        "tonalRamp": [
+          "#050608",
+          "#08090c",
+          "#0a0c0f",
+          "#0c0e12",
+          "#38393d",
+          "#636567",
+          "#929394",
+          "#bbbcbd"
+        ],
+        "darkRamp": [
+          "#737373",
+          "#474747",
+          "#1f1f1f",
+          "#000000",
+          "#000000",
+          "#000000",
+          "#000000",
+          "#000000"
+        ]
+      },
+      "video-veil": {
+        "role": "hardware",
+        "displayName": "Véu de Sinal Ausente",
+        "canonical": "#12151b",
+        "darkCanonical": "#05070a",
+        "tonalRamp": [
+          "#08090c",
+          "#0c0e12",
+          "#0f1217",
+          "#12151b",
+          "#3d3f44",
+          "#67696d",
+          "#949698",
+          "#bdbdbf"
+        ],
+        "darkRamp": [
+          "#767778",
+          "#4b4c4f",
+          "#232527",
+          "#05070a",
+          "#040608",
+          "#040507",
+          "#030406",
+          "#020304"
+        ]
+      },
+      "on-video": {
+        "role": "hardware",
+        "displayName": "Texto sobre Vídeo",
+        "canonical": "#f4f1ea",
+        "darkCanonical": "#f3f1ea",
+        "tonalRamp": [
+          "#6e6c69",
+          "#9f9d98",
+          "#cfcdc7",
+          "#f4f1ea",
+          "#f6f4ee",
+          "#f8f6f2",
+          "#faf9f6",
+          "#fcfbf9"
+        ],
+        "darkRamp": [
+          "#f8f7f3",
+          "#f6f5f0",
+          "#f4f3ed",
+          "#f3f1ea",
+          "#cfcdc7",
+          "#aaa9a4",
+          "#868581",
+          "#61605e"
+        ]
+      },
+      "lamp-rest": {
+        "role": "hardware",
+        "displayName": "Corpo de Lâmpada",
+        "canonical": "#d8d1c4",
+        "darkCanonical": "#2a2f37",
+        "tonalRamp": [
+          "#615e58",
+          "#8c887f",
+          "#b8b2a7",
+          "#d8d1c4",
+          "#dfd9cf",
+          "#e6e2d9",
+          "#edeae4",
+          "#f4f2ee"
+        ],
+        "darkRamp": [
+          "#8a8d91",
+          "#66696f",
+          "#44484f",
+          "#2a2f37",
+          "#24282f",
+          "#1d2126",
+          "#171a1e",
+          "#111316"
+        ]
+      },
+      "lamp-rest-border": {
+        "role": "hardware",
+        "displayName": "Borda de Lâmpada",
+        "canonical": "#b7ae9f",
+        "darkCanonical": "#3a404a",
+        "tonalRamp": [
+          "#524e48",
+          "#777167",
+          "#9c9487",
+          "#b7ae9f",
+          "#c4bdb0",
+          "#d1cbc2",
+          "#dfdbd4",
+          "#ebe8e4"
+        ],
+        "darkRamp": [
+          "#93969b",
+          "#71757d",
+          "#525760",
+          "#3a404a",
+          "#31363f",
+          "#292d34",
+          "#202329",
+          "#171a1e"
+        ]
+      },
+      "lamp-on-border": {
+        "role": "hardware",
+        "displayName": "Aro de Lâmpada Acesa",
+        "canonical": "#1f6b4a",
+        "darkCanonical": "#2c9668",
+        "tonalRamp": [
+          "#0e3021",
+          "#144630",
+          "#1a5b3f",
+          "#1f6b4a",
+          "#47866b",
+          "#70a08b",
+          "#9abcae",
+          "#c0d6cc"
+        ],
+        "darkRamp": [
+          "#8bc5ac",
+          "#67b392",
+          "#45a37a",
+          "#2c9668",
+          "#258058",
+          "#1f6949",
+          "#185239",
+          "#123c2a"
+        ]
+      },
+      "lamp-fail-border": {
+        "role": "hardware",
+        "displayName": "Aro de Falha",
+        "canonical": "#7d1d1a",
+        "darkCanonical": "#b03a34",
+        "tonalRamp": [
+          "#380d0c",
+          "#511311",
+          "#6a1916",
+          "#7d1d1a",
+          "#944643",
+          "#ac6e6c",
+          "#c49998",
+          "#dbc0bf"
+        ],
+        "darkRamp": [
+          "#d4938f",
+          "#c6716d",
+          "#b9524c",
+          "#b03a34",
+          "#96312c",
+          "#7b2924",
+          "#61201d",
+          "#461715"
+        ]
+      },
+      "alert-wash": {
+        "role": "hardware",
+        "displayName": "Lavagem de Alerta",
+        "canonical": "#f8e6e4",
+        "darkCanonical": "#2c1817",
+        "tonalRamp": [
+          "#706767",
+          "#a19694",
+          "#d3c4c2",
+          "#f8e6e4",
+          "#f9eae9",
+          "#fbefee",
+          "#fcf4f3",
+          "#fdf8f7"
+        ],
+        "darkRamp": [
+          "#8b807f",
+          "#675958",
+          "#453433",
+          "#2c1817",
+          "#251414",
+          "#1f1110",
+          "#180d0d",
+          "#120a09"
+        ]
+      },
+      "alert-text": {
+        "role": "hardware",
+        "displayName": "Texto de Alerta",
+        "canonical": "#7d1d1a",
+        "darkCanonical": "#f0a29c",
+        "tonalRamp": [
+          "#380d0c",
+          "#511311",
+          "#6a1916",
+          "#7d1d1a",
+          "#944643",
+          "#ac6e6c",
+          "#c49998",
+          "#dbc0bf"
+        ],
+        "darkRamp": [
+          "#f7ccc9",
+          "#f4bcb8",
+          "#f2ada8",
+          "#f0a29c",
+          "#cc8a85",
+          "#a8716d",
+          "#845956",
+          "#60413e"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Palavra de estado da área. O maior objeto tipográfico da tela."
+      },
+      "stat": {
+        "displayName": "Stat",
+        "purpose": "Valor medido dos quatro cartões de resumo."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Título da página no topbar. Uma vez por página."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Nome da fonte, cabeçalho de cartão e botão."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Corpo do documento e dado em linha."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Rótulo de cartão de resumo, cabeçalho e tag de lâmpada."
+      },
+      "label-sm": {
+        "displayName": "Label Sm",
+        "purpose": "Badge de estado e metadado de fonte."
+      },
+      "label-md": {
+        "displayName": "Label Md",
+        "purpose": "Botão, chip, banner e link."
+      },
+      "data-sm": {
+        "displayName": "Data Sm",
+        "purpose": "Campo de texto, caminho e linha de dado denso."
+      },
+      "readout": {
+        "displayName": "Readout",
+        "purpose": "Uptime e número monoespaçado de apoio."
+      }
+    },
+    "shadows": {
+      "sheet": "0 1px 2px rgba(22,24,29,.05), 0 8px 24px -18px rgba(22,24,29,.35)",
+      "dark": "none"
+    },
+    "motion": {
+      "fast": "150ms",
+      "state": "200ms",
+      "blink": "1.2s steps(2)",
+      "reducedMotion": "blink e transições desligados"
+    },
+    "breakpoints": {
+      "content": "1180px",
+      "shell": "980px",
+      "narrow": "620px",
+      "shortViewport": "920px"
+    }
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-default",
+      "description": "Botão de ação: fundo verde de ação, texto on-action, raio 8px.",
+      "html": "<button class=\"btn\">Conectar</button>",
+      "css": ".btn { padding: 6px 12px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent); color: var(--on-accent); font-size: 12px; font-weight: 500; } .btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); } .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; } .btn[disabled] { background: var(--panel-2); border-color: var(--line); color: var(--faint); cursor: not-allowed; }"
+    },
+    {
+      "name": "Filter Chip",
+      "kind": "chip",
+      "refersTo": "chip-default",
+      "description": "Pílula de filtro: hairline; ativa em lavagem e borda de ação, com aria-pressed.",
+      "html": "<div class=\"event-filter\"><button class=\"chip active\" aria-pressed=\"true\">tudo</button><button class=\"chip\" aria-pressed=\"false\">tracks</button><button class=\"chip\" aria-pressed=\"false\">erros</button></div>",
+      "css": ".chip { padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--dim); font-size: 10px; font-weight: 500; } .chip:hover { color: var(--text); border-color: var(--dim); } .chip.active { background: var(--accent-soft); border-color: var(--accent-dim); color: var(--accent); }"
+    },
+    {
+      "name": "Source Card",
+      "kind": "card",
+      "refersTo": "source-card",
+      "description": "Cartão compacto da sidebar: o cartão é o alvo de ver; ativar é botão irmão.",
+      "html": "<article class=\"source-card selected is-active\"><button class=\"source-view\"><span class=\"source-icon\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><rect x=\"2\" y=\"6\" width=\"14\" height=\"12\" rx=\"1.5\"/><path d=\"M16 10.5 22 7v10l-6-3.5z\"/></svg></span><span class=\"source-body\"><span class=\"source-line\"><span class=\"source-name\">câmera fixa</span><span class=\"source-badge\">ativa</span></span><span class=\"source-id\">camera · h265</span><span class=\"source-path\">RTSP_URI (deploy/.env)</span><span class=\"source-meta\">há 2.3h · 42 amostras</span></span></button></article>",
+      "css": ".source-card { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 6px; padding: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; } .source-card:hover { background: var(--panel-2); } .source-card.selected { background: var(--accent-soft); border-color: var(--accent-dim); } .source-view { display: flex; gap: 8px; min-width: 0; padding: 0; border: 0; background: none; color: inherit; text-align: left; } .source-icon { width: 22px; height: 22px; color: var(--dim); } .source-card.selected .source-icon { color: var(--accent); } .source-name { font-size: 12px; font-weight: 600; } .source-badge { padding: 1px 6px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 9px; } .source-id, .source-meta { font-family: var(--mono); font-size: 9px; color: var(--faint); } .source-path { font-family: var(--mono); font-size: 10px; color: var(--dim); }"
+    },
+    {
+      "name": "Stat Card",
+      "kind": "card",
+      "refersTo": "stat-card",
+      "description": "Resumo de dez segundos: rótulo de 10px, valor de 30px tabular, dica de 11px.",
+      "html": "<article class=\"card stat\"><h3 class=\"stat-label\">fps processado</h3><output class=\"stat-value\">19.8</output><div class=\"stat-hint\">preview <output>19.9</output> · drop <output>0.04</output></div></article>",
+      "css": ".stat { gap: 2px; padding: 12px 14px; } .stat-label { font-size: 10px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); } .stat-value { font-family: var(--condensed); font-size: 30px; font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; } .stat-hint { font-size: 11px; color: var(--dim); } .stat-hint output { font-family: var(--mono); font-size: 10px; color: var(--text); }"
+    },
+    {
+      "name": "Sheet Panel",
+      "kind": "card",
+      "refersTo": "sheet",
+      "description": "Folha de caderno: raio 12px, hairline, sombra curta no claro e nenhuma no escuro.",
+      "html": "<section class=\"card\"><div class=\"panel-head\"><span class=\"eyebrow\">saúde do sistema</span></div><div class=\"state-rows\"><div class=\"row\"><span>status geral</span><output class=\"ok\">healthy</output></div><div class=\"row\"><span>threads / fds</span><output>18 / 42</output></div></div></section>",
+      "css": ".card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); display: flex; flex-direction: column; padding: 14px 16px; } .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 0 10px; } .eyebrow { font-size: 10px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); } .row { display: flex; justify-content: space-between; padding: 7px 0; border-top: 1px solid var(--divider); } .row:first-child { border-top: 0; } .row span { font-size: 12px; color: var(--dim); } .row output { font-family: var(--mono); font-size: 11px; } .ok { color: var(--ok); }"
+    },
+    {
+      "name": "Lamp",
+      "kind": "custom",
+      "description": "Lâmpada de 9px com anel de 3px na cor do estado; blink só sob estado vivo.",
+      "html": "<div class=\"lamps\"><div class=\"lamp\"><span class=\"bulb on\"></span><span class=\"tag\">pipeline</span></div><div class=\"lamp\"><span class=\"bulb warn\"></span><span class=\"tag\">memória</span></div><div class=\"lamp\"><span class=\"bulb off blink\"></span><span class=\"tag\">telemetria</span></div></div>",
+      "css": ".lamps { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; } .lamp { display: flex; align-items: center; gap: 7px; } .lamp .tag { font-size: 10px; color: var(--dim); } .bulb { width: 9px; height: 9px; border-radius: 50%; background: var(--lamp-rest-bg); border: 1px solid var(--lamp-rest-border); } .bulb.on { background: var(--accent); border-color: var(--lamp-on-border); box-shadow: 0 0 0 3px var(--accent-soft); } .bulb.warn { background: var(--warn); border-color: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); } .bulb.off { background: var(--bad); border-color: var(--lamp-fail-border); box-shadow: 0 0 0 3px var(--bad-soft); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "O Caderno de Bancada",
+    "overview": "Papel claro por padrão e chassi escuro à noite; sidebar como mesa de fontes; quatro cartões de resumo; leitura detalhada em cartões de 12px.",
+    "keyCharacteristics": [
+      "Temas claro e escuro com os mesmos tokens e a mesma estrutura.",
+      "Sidebar de 248px como mesa de fontes e sumário.",
+      "Verde de ação para medido/acionável; âmbar, vermelho e azul só para estado.",
+      "IBM Plex Sans, Sans Condensed e Mono, cada uma com um papel.",
+      "Tela única no desktop; rolagem só em listas e sidebar."
+    ],
+    "rules": [
+      "The Measured Green Rule",
+      "The Status Is Real Rule",
+      "The Same Page at Night Rule",
+      "The Tabular Numbers Rule",
+      "The One Screen Rule",
+      "The Dot Marks State Rule"
+    ],
+    "dos": [
+      "Declarar cor nos blocos :root e :root[data-theme=dark].",
+      "Usar tabular-nums em valor que atualiza.",
+      "Mostrar — e rótulo apagado sem telemetria.",
+      "Manter o frontend vanilla, sem runtime de CDN."
+    ],
+    "donts": [
+      "Hex literal fora dos blocos de token.",
+      "Glow, gradiente ou vidro em superfície.",
+      "Trilho lateral colorido em cartão ou alerta.",
+      "Dados sintéticos ou token de troca no DOM."
+    ]
+  }
+}
