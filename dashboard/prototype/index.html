@@ -2,10 +2,62 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Vision Stability Lab 3.0</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+:root{--bg:#f4f1ea;--bg2:#fffdf9;--ink:#16181d;--muted:#6d675e;--line:#e4ddd2;--card:#fffdf9;--accent:#1f6b4a;--soft:#e7f3ec;--warn:#9a6412;--wsoft:#f8efd8;--bad:#a32622;--bsoft:#f8e6e4;--side:232px;--video:#1b1e24;color-scheme:light}
+:root[data-theme=dark]{--bg:#101114;--bg2:#181b21;--ink:#f3f1ea;--muted:#a39c91;--line:#2a2e36;--card:#181b21;--accent:#8dceb0;--soft:#1c2c24;--warn:#e2b15a;--wsoft:#2c2416;--bad:#f0a29c;--bsoft:#2c1817;--video:#0c0e12;color-scheme:dark}
+*{box-sizing:border-box}html,body,#root{height:100%}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 IBM Plex Sans,sans-serif}button,select,input{font:inherit;color:inherit}button{cursor:pointer}
+.app{display:flex;min-height:100%}.side{width:var(--side);flex:0 0 var(--side);background:var(--bg2);border-right:1px solid var(--line);display:flex;flex-direction:column;position:sticky;top:0;height:100vh}.app.collapsed{--side:72px}.app.collapsed .hide{display:none}
+.brand{display:flex;gap:10px;align-items:center;padding:16px 14px}.mark{width:32px;height:32px;border-radius:8px;background:var(--accent);color:#fff;display:grid;place-items:center}.brand h1{margin:0;font-size:13px}.sub{color:var(--muted);font-size:12px}
+nav{display:flex;flex-direction:column;gap:4px;padding:8px}.nav-btn,.ghost,select,input{border:1px solid var(--line);background:transparent;border-radius:8px;padding:8px 10px}.nav-btn.on{background:var(--soft);color:var(--ink)}.foot{margin-top:auto;padding:12px}.foot button{width:100%}
+.main{flex:1;min-width:0}.top{display:flex;gap:12px;align-items:center;padding:12px 18px;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:2}.top h2{margin:0;font-size:15px}.spacer{flex:1}.controls{display:flex;gap:8px;flex-wrap:wrap}
+.content{padding:16px 18px 28px;display:grid;gap:12px}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.grid2{display:grid;grid-template-columns:1.4fr .8fr;gap:12px}.grid3{display:grid;grid-template-columns:1.2fr .9fr;gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}.card h3{margin:0 0 8px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.val{font-size:28px}.ok{color:var(--accent)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.stage{background:var(--video);border-radius:10px;position:relative;overflow:hidden;aspect-ratio:16/9}.stage:fullscreen{width:100vw;height:100vh;border-radius:0}.stage video{width:100%;height:100%;object-fit:contain;background:#000}.overlay{position:absolute;inset:0;display:grid;place-items:center;color:#fff;background:rgba(0,0,0,.45)}
+.chart{height:230px}.src{display:flex;justify-content:space-between;gap:8px;border:1px solid var(--line);border-radius:10px;padding:8px;margin-bottom:8px}.src.active{border-color:var(--accent)}
+@media(max-width:980px){.stats,.grid2,.grid3{grid-template-columns:1fr}.main{margin-left:72px}.app{--side:72px}.hide{display:none}}
+</style>
 </head>
-<body>
-<p>Vision Stability Lab prototype 3.0. Sidebar, theme, fullscreen video stage, Recharts, live /api/snapshot /ws /api/sources WHEP when served by FastAPI, demo fallback otherwise. Does not replace dashboard/frontend/index.html.</p>
-<p>Open the full interactive file from the previous draft if this stub is accepted; the complete UI was prepared in the prior confirmation.</p>
-</body>
-</html>
+<body><div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+<script src="https://unpkg.com/recharts@2.15.0/umd/Recharts.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.9/babel.min.js"></script>
+<script type="text/babel">
+const {useEffect,useMemo,useRef,useState}=React;
+const {ResponsiveContainer,LineChart,Line,XAxis,YAxis,Tooltip,CartesianGrid,AreaChart,Area}=Recharts;
+const clock=(iso)=>new Date(iso||Date.now()).toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
+function demo(prev){const fps=Math.max(6,19.8+(Math.random()-.5)*.6);const people=Math.random()<.8?prev.people:Math.max(0,Math.min(3,prev.people+(Math.random()<.5?-1:1)));return{t:clock(),ts:new Date().toISOString(),fps_processed:+fps.toFixed(2),fps_preview:+fps.toFixed(2),rss_mb:+(prev.rss_mb+(Math.random()-.48)).toFixed(1),persons_max_concurrent:people,active_tracks:people,area_state:people?"OCCUPIED":"EMPTY",threads:18,open_fds:42};}
+function App(){
+ const stageRef=useRef(null),videoRef=useRef(null);
+ const [theme,setTheme]=useState(()=>localStorage.getItem("vsl-theme")||"light");
+ const [collapsed,setCollapsed]=useState(false),[page,setPage]=useState("overview"),[minutes,setMinutes]=useState(15);
+ const [fs,setFs]=useState(false),[mode,setMode]=useState("conectando"),[health,setHealth]=useState({status:"down"});
+ const [sources,setSources]=useState([]),[events,setEvents]=useState([]),[points,setPoints]=useState([]);
+ const [note,setNote]=useState("stream nao conectado"),[token,setToken]=useState(()=>sessionStorage.getItem("vsl.switchToken")||""),[banner,setBanner]=useState("");
+ useEffect(()=>{document.documentElement.dataset.theme=theme;localStorage.setItem("vsl-theme",theme)},[theme]);
+ useEffect(()=>{const fn=()=>setFs(document.fullscreenElement===stageRef.current);document.addEventListener("fullscreenchange",fn);return()=>document.removeEventListener("fullscreenchange",fn)},[]);
+ useEffect(()=>{let dead=false,ws,timer;(async()=>{try{const snap=await fetch("/api/snapshot").then(r=>{if(!r.ok)throw new Error("off");return r.json()});if(dead)return;setMode("ao vivo");setHealth(snap.health||{});setEvents(snap.events_recent||[]);const hist=await fetch("/api/history?minutes=120").then(r=>r.ok?r.json():[]);setPoints((hist||[]).map(r=>({...r,t:clock(r.ts)})));const src=await fetch("/api/sources").then(r=>r.ok?r.json():[]);if(Array.isArray(src))setSources(src);const proto=location.protocol==="https:"?"wss":"ws";ws=new WebSocket(proto+"://"+location.host+"/ws");ws.onmessage=(msg)=>{const env=JSON.parse(msg.data);if(env.type==="snapshot"){setHealth(env.data.health||{});setEvents(env.data.events_recent||[])}else if(env.type==="record"&&env.data.event==="interval_metrics"){setPoints(c=>[...c,{...env.data,t:clock(env.data.ts)}].slice(-240))}else if(env.type==="record"){setEvents(c=>[...c,env.data].slice(-80))}};}catch{if(dead)return;setMode("demonstracao");setHealth({status:"healthy",reason:"dados simulados"});setSources([{id:"camera-01",name:"Camera lab",active:true,codec:"h265"},{id:"phone-01",name:"Celular",active:false,codec:"h264"}]);let prev={people:1,rss_mb:910};const seed=[];for(let i=0;i<30;i++){prev=demo(prev);seed.push(prev)}setPoints(seed);timer=setInterval(()=>setPoints(c=>[...c,demo(c.at(-1))].slice(-240)),2000);}})();return()=>{dead=true;if(ws)ws.close();if(timer)clearInterval(timer)};},[]);
+ async function connectVideo(){if(mode!=="ao vivo"){setNote("modo demonstracao: sem MediaMTX");return}const url=localStorage.getItem("whep_url")||"https://"+location.hostname+":8889/live/whep";setNote("negociando webrtc");try{const pc=new RTCPeerConnection();pc.addTransceiver("video",{direction:"recvonly"});pc.ontrack=(e)=>{videoRef.current.srcObject=e.streams[0];setNote("")};const offer=await pc.createOffer();await pc.setLocalDescription(offer);await new Promise(res=>{if(pc.iceGatheringState==="complete")return res();const t=setTimeout(res,1500);pc.addEventListener("icegatheringstatechange",()=>{if(pc.iceGatheringState==="complete"){clearTimeout(t);res()}})});const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/sdp"},body:pc.localDescription.sdp});if(!r.ok)throw new Error("whep");await pc.setRemoteDescription({type:"answer",sdp:await r.text()});}catch{setNote("falha WHEP: instale deploy/certs/ca.crt")}}
+ async function toggleFs(){if(document.fullscreenElement)await document.exitFullscreen();else await stageRef.current.requestFullscreen()}
+ async function activate(source){if(!token){setBanner("informe o SWITCH_TOKEN");return}if(!confirm("Ativar "+source.name+"? O pipeline reinicia por 30-90 s."))return;const r=await fetch("/api/source/switch",{method:"POST",headers:{"Content-Type":"application/json","X-Switch-Token":token},body:JSON.stringify({source_id:source.id})});setBanner(r.ok?"troca pedida":"troca recusada HTTP "+r.status);if(r.status===401){sessionStorage.removeItem("vsl.switchToken");setToken("")}}
+ const visible=useMemo(()=>points.slice(-Math.max(8,minutes*2)),[points,minutes]);
+ const last=points.at(-1)||{};const base=points.find(p=>p.rss_mb)?.rss_mb||last.rss_mb||0;const growth=last.rss_mb?+(last.rss_mb-base).toFixed(1):0;
+ const axis=theme==="dark"?"#a39c91":"#6d675e",grid=theme==="dark"?"#2a2e36":"#e4ddd2",line=theme==="dark"?"#8dceb0":"#1f6b4a";
+ return <div className={"app"+(collapsed?" collapsed":"")}>
+  <aside className="side"><div className="brand"><div className="mark">VS</div><div className="hide"><h1>STABILITY LAB</h1><p className="sub">prototipo 3.0</p></div></div>
+  <nav>{[["overview","Visao"],["events","Eventos"]].map(([id,label])=><button key={id} className={"nav-btn"+(page===id?" on":"")} onClick={()=>setPage(id)}>{label}</button>)}</nav>
+  <div className="foot"><button className="ghost" onClick={()=>setCollapsed(v=>!v)}>{collapsed?">":"recolher"}</button></div></aside>
+  <main className="main"><header className="top"><div><h2>Ocupacao</h2><div className="sub">{mode}. {banner||health.reason||"uma fonte ativa por vez"}</div></div><div className="spacer"/><div className="controls"><select value={minutes} onChange={e=>setMinutes(Number(e.target.value))}>{[5,15,30].map(n=><option key={n} value={n}>{n} min</option>)}</select><button className="ghost" onClick={()=>setTheme(t=>t==="light"?"dark":"light")}>{theme==="light"?"Tema escuro":"Tema claro"}</button></div></header>
+  <div className="content"><section className="stats"><article className="card"><h3>Area</h3><div className={"val "+(last.area_state==="OCCUPIED"?"warn":"ok")}>{last.area_state||"-"}</div></article><article className="card"><h3>FPS</h3><div className="val ok">{Number(last.fps_processed||0).toFixed(1)}</div></article><article className="card"><h3>RSS</h3><div className="val">{growth} MB</div></article><article className="card"><h3>Tracks</h3><div className="val">{last.active_tracks??0}</div></article></section>
+  {page!=="events"&&<section className="grid2"><article className="card"><div style={{display:"flex",justifyContent:"space-between"}}><h3>Video</h3><span><button className="ghost" onClick={connectVideo}>Conectar</button> <button className="ghost" onClick={toggleFs}>{fs?"Sair":"Tela cheia"}</button></span></div><div className="stage" ref={stageRef}><video ref={videoRef} autoPlay muted playsInline/>{note&&<div className="overlay">{note}</div>}</div></article><article className="card"><h3>Fontes</h3>{sources.map(s=><div key={s.id} className={"src"+(s.active?" active":"")}><div><strong>{s.name||s.id}</strong><div className="sub">{s.id}{s.active?" ativa":""}</div></div>{!s.active&&mode==="ao vivo"&&<button className="ghost" onClick={()=>activate(s)}>ativar</button>}</div>)}{mode==="ao vivo"&&<input type="password" placeholder="SWITCH_TOKEN" value={token} onChange={e=>{setToken(e.target.value);sessionStorage.setItem("vsl.switchToken",e.target.value)}}/>}</article></section>}
+  {page!=="events"&&<section className="grid3"><article className="card"><h3>FPS</h3><div className="chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={visible}><CartesianGrid stroke={grid} vertical={false}/><XAxis dataKey="t" tick={{fill:axis,fontSize:11}} minTickGap={24}/><YAxis tick={{fill:axis,fontSize:11}} width={32}/><Tooltip/><Line dataKey="fps_processed" stroke={line} dot={false} isAnimationActive={false}/></LineChart></ResponsiveContainer></div></article><article className="card"><h3>RSS</h3><div className="chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={visible}><CartesianGrid stroke={grid} vertical={false}/><XAxis dataKey="t" tick={{fill:axis,fontSize:11}} minTickGap={24}/><YAxis tick={{fill:axis,fontSize:11}} width={40}/><Tooltip/><Area dataKey="rss_mb" stroke={line} fill={line} fillOpacity={.15} isAnimationActive={false}/></AreaChart></ResponsiveContainer></div></article></section>}
+  {page==="events"&&<article className="card"><h3>Eventos</h3>{events.slice().reverse().slice(0,20).map((e,i)=><div key={i} className="sub">{clock(e.ts)} {e.event||e.type} {e.source_id||""}</div>)}</article>}
+  </div></main></div>;
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script></body></html>
