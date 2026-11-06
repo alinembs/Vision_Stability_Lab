@@ -51,8 +51,8 @@
   .grid-3 { display: grid; grid-template-columns: 1.2fr .9fr; gap: 12px; }
   .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 12px 14px; }
-  .card h3 { margin: 0 0 8px; font-size: 11px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .card h3 { margin: 1px 0 8px; font-size: 11px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 0.5em; }
   .stat-value { font-family: "IBM Plex Sans Condensed", sans-serif; font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .stat-hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
   .tone-ok { color: var(--accent); } .tone-warn { color: var(--warn); } .tone-bad { color: var(--bad); }
@@ -192,7 +192,6 @@ function App() {
                 <div className="panel-head"><h3>Video anotado</h3><button className="ghost" onClick={toggleFullscreen}>{fullscreen ? "Sair da tela cheia" : "Tela cheia"}</button></div>
                 <div className="video" ref={videoRef} style={fullscreen ? undefined : { aspectRatio: res.w + " / " + res.h }}>
                   <div className="frame-label">live / {res.id} / {scene}</div>
-                  <button className="fs-btn" onClick={toggleFullscreen}>{fullscreen ? "Esc para sair" : "Tela cheia"}</button>
                   {last.people > 0 && <div className="bbox" style={{ left: "18%", top: "28%", width: "22%", height: "48%" }}><span>person 0.91</span></div>}
                   {last.people > 1 && <div className="bbox" style={{ left: "52%", top: "34%", width: "18%", height: "40%" }}><span>person 0.87</span></div>}
                 </div>
