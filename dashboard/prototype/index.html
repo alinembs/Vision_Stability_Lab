@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vision Stability Lab — protótipo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #f4f1ea;
+    --bg-2: #fffdf9;
+    --ink: #16181d;
+    --muted: #6d675e;
+    --line: #e4ddd2;
+    --card: #fffdf9;
+    --accent: #1f6b4a;
+    --accent-soft: #e7f3ec;
+    --warn: #9a6412;
+    --warn-soft: #f8efd8;
+    --bad: #a32622;
+    --bad-soft: #f8e6e4;
+    --shadow: 0 1px 0 rgba(22,24,29,.04);
+    --sidebar: 232px;
+    --video: #1b1e24;
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --bg: #101114;
+    --bg-2: #181b21;
+    --ink: #f3f1ea;
+    --muted: #a39c91;
+    --line: #2a2e36;
+    --card: #181b21;
+    --accent: #8dceb0;
+    --accent-soft: #1c2c24;
+    --warn: #e2b15a;
+    --warn-soft: #2c2416;
+    --bad: #f0a29c;
+    --bad-soft: #2c1817;
+    --shadow: none;
+    --video: #0c0e12;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body, #root { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", sans-serif;
+    font-size: 14px;
+  }
+  button, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  .app { display: flex; min-height: 100%; }
+  .sidebar {
+    width: var(--sidebar);
+    flex: 0 0 var(--sidebar);
+    background: var(--bg-2);
+    border-right: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    transition: width .18s ease, flex-basis .18s ease;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+  }
+  .app.collapsed { --sidebar: 72px; }
+  .brand { display: flex; gap: 10px; align-items: center; padding: 16px 14px 12px; }
+  .mark {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: var(--accent); color: #fff; display: grid; place-items: center;
+    font-family: "IBM Plex Sans Condensed", sans-serif; font-weight: 600; flex: none;
+  }
+  :root[data-theme="dark"] .mark { color: #102018; }
+  .brand h1 { margin: 0; font-size: 13px; letter-spacing: .04em; }
+  .brand p { margin: 2px 0 0; color: var(--muted); font-size: 11px; }
+  .app.collapsed .hide-collapsed { display: none; }
+  nav { display: flex; flex-direction: column; gap: 4px; padding: 8px; }
+  .nav-btn {
+    display: flex; align-items: center; gap: 10px;
+    border: 0; background: transparent; border-radius: 8px;
+    padding: 9px 10px; text-align: left; color: var(--muted);
+  }
+  .nav-btn.active { background: var(--accent-soft); color: var(--ink); }
+  .nav-btn svg { flex: none; }
+  .side-foot { margin-top: auto; padding: 12px; }
+  .collapse { width: 100%; border: 1px solid var(--line); background: transparent; border-radius: 8px; padding: 8px; }
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .topbar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 18px; border-bottom: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    position: sticky; top: 0; z-index: 2; backdrop-filter: blur(8px);
+  }
+  .topbar h2 { margin: 0; font-size: 15px; font-weight: 600; }
+  .topbar .sub, .sub { color: var(--muted); font-size: 12px; }
+  .spacer { flex: 1; }
+  .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  select, .ghost { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+  .ghost { display: inline-flex; align-items: center; gap: 6px; }
+  .content { padding: 16px 18px 28px; display: grid; gap: 12px; }
+  .grid-2 { display: grid; grid-template-columns: 1.4fr .8fr; gap: 12px; }
+  .grid-3 { display: grid; grid-template-columns: 1.2fr .9fr; gap: 12px; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 12px 14px; }
+  .card h3 { margin: 0 0 8px; font-size: 11px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .stat-value { font-family: "IBM Plex Sans Condensed", sans-serif; font-size: 28px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .stat-hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .tone-ok { color: var(--accent); }
+  .tone-warn { color: var(--warn); }
+  .tone-bad { color: var(--bad); }
+  .pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 3px 8px; font-size: 12px; font-weight: 500; background: var(--accent-soft); color: var(--accent); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  .pill.bad { background: var(--bad-soft); color: var(--bad); }
+  .dot { width: 7px; height: 7px; border-radius: 99px; background: currentColor; }
+  .video { background: var(--video); border-radius: 10px; aspect-ratio: 16/9; position: relative; overflow: hidden; color: #f4f1ea; }
+  .frame-label { position: absolute; left: 10px; top: 10px; font-family: "IBM Plex Mono", monospace; font-size: 11px; background: rgba(0,0,0,.45); padding: 4px 6px; border-radius: 6px; }
+  .bbox { position: absolute; border: 1.5px solid #8dceb0; border-radius: 4px; color: #8dceb0; font-family: "IBM Plex Mono", monospace; font-size: 11px; }
+  .bbox span { position: absolute; top: -16px; left: 0; background: #1f6b4a; color: white; padding: 0 4px; border-radius: 3px; }
+  .chart-wrap { height: 240px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+  td, th { padding: 8px 6px; border-bottom: 1px solid var(--line); }
+  .mono { font-family: "IBM Plex Mono", monospace; font-size: 12px; }
+  .banner { display: flex; justify-content: space-between; gap: 12px; align-items: center; background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line)); border-radius: 12px; padding: 10px 12px; }
+  @media (max-width: 980px) {
+    .grid-2, .grid-3, .stats { grid-template-columns: 1fr; }
+    .sidebar { position: fixed; z-index: 5; }
+    .main { margin-left: 72px; }
+    .app { --sidebar: 72px; }
+    .hide-collapsed { display: none; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+<script src="https://unpkg.com/recharts@2.15.0/umd/Recharts.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.9/babel.min.js"></script>
+<script type="text/babel">
+const { useEffect, useMemo, useState } = React;
+const { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend, AreaChart, Area } = Recharts;
+const RESOLUTIONS = [
+  { id: "960x540", label: "960\u00d7540", w: 960, h: 540 },
+  { id: "1280x720", label: "1280\u00d7720", w: 1280, h: 720 },
+  { id: "1920x1080", label: "1920\u00d71080", w: 1920, h: 1080 },
+];
+const WINDOWS = [{ id: 5, label: "5 min" }, { id: 15, label: "15 min" }, { id: 30, label: "30 min" }];
+function simulate(prev, scene, resolution) {
+  const night = scene === "noite";
+  const baseFps = night ? 12 : 19.8;
+  const cost = resolution === "1920x1080" ? 0.6 : resolution === "960x540" ? -0.2 : 0;
+  const jitter = (Math.random() - 0.5) * (night ? 1.4 : 0.5);
+  const burst = night && Math.random() < 0.08 ? -4.5 : 0;
+  const fpsIn = Math.max(6, baseFps + jitter + burst - cost);
+  const fpsProc = Math.max(0, fpsIn - Math.random() * 0.25);
+  const people = Math.random() < 0.72 ? prev.people : Math.max(0, Math.min(4, prev.people + (Math.random() < 0.5 ? -1 : 1)));
+  const rss = Math.min(1040, Math.max(860, prev.rss + (Math.random() - 0.48) * 1.4));
+  const now = new Date();
+  return { t: now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }), ts: now.getTime(), fpsIn: +fpsIn.toFixed(2), fpsProc: +fpsProc.toFixed(2), drop: +(Math.random() * 0.04).toFixed(3), rss: +rss.toFixed(1), people, tracks: people, queue: 0 };
+}
+function derive(points, scene) {
+  const last = points[points.length - 1];
+  const baseline = 912;
+  const growth = last.rss - baseline;
+  const recent = points.slice(-8);
+  const medIn = recent.reduce((a, p) => a + p.fpsIn, 0) / recent.length;
+  const night = scene === "noite" || medIn < 14;
+  const fpsBad = last.fpsProc <= 0 || last.fpsProc < medIn * 0.7;
+  const memBad = growth > baseline * 0.15;
+  const memWarn = !memBad && growth > 40;
+  return { baseline, growth: +growth.toFixed(1), area: last.people > 0 ? "OCCUPIED" : "EMPTY", fpsStatus: fpsBad ? "degradado" : night ? "noturno" : "est\u00e1vel", memStatus: memBad ? "cr\u00edtico" : memWarn ? "aten\u00e7\u00e3o" : "est\u00e1vel", pipeline: last.fpsProc > 0 && last.queue === 0 ? "saud\u00e1vel" : "degradado", night };
+}
+function Icon({ d }) {
+  return (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d={d} strokeLinecap="round" strokeLinejoin="round" /></svg>);
+}
+function App() {
+  const [theme, setTheme] = useState(() => localStorage.getItem("vsl-theme") || "light");
+  const [collapsed, setCollapsed] = useState(false);
+  const [page, setPage] = useState("overview");
+  const [resolution, setResolution] = useState("1280x720");
+  const [windowMin, setWindowMin] = useState(15);
+  const [scene, setScene] = useState("dia");
+  const [points, setPoints] = useState(() => {
+    let p = { people: 1, rss: 900 };
+    const seed = [];
+    for (let i = 0; i < 40; i++) {
+      p = simulate(p, "dia", "1280x720");
+      p.t = new Date(Date.now() - (40 - i) * 2000).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      seed.push(p);
+    }
+    return seed;
+  });
+  useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem("vsl-theme", theme); }, [theme]);
+  useEffect(() => {
+    const id = setInterval(() => {
+      setPoints((curr) => [...curr, simulate(curr[curr.length - 1], scene, resolution)].slice(-180));
+    }, 2000);
+    return () => clearInterval(id);
+  }, [scene, resolution]);
+  const visible = useMemo(() => points.slice(-Math.max(8, Math.round((windowMin * 60) / 2))), [points, windowMin]);
+  const view = derive(points, scene);
+  const last = points[points.length - 1];
+  const res = RESOLUTIONS.find((r) => r.id === resolution);
+  const axis = theme === "dark" ? "#a39c91" : "#6d675e";
+  const grid = theme === "dark" ? "#2a2e36" : "#e4ddd2";
+  const line = theme === "dark" ? "#8dceb0" : "#1f6b4a";
+  const nav = [["overview", "Vis\u00e3o geral", "M4 5h16M4 12h16M4 19h10"], ["stability", "Estabilidade", "M4 16l5-6 4 3 7-8"], ["events", "Eventos", "M5 6h14M5 12h14M5 18h9"]];
+  return (
+    <div className={"app" + (collapsed ? " collapsed" : "")}>
+      <aside className="sidebar">
+        <div className="brand"><div className="mark">VS</div><div className="hide-collapsed"><h1>STABILITY LAB</h1><p>jetson-orin \u00b7 occupancy</p></div></div>
+        <nav>{nav.map(([id, label, d]) => (<button key={id} className={"nav-btn" + (page === id ? " active" : "")} onClick={() => setPage(id)}><Icon d={d} /><span className="hide-collapsed">{label}</span></button>))}</nav>
+        <div className="side-foot"><button className="collapse" onClick={() => setCollapsed((v) => !v)} aria-label="Colapsar barra lateral">{collapsed ? "\u203a" : "\u2039  recolher"}</button></div>
+      </aside>
+      <main className="main">
+        <header className="topbar">
+          <div><h2>{page === "overview" ? "Ocupa\u00e7\u00e3o ao vivo" : page === "stability" ? "Estabilidade visual" : "Eventos da run"}</h2><div className="sub">Prot\u00f3tipo com telemetria simulada \u00b7 n\u00e3o conectado ao pipeline</div></div>
+          <div className="spacer" />
+          <div className="controls">
+            <select aria-label="Resolu\u00e7\u00e3o do preview" value={resolution} onChange={(e) => setResolution(e.target.value)}>{RESOLUTIONS.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}</select>
+            <select aria-label="Janela temporal" value={windowMin} onChange={(e) => setWindowMin(Number(e.target.value))}>{WINDOWS.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}</select>
+            <select aria-label="Cena" value={scene} onChange={(e) => setScene(e.target.value)}><option value="dia">Cena diurna</option><option value="noite">Cena noturna</option></select>
+            <button className="ghost" onClick={() => setTheme((t) => t === "light" ? "dark" : "light")}>{theme === "light" ? "Tema escuro" : "Tema claro"}</button>
+          </div>
+        </header>
+        <div className="content">
+          <div className="banner"><div><strong>Preview {res.label}</strong><div className="sub">Mux de refer\u00eancia 1280\u00d7720. 1080p neste prot\u00f3tipo s\u00f3 aumenta o custo simulado de FPS.</div></div><span className={"pill " + (view.pipeline === "saud\u00e1vel" ? "" : "bad")}><span className="dot" /> pipeline {view.pipeline}</span></div>
+          <section className="stats">
+            <article className="card"><h3>\u00c1rea</h3><div className={"stat-value " + (view.area === "OCCUPIED" ? "tone-warn" : "tone-ok")}>{view.area}</div><div className="stat-hint">{last.people} pessoa(s) \u00b7 {last.tracks} tracks</div></article>
+            <article className="card"><h3>FPS processado</h3><div className={"stat-value tone-" + (view.fpsStatus === "degradado" ? "bad" : view.fpsStatus === "noturno" ? "warn" : "ok")}>{last.fpsProc.toFixed(1)}</div><div className="stat-hint">entrada {last.fpsIn.toFixed(1)} \u00b7 {view.fpsStatus}</div></article>
+            <article className="card"><h3>RSS vs baseline</h3><div className={"stat-value tone-" + (view.memStatus === "cr\u00edtico" ? "bad" : view.memStatus === "aten\u00e7\u00e3o" ? "warn" : "ok")}>{view.growth > 0 ? "+" : ""}{view.growth} MB</div><div className="stat-hint">baseline {view.baseline} MB \u00b7 {view.memStatus}</div></article>
+            <article className="card"><h3>Fila do preview</h3><div className="stat-value tone-ok">{last.queue}</div><div className="stat-hint">drops {last.drop.toFixed(3)}/s \u00b7 leaky downstream</div></article>
+          </section>
+          {page !== "events" && (<section className="grid-2"><article className="card"><h3>V\u00eddeo anotado \u00b7 {res.w}\u00d7{res.h}</h3><div className="video" style={{ aspectRatio: res.w + " / " + res.h }}><div className="frame-label">live \u00b7 {res.id} \u00b7 {scene}</div>{last.people > 0 && <div className="bbox" style={{ left: "18%", top: "28%", width: "22%", height: "48%" }}><span>person 0.91</span></div>}{last.people > 1 && <div className="bbox" style={{ left: "52%", top: "34%", width: "18%", height: "40%" }}><span>person 0.87</span></div>}</div></article><article className="card"><h3>Leitura de estabilidade</h3><p>Mem\u00f3ria {view.memStatus}. FPS {view.fpsStatus}{view.night ? " \u2014 limiar relativo \u00e0 mediana recente, n\u00e3o a 20 fps fixos." : "."}</p><p className="stat-hint">Amostra a cada 2 s. Janela vis\u00edvel: {windowMin} min. Resolu\u00e7\u00e3o do seletor n\u00e3o altera o encoder real; isto \u00e9 um mock.</p><p><span className={"pill " + (view.memStatus === "est\u00e1vel" ? "" : "warn")}>{view.memStatus === "est\u00e1vel" ? "plat\u00f4" : "vigiar RSS"}</span></p></article></section>)}
+          {page !== "events" && (<section className="grid-3"><article className="card"><h3>FPS \u00b7 \u00faltimos {windowMin} min</h3><div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><LineChart data={visible} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}><CartesianGrid stroke={grid} vertical={false} /><XAxis dataKey="t" tick={{ fill: axis, fontSize: 11 }} minTickGap={28} /><YAxis tick={{ fill: axis, fontSize: 11 }} domain={[0, 24]} width={32} /><Tooltip /><Legend /><Line type="monotone" dataKey="fpsIn" name="entrada" stroke={axis} dot={false} strokeWidth={1.4} isAnimationActive={false} /><Line type="monotone" dataKey="fpsProc" name="processado" stroke={line} dot={false} strokeWidth={2} isAnimationActive={false} /></LineChart></ResponsiveContainer></div></article><article className="card"><h3>RSS MB \u00b7 baseline {view.baseline}</h3><div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><AreaChart data={visible} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}><CartesianGrid stroke={grid} vertical={false} /><XAxis dataKey="t" tick={{ fill: axis, fontSize: 11 }} minTickGap={28} /><YAxis tick={{ fill: axis, fontSize: 11 }} domain={[860, 1060]} width={40} /><Tooltip /><Area type="monotone" dataKey="rss" name="RSS" stroke={line} fill={line} fillOpacity={0.16} isAnimationActive={false} /></AreaChart></ResponsiveContainer></div></article></section>)}
+          {page === "events" && (<article className="card"><h3>Transi\u00e7\u00f5es recentes</h3><table><thead><tr><th>Hora</th><th>Tipo</th><th>Detalhe</th></tr></thead><tbody>{visible.slice().reverse().filter((_, i) => i % 7 === 0).slice(0, 12).map((p) => (<tr key={p.ts}><td className="mono">{p.t}</td><td>{p.people > 0 ? "AREA_OCCUPIED" : "AREA_EMPTY"}</td><td>{p.people} pessoas \u00b7 fps {p.fpsProc.toFixed(1)} \u00b7 rss {p.rss.toFixed(0)} MB</td></tr>))}</tbody></table></article>)}
+        </div>
+      </main>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
