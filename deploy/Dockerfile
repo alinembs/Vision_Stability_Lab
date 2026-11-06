@@ -18,6 +18,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gstreamer1.0-tools \
     && rm -rf /var/lib/apt/lists/*
 
+# Libs de mídia que a base DS 9.1 (Ubuntu 24.04) **remove deixando o dpkg
+# "install ok installed"**: sem restaurar, o GStreamer não registra os
+# elementos que dependem delas (`vp8enc`/`vp9enc` somem por falta de
+# `libvpx.so.9`, e `libgstlibav.so` fica com 9 libs "not found").
+#
+# Por que importa: no Orin Nano não há `/dev/v4l2-nvenc` (NVENC indisponível)
+# e a base não traz encoder H.264 por software (`plugins-ugly` não tem mais o
+# x264 e a `libavcodec` só expõe o decoder H.264) — o preview precisa do
+# `vp8enc` (VP8, aceito no WebRTC do MediaMTX). Medido em 2026-11-01.
+# `--reinstall` é obrigatório: o apt considera esses pacotes satisfeitos.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libvpx9 \
+    && apt-get install -y --reinstall \
+        libvpx9 libavcodec60 libavformat60 libavutil58 libavfilter9 \
+        libswscale7 libswresample4 libpostproc57 libmp3lame0 libmpg123-0 \
+        libx264-164 libx265-199 libxvidcore4 \
+        gstreamer1.0-libav \
+    && ldconfig \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt /app/requirements.txt
 RUN pip3 install --no-cache-dir -r requirements.txt
 

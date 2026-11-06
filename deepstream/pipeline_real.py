@@ -204,22 +204,42 @@ PREVIEW_VERIFY_MIN_FRAMES = int(
 # Tentativas antes de desistir. Recriar o ramo instancia NVENC a cada vez —
 # churn de encoder no Jetson precisa de teto.
 PREVIEW_MAX_ATTEMPTS = int(os.environ.get("PREVIEW_MAX_ATTEMPTS", "6"))
-# Encoders do preview, em ordem de preferência: hardware primeiro e software
-# como caminho de bancada. O Orin Nano **não tem NVENC** (`/dev/v4l2-nvenc`
-# não existe): `nvv4l2h264enc` devolve `None` na criação e o preview cai para
-# `x264enc` (CPU) em vez de derrubar o boot do pipeline (medido em 2026-11-01).
+# Encoders do preview, em ordem de preferência: hardware primeiro, software
+# depois. Cada entrada carrega o **codec** do fluxo publicado, porque ele muda
+# o payloader/parser da cadeia. Medido em 2026-11-01 no Orin Nano:
+#   - nenhum `/dev/v4l2-nvenc` (o elemento `nvv4l2h264enc` existe mas falha no
+#     PLAYING), então o caminho de hardware não é opção;
+#   - a base DeepStream 9.1 (Ubuntu 24.04) **não tem encoder H.264 por
+#     software**: `gstreamer1.0-plugins-ugly` não traz mais o `x264enc` e a
+#     `libavcodec` de lá expõe só o *decoder* H.264 (`avdec_h264`), sem
+#     `avenc_h264`;
+#   - o que existe é `vp8enc`/`vp9enc` — depois de restaurar `libvpx9`, que a
+#     base remove deixando o dpkg "installed" (ver `deploy/Dockerfile`).
+# VP8 é aceito nativamente pelo WebRTC do MediaMTX, então no Nano o preview
+# sai em VP8 em vez de derrubar o boot. Efeito colateral consciente: **HLS
+# não carrega VP8** (HLS é H.264/H.265), então nessa plataforma o fallback
+# HLS do dashboard fica sem preview — WebRTC, que é o caminho preferido, ok.
 PREVIEW_ENCODERS = (
     ("nvv4l2h264enc",
      {"bitrate": PREVIEW_BITRATE,
       "idrinterval": PREVIEW_IDR_INTERVAL,
       "insert_sps_pps": True},
-     "video/x-raw(memory:NVMM),format=NV12"),
+     "video/x-raw(memory:NVMM),format=NV12",
+     "h264"),
     ("x264enc",
      {"bitrate": max(1, PREVIEW_BITRATE // 1000),      # kbps no x264enc
       "key_int_max": PREVIEW_IDR_INTERVAL,
       "tune": "zerolatency",
       "speed_preset": "ultrafast"},
-     "video/x-raw,format=I420"),
+     "video/x-raw,format=I420",
+     "h264"),
+    ("vp8enc",
+     {"target_bitrate": PREVIEW_BITRATE,       # bps
+      "keyframe_max_dist": PREVIEW_IDR_INTERVAL,
+      "deadline": 1,                           # 1 = realtime
+      "cpu_used": 4},
+     "video/x-raw,format=I420",
+     "vp8"),
 )
 # Ritmo do timer que despacha o trabalho do ramo de preview para uma thread
 # própria e observa o resultado. Nada de GStreamer do preview no thread do loop
@@ -726,21 +746,20 @@ class VisionPipeline:
 
     # -- ramo de preview: construção, queda e retomada -----------------------
     def _make_preview_encoder(self):
-        """Escolhe o encoder H.264 do preview que existe nesta base.
+        """Escolhe o encoder (e o codec) do preview que existe nesta base.
 
-        Hardware primeiro (`nvv4l2h264enc`); depois software (`x264enc`), que é
-        o caminho do **Orin Nano** — a placa não tem NVENC e não expõe
-        `/dev/v4l2-nvenc`, então `gst_element_factory_make` devolve `None`
-        (medido em 2026-11-01: o boot morria com "Falha ao criar elemento
-        GStreamer: nvv4l2h264enc"). Com esta escolha o preview funciona nos
-        dois hardwares e uma base sem encoder nenhum vira erro explícito, não
-        um crash de boot.
+        Hardware primeiro (`nvv4l2h264enc`); depois software — `x264enc` quando
+        a base tiver, senão `vp8enc`. O Orin Nano não expõe
+        `/dev/v4l2-nvenc` e a base DS 9.1 não tem encoder H.264 por software,
+        então lá o preview sai em **VP8** (WebRTC do MediaMTX aceita; HLS não).
+        Uma base sem encoder nenhum vira erro explícito, não crash de boot.
 
         Returns:
-            `(elemento, caps)`: o encoder pronto e a caps que combina com ele
-            (NVMM/NV12 no hardware; memória de sistema no software).
+            `(elemento, caps, codec)`: o encoder pronto, a caps que combina com
+            ele (NVMM/NV12 no hardware; memória de sistema no software) e o
+            codec do fluxo (`h264` ou `vp8`), que define o payloader/parser.
         """
-        for factory, props, caps in PREVIEW_ENCODERS:
+        for factory, props, caps, codec in PREVIEW_ENCODERS:
             if factory == "nvv4l2h264enc" and not os.path.exists(
                     "/dev/v4l2-nvenc"):
                 # Sem o device de NVENC (Orin Nano) o elemento até é criado,
@@ -756,11 +775,11 @@ class VisionPipeline:
                 logger.exception("encoder %s recusou as propriedades", factory)
                 continue
             log_event("preview_encoder_selected", factory=factory, caps=caps,
-                      bitrate_preview=PREVIEW_BITRATE)
-            return element, caps
+                      codec=codec, bitrate_preview=PREVIEW_BITRATE)
+            return element, caps, codec
         raise RuntimeError(
-            "nenhum encoder H.264 disponível para o preview "
-            f"(tentados: {[f for f, _p, _c in PREVIEW_ENCODERS]}); "
+            "nenhum encoder de preview disponível "
+            f"(tentados: {[f for f, _p, _c, _k in PREVIEW_ENCODERS]}); "
             "use PREVIEW_ENABLED=0 nesta plataforma")
 
     def _make_preview_elements(self):
@@ -780,12 +799,31 @@ class VisionPipeline:
         # `nvvideoconvert` serve os dois caminhos: NVMM/NV12 para o encoder de
         # hardware e memória de sistema para o de software.
         self.videoconv = self._make("nvvideoconvert")
-        self.encoder, caps = self._make_preview_encoder()
+        self.encoder, caps, self.preview_codec = self._make_preview_encoder()
         # gst_element_set_property não parseia a string de caps;
         # é preciso um objeto Gst.Caps.
         self.enc_caps = self._make("capsfilter")
         self.enc_caps.set_property("caps", Gst.Caps.from_string(caps))
-        self.h264parse = self._make("h264parse")
+        # O elemento depois do encoder depende do codec. H.264 entra num
+        # `h264parse` (o `rtspclientsink` faz o payload sozinho; no transporte
+        # UDP o `rtph264pay` é explícito). VP8 vai **elementar** para o
+        # `rtspclientsink`, que escolhe o `rtpvp8pay` via propriedade
+        # `payloader` — passar RTP pronto ali não linka (medido em 2026-11-01:
+        # `rtpvp8pay0 -> rtspclientsink0` falhava).
+        self.media_parse = None
+        media_chain = ()
+        if self.preview_codec == "h264":
+            self.media_parse = self._make("h264parse")
+            media_chain = (self.media_parse,)
+        else:
+            # VP8: sem fixar as caps de saída, o payloader automático do
+            # `rtspclientsink` empurra `profile=5` para o encoder, que morre
+            # com "Invalid vpx profile (5)" (medido em 2026-11-01). Um
+            # capsfilter com `video/x-vp8` fecha a negociação.
+            self.codec_caps = self._make("capsfilter")
+            self.codec_caps.set_property(
+                "caps", Gst.Caps.from_string("video/x-vp8"))
+            media_chain = (self.codec_caps,)
         if PREVIEW_TRANSPORT == "rtsp":
             # Fase 4 — publica no MediaMTX via RTSP RECORD
             self.rtsp_client = self._make(
@@ -794,14 +832,17 @@ class VisionPipeline:
             tail = (self.rtsp_client,)
         else:
             # Fase 3 — RTP/UDP direto (testes de viewer lento)
-            self.payloader = self._make(
-                "rtph264pay", pt=96, **{"config-interval": -1})
+            if self.preview_codec == "h264":
+                self.payloader = self._make(
+                    "rtph264pay", pt=96, **{"config-interval": -1})
+            else:
+                self.payloader = self._make("rtpvp8pay", pt=96)
             self.udp_sink = self._make(
                 "udpsink", host=PREVIEW_HOST, port=PREVIEW_PORT,
                 sync=False, **{"async": False}, qos=False)
             tail = (self.payloader, self.udp_sink)
-        return (self.queue_preview, self.videoconv, self.enc_caps,
-                self.encoder, self.h264parse) + tail
+        return ((self.queue_preview, self.videoconv, self.enc_caps,
+                 self.encoder) + media_chain + tail)
 
     def _install_preview_branch(self, chain, start=False):
         """Adiciona a cadeia ao pipeline, linka internamente e no tee.
@@ -859,7 +900,8 @@ class VisionPipeline:
             except Exception:  # noqa: BLE001
                 logger.exception("falha ao remover elemento do preview")
         for name in ("queue_preview", "videoconv", "enc_caps", "encoder",
-                     "h264parse", "rtsp_client", "payloader", "udp_sink"):
+                     "media_parse", "codec_caps", "rtsp_client", "payloader",
+                     "udp_sink"):
             if hasattr(self, name):
                 setattr(self, name, None)
 
