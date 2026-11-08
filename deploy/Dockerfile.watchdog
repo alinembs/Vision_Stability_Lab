@@ -1,6 +1,41 @@
-FROM python:3.11-slim
+# Base Debian (não `python:*`): a sonda de nível 2 importa `gi` do sistema, e o
+# `python3-gi` do apt é compilado para o **python3 da própria distro**. Com
+# `python:3.11-slim` (trixie) o módulo nativo sai `_gi.cpython-313-…so` e o
+# import morre com "cannot import name '_gi' from partially initialized module"
+# — o interpretador 3.11 e a extensão 3.13 nascem de releases diferentes.
+# Partir da distro garante que interpretador e extensão venham juntos, sem
+# `PYTHONPATH` apontando para um `dist-packages` alheio.
+FROM debian:trixie-slim
 
 WORKDIR /app
 COPY scripts/watchdog.py /app/watchdog.py
+# Módulo de decisão (puro, só stdlib) e a sonda de nível 2. O compose monta
+# `../scripts` em `/app/scripts`; as cópias aqui deixam a imagem rodável mesmo
+# sem o mount (troca de código em campo continua valendo pelo mount, que tem
+# precedência pelos caminhos relativos do `watchdog.py`).
+COPY scripts/observer_policy.py /app/observer_policy.py
+COPY scripts/probe /app/probe
+
+# Sonda de nível 2 (mídia de verdade), sem decodificar (`fakesink`), então nada
+# de decoders de hardware:
+#   - `rtspsrc`                  -> gstreamer1.0-plugins-good (`libgstrtsp.so`);
+#   - `rtph264depay`/`rtph265depay` -> plugins-good (`libgstrtp.so`);
+#   - `h264parse`/`h265parse`    -> plugins-**bad** (`libgstvideoparsersbad.so`).
+# O `-bad` não é opcional: sem ele a cadeia da sonda quebra em "elemento
+# h264parse indisponível" e a saída do standby nunca confirmaria a fonte.
+# `gir1.2-gstreamer-1.0` traz o typelib `Gst-1.0` — sem ele
+# `gi.require_version("Gst", "1.0")` levanta "Namespace Gst not available"
+# mesmo com `python3-gi` e os plugins instalados.
+# `gstreamer1.0-tools` entra só por diagnóstico (`gst-inspect-1.0`).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3 \
+        python3-gi \
+        gir1.2-gstreamer-1.0 \
+        gstreamer1.0-plugins-base \
+        gstreamer1.0-plugins-good \
+        gstreamer1.0-plugins-bad \
+        gstreamer1.0-tools \
+    && rm -rf /var/lib/apt/lists/*
 
 CMD ["python3", "-u", "/app/watchdog.py"]

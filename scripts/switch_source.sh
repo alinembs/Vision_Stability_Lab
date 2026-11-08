@@ -11,15 +11,24 @@
 #   1. valida o id contra `deepstream/config/sources.yaml` (exit 2 se inválido);
 #   2. guarda de precedência: `ACTIVE_SOURCE` no ambiente do container vence o
 #      arquivo — se estiver preenchida, aborta com exit 3 (nada é escrito);
+#      com o container **parado em standby** (o observador o para quando não há
+#      fonte), o `docker exec` falha e a guarda simplesmente segue: standby não
+#      bloqueia a troca;
 #   3. pré-check (D7): `rtsp_read_probe.py --seconds 5` exit 0 ou aborta com
 #      exit 4 (nada é escrito, container intacto);
 #   4. grava `data/config/active_source` de forma atômica (guarda o valor
 #      anterior para rollback) e reivindica o marcador
 #      `data/config/switch_in_progress` com `noclobber` — o dashboard usa o
 #      mesmo arquivo como mutex entre processos e só apaga o marcador que
-#      criou; outra troca em curso aborta aqui com exit 3, sem tocar em nada;
+#      criou; outra troca em curso aborta aqui com exit 3, sem tocar em nada.
+#      O marcador **válido** de outro dono (observador/watchdog, dashboard) é
+#      respeitado e nunca apagado: primeiro se cede, depois se repete. Expirado
+#      é órfão (dono morto, `kill -9`): pode ser descartado, senão uma queda
+#      deixaria a troca bloqueada para sempre;
 #   5. recria o container do pipeline (`docker compose up -d --no-deps`) e lê o
-#      `StartedAt` do processo novo;
+#      `StartedAt` do processo novo — `up` também **inicia** container parado,
+#      então a troca sobe o pipeline de volta do standby **depois** do
+#      pré-check (nunca antes de saber que a fonte nova entrega vídeo);
 #   6. espera até `--timeout` (default 90 s) por um `interval_metrics` **do
 #      processo novo** com `source_id` pedido **e** `fps_in > 0`; o orçamento
 #      conta a partir da recriação, não do início do script (pré-check e parada
@@ -60,7 +69,9 @@ ENV_FILE="${ENV_FILE:-$REPO_ROOT/deploy/.env}"
 COMPOSE_FILE="${COMPOSE_FILE:-$REPO_ROOT/deploy/docker-compose.yml}"
 APP_CONTAINER="${APP_CONTAINER:-vision-stability-app}"
 COMPOSE_SERVICE="${COMPOSE_SERVICE:-vision-app}"
-CONFIG_DIR="$REPO_ROOT/data/config"
+# Sobrescrevível por ambiente para o teste de ponta a ponta do script poder
+# trabalhar em diretório temporário (o default continua o da bancada).
+CONFIG_DIR="${CONFIG_DIR:-$REPO_ROOT/data/config}"
 CONTROL_FILE="$CONFIG_DIR/active_source"
 SWITCH_MARKER="$CONFIG_DIR/switch_in_progress"
 TELEMETRY_FILE="${TELEMETRY_FILE:-$REPO_ROOT/data/logs/live.jsonl}"

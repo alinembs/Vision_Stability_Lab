@@ -57,12 +57,16 @@ class FakeDocker:
     def __init__(self, clock: FakeClock) -> None:
         self.clock = clock
         self.restarts: list[str] = []
+        self.stops: list[str] = []
+        self.starts: list[str] = []
         # `StartedAt` do processo observado e o instante em que ele subiu.
         self.started_at: str | None = "2026-10-30T00:00:00.000000000Z"
         self.started_epoch = clock.now
         self.api_down = False
         # Container inexistente (Docker devolve 404 em /containers/<x>/json).
         self.missing = False
+        # `State.ExitCode`: 2 é `source_reconnect_exhausted` no pipeline.
+        self.exit_code: int | None = 0
         # Uptime fixo devolvido pela API: reproduz o relógio de parede atrás do
         # `StartedAt` (passo de NTP para trás), em que a idade é sempre 0.0.
         self.uptime_override: float | None = None
@@ -82,19 +86,27 @@ class FakeDocker:
     def container_state(self, container: str):
         if self.api_down:
             self.last_status = None
-            return None, None, None
+            return None, None, None, None
         if self.missing:
             self.last_status = 404
-            return None, None, None
+            return None, None, None, None
         self.last_status = 200
         if self.started_at is None:
-            return None, None, None
+            return None, None, None, None
         uptime = (self.uptime_override if self.uptime_override is not None
                   else round(self.clock.now - self.started_epoch, 1))
-        return True, self.started_at, uptime
+        return True, self.started_at, uptime, self.exit_code
 
     def restart(self, container: str, timeout_s: int = 10) -> bool:
         self.restarts.append(container)
+        return True
+
+    def stop(self, container: str, timeout_s: int = 10) -> bool:
+        self.stops.append(container)
+        return True
+
+    def start(self, container: str) -> bool:
+        self.starts.append(container)
         return True
 
     def logs_since(self, container: str, since_epoch: float) -> str:
@@ -110,11 +122,25 @@ class WatchdogHarness(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.switch_marker = Path(self._tmp.name) / "switch_in_progress"
+        # Observador: estado em tmp e ambiente de fontes fixo (URI da câmera
+        # com credencial de mentira, paths do MediaMTX por convenção).
+        self.observer_state = Path(self._tmp.name) / "observer_state.json"
+        self.active_source_file = Path(self._tmp.name) / "active_source"
+        self.camera_uri = "rtsp://admin:segredo@cam.local:554/live"
+        self.drone_uri = "rtsp://mediamtx:8554/drone"
+        self.phone_uri = "rtsp://mediamtx:8554/phone"
         self._patchers = [
             patch.object(wd, "time", SimpleNamespace(
                 monotonic=self.clock.monotonic, time=self.clock.time)),
             patch.object(wd, "emit", self._record),
             patch.object(wd, "SWITCH_MARKER", str(self.switch_marker)),
+            patch.object(wd, "OBSERVER_STATE", str(self.observer_state)),
+            patch.object(wd, "ACTIVE_SOURCE_FILE",
+                         str(self.active_source_file)),
+            patch.object(wd, "ACTIVE_SOURCE_ENV", ""),
+            patch.object(wd, "RTSP_URI", self.camera_uri),
+            patch.object(wd, "MTX_HOST", "mediamtx"),
+            patch.object(wd, "OBSERVER_SOURCE_PRIORITY", "camera,drone,phone"),
         ]
         for patcher in self._patchers:
             patcher.start()
@@ -151,17 +177,30 @@ class WatchdogHarness(unittest.TestCase):
                 return fields
         self.fail(f"evento {event!r} não foi emitido: {self.names()}")
 
+    def last(self, event: str) -> dict:
+        """Evento mais recente com esse nome (o `first` devolve o mais antigo)."""
+        for name, fields in reversed(self.events):
+            if name == event:
+                return fields
+        self.fail(f"evento {event!r} não foi emitido: {self.names()}")
+
     def count(self, event: str) -> int:
         return self.names().count(event)
 
-    def feed(self) -> None:
-        """Entrega uma amostra de `interval_metrics` com o estado atual."""
-        self.dog._handle_metric({
+    def feed(self, **extra) -> None:
+        """Entrega uma amostra de `interval_metrics` com o estado atual.
+
+        `extra` cobre os campos que o observador lê além da Regra 1 —
+        `source_id` e `session_epoch` (pós-check da transição em curso).
+        """
+        record = {
             "frames_total_in": self.frames_total,
             "fps_in": self.fps_in,
             "fps_processed": self.fps_processed,
             "rss_mb": None,
-        })
+        }
+        record.update(extra)
+        self.dog._handle_metric(record)
 
     def run_loop(self, seconds: float, freeze_counter: bool = False) -> None:
         """Reproduz o loop: clock em passos de CHECK_INTERVAL_S, uma métrica
@@ -458,7 +497,7 @@ class WatchdogSourcesTest(WatchdogHarness):
         started = self.dog.docker.started_at
         # mesmo StartedAt (sem restart) e uptime desconhecida: o caminho que
         # um `StartedAt` malformado produz no DockerAPI real.
-        self.dog.docker.container_state = lambda _c: (True, started, None)
+        self.dog.docker.container_state = lambda _c: (True, started, None, None)
         self.fps_in = 0.0
         self.run_loop(wd.RULE1_ESCALATE_S + 120, freeze_counter=True)
 
@@ -665,6 +704,120 @@ class WatchdogSourcesTest(WatchdogHarness):
         # e sem spam: no máximo uma linha por ALERT_COOLDOWN_S
         self.assertLessEqual(self.count("container_missing"),
                              int(360 / wd.ALERT_COOLDOWN_S) + 1)
+
+
+class ObserverProbeCycleTest(WatchdogHarness):
+    """Sondas do observador no ciclo (`_observer_cycle`).
+
+    Nível 1 = DESCRIBE em toda fonte habilitada, **exceto** na fonte ativa com
+    telemetria dizendo `fps_in > 0`: abrir uma segunda sessão RTSP na câmera IP
+    concorre com a sessão do pipeline. Aqui a sonda é um duplo — nada de socket.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # URI -> o path "tem publisher" (200 com `m=video`) ou não (404).
+        self.publisher_alive = {}
+        self.probed: list[str] = []
+        self._describe_patcher = patch.object(
+            wd.rtsp_describe_probe, "describe", self._describe)
+        self._describe_patcher.start()
+        self.addCleanup(self._describe_patcher.stop)
+        self.dog._app_running = True
+        self.dog._app_exit_code = 0
+
+    def _describe(self, uri, timeout=None):
+        self.probed.append(uri)
+        probe = wd.rtsp_describe_probe
+        if self.publisher_alive.get(uri):
+            return probe.DescribeResult(status=probe.STATUS_OK, reason="ok",
+                                        uri=probe.mask_uri(uri), has_video=True,
+                                        code=200)
+        return probe.DescribeResult(status=probe.STATUS_NOT_FOUND,
+                                    reason="rtsp_404", uri=probe.mask_uri(uri),
+                                    code=404)
+
+    def _state(self) -> dict:
+        return json.loads(self.observer_state.read_text(encoding="utf-8"))
+
+    def test_fonte_ativa_com_fps_positivo_nao_e_sondada(self) -> None:
+        """`fps_in > 0` recente: a câmera ativa fica de fora; as outras, não."""
+        self.run_loop(150)                     # carência de startup vencida
+        self.probed.clear()
+
+        self.dog._observer_cycle()
+
+        self.assertNotIn(self.camera_uri, self.probed)
+        self.assertIn(self.drone_uri, self.probed)
+        self.assertIn(self.phone_uri, self.probed)
+
+    def test_fonte_ativa_volta_a_ser_sondada_sem_telemetria(self) -> None:
+        """Sem frame na telemetria, a ativa é sondada como qualquer outra."""
+        self.run_loop(150)
+        self.fps_in = 0.0
+        self.run_loop(60, freeze_counter=True)
+        self.probed.clear()
+
+        self.dog._observer_cycle()
+
+        self.assertIn(self.camera_uri, self.probed)
+
+    def test_ciclo_nivel_1_atualiza_sources_probe_no_estado(self) -> None:
+        self.publisher_alive[self.camera_uri] = True
+        self.publisher_alive[self.drone_uri] = True
+        # Sem frame na telemetria a fonte ativa entra na sonda (o caso normal
+        # de observação); com `fps_in > 0` ela ficaria de fora.
+        self.fps_in = 0.0
+        self.run_loop(120, freeze_counter=True)
+
+        self.dog._observer_cycle()
+
+        state = self._state()
+        probes = state["sources_probe"]
+        self.assertEqual(set(probes), {"camera", "drone", "phone"})
+        self.assertTrue(probes["camera"]["alive"])
+        self.assertTrue(probes["drone"]["alive"])
+        self.assertFalse(probes["phone"]["alive"])
+        self.assertEqual(probes["phone"]["reason"], "rtsp_404")
+        self.assertEqual(probes["camera"]["level"],
+                         wd.observer_policy.LEVEL_DESCRIBE)
+        self.assertIsNotNone(probes["camera"]["checked_at"])
+        # `ok_streak` conta sondas boas consecutivas: é o que a política exige
+        # antes de considerar a fonte candidata (MIN_OK_STREAK).
+        self.assertEqual(self.dog._probes["drone"].ok_streak, 1)
+
+    def test_probe_changed_so_na_transicao_alive_para_dead(self) -> None:
+        self.publisher_alive[self.camera_uri] = True
+        self.dog._observer_cycle()             # primeira leitura: sem transição
+        self.assertEqual(self.count("source_probe_changed"), 0)
+
+        self.publisher_alive[self.camera_uri] = False
+        self.dog._observer_cycle()
+        self.assertEqual(self.count("source_probe_changed"), 1)
+        mudou = self.first("source_probe_changed")
+        self.assertEqual(mudou["source"], "camera")
+        self.assertFalse(mudou["alive"])
+        self.assertTrue(mudou["previous_alive"])
+
+        self.dog._observer_cycle()             # morta de novo: silêncio
+        self.assertEqual(self.count("source_probe_changed"), 1)
+
+        self.publisher_alive[self.camera_uri] = True
+        self.dog._observer_cycle()
+        self.assertEqual(self.count("source_probe_changed"), 2)
+        self.assertTrue(self.last("source_probe_changed")["alive"])
+
+    def test_fps_positivo_mas_antigo_nao_esconde_a_sonda(self) -> None:
+        """`fps_in > 0` de telemetria velha não é prova de fonte viva."""
+        self.run_loop(150)                     # deixa `_last_fps_in = 20`
+        # Silêncio de telemetria (sem feed): a evidência de frame envelhece
+        # além do timeout do observador, e a fonte ativa volta a ser sondada.
+        self.clock.advance(wd.observer_policy.ACTIVE_FRAME_TIMEOUT_S + 20)
+        self.probed.clear()
+
+        self.dog._observer_cycle()
+
+        self.assertIn(self.camera_uri, self.probed)
 
 
 class SwitchMarkerTest(WatchdogHarness):
@@ -932,20 +1085,21 @@ class ContainerStateTest(unittest.TestCase):
         started = "2026-13-45T99:99:99.123456789Z"
         api = self._api({"State": {"Running": True, "StartedAt": started}})
         # não levanta — é o que mantém `_rule4_ram`/`_rule5_cuda_logs` no ciclo
-        self.assertEqual(api.container_state("c"), (True, started, None))
+        self.assertEqual(api.container_state("c"), (True, started, None, None))
 
     def test_started_at_texto_livre_devolve_uptime_none(self) -> None:
         api = self._api({"State": {"Running": True, "StartedAt": "nada"}})
-        self.assertEqual(api.container_state("c"), (True, "nada", None))
+        self.assertEqual(api.container_state("c"), (True, "nada", None, None))
 
     def test_started_at_valido_continua_calculando(self) -> None:
         api = self._api({"State": {
             "Running": True,
             "StartedAt": "2026-10-30T16:59:23.123456789Z"}})
-        running, started, uptime = api.container_state("c")
+        running, started, uptime, exit_code = api.container_state("c")
         self.assertTrue(running)
         self.assertEqual(started, "2026-10-30T16:59:23.123456789Z")
         self.assertIsNotNone(uptime)
+        self.assertIsNone(exit_code)
 
 
 class JsonlTailTest(unittest.TestCase):

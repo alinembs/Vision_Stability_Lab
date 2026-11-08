@@ -149,8 +149,29 @@ services:
       - TELEMETRY_FILE=/app/data/logs/live.jsonl
       - WATCHDOG_LOG=/app/data/logs/watchdog.jsonl
       - TARGET_FPS=${WATCHDOG_TARGET_FPS:-25}
+      # Sonda de nível 1 (DESCRIBE) na fonte `camera`: mesma variável/origem do
+      # serviço do app (a credencial continua fora do repositório, DIV-001).
+      - RTSP_URI=${RTSP_URI:-}
+      # Drone/celular são paths do MediaMTX: o host tem que ser o DNS do
+      # serviço dentro da rede do compose (com a sonda não GStreamer, resolver
+      # o nome já basta).
+      - MTX_HOST=mediamtx
+      # Mesma fonte ativa que o app enxerga. Com `ACTIVE_SOURCE` no ambiente a
+      # escolha é do operador: o observador só registra (`active_source_env_set`)
+      # e não decide troca por cima dela.
+      - ACTIVE_SOURCE=${ACTIVE_SOURCE:-}
+      # Observador de fontes (E7). Ordem de precedência explícita: esta imagem
+      # não carrega PyYAML, então o `sources.yaml` chega aqui já decidido.
+      - OBSERVER_AUTO_SWITCH=${OBSERVER_AUTO_SWITCH:-1}
+      - OBSERVER_SOURCE_PRIORITY=${OBSERVER_SOURCE_PRIORITY:-camera,drone,phone}
     volumes:
+      # rw de propósito: o watchdog escreve `data/config/observer_state.json` e
+      # `data/config/active_source`. Com `:ro` a troca automática e o retrato
+      # do observador (dashboard) falhariam em silêncio.
       - ../data:/app/data
+      # Sondas e módulo de decisão versionados; não reescrevem nada.
+      - ../scripts:/app/scripts:ro
+      - ../deepstream:/app/deepstream:ro
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - vision-app
