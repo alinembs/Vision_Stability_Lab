@@ -57,11 +57,19 @@ class FakeRtspServer:
       - `"no_video"` -> 200 nos dois, SDP só com áudio;
       - `"404"`      -> OPTIONS 200, DESCRIBE 404 (path sem publisher);
       - `"silent"`   -> aceita a conexão e nunca responde (timeout).
+
+    Com `require_absolute=True` (default) o servidor imita o MediaMTX: request
+    line com alvo relativo vira `400 Bad Request` e a requisição fica em
+    `relative_requests`. Sem isso o bug da request line relativa passava
+    despercebido — o fake respondia 200 a qualquer alvo.
     """
 
-    def __init__(self, mode: str = "video") -> None:
+    def __init__(self, mode: str = "video",
+                 require_absolute: bool = True) -> None:
         self.mode = mode
+        self.require_absolute = require_absolute
         self.requests: list[str] = []
+        self.relative_requests: list[str] = []
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(("127.0.0.1", 0))
@@ -73,6 +81,10 @@ class FakeRtspServer:
     def uri(self, path: str = "camera", userinfo: str = "") -> str:
         prefix = f"{userinfo}@" if userinfo else ""
         return f"rtsp://{prefix}127.0.0.1:{self.port}/{path}"
+
+    def request_lines(self) -> list[str]:
+        """Primeira linha (request line) de cada requisição recebida."""
+        return [text.split("\r\n")[0] for text in self.requests]
 
     def close(self) -> None:
         try:
@@ -93,6 +105,12 @@ class FakeRtspServer:
                 except OSError:
                     continue
 
+    @staticmethod
+    def _is_absolute(request_line: str) -> bool:
+        """A request line traz URL absoluta no segundo campo?"""
+        fields = request_line.split()
+        return len(fields) >= 2 and fields[1].startswith("rtsp://")
+
     def _handle(self, conn: socket.socket) -> None:
         buffer = b""
         while True:
@@ -110,6 +128,12 @@ class FakeRtspServer:
                 if line.lower().startswith("cseq:"):
                     cseq = line.split(":", 1)[1].strip()
             self.requests.append(text)
+            if self.require_absolute and not self._is_absolute(lines[0]):
+                # MediaMTX: `closed: invalid URL (/path)`. Aqui vira 400 para
+                # que a regressão falhe de forma auto-explicativa.
+                self.relative_requests.append(text)
+                self._send(conn, cseq, 400, "Bad Request", "", "")
+                continue
             if self.mode == "silent":
                 continue                     # cliente estoura o timeout
             if method == "OPTIONS":
@@ -227,6 +251,99 @@ class DescribeProbeTest(unittest.TestCase):
         self.assertTrue(autorizacoes)
         token = autorizacoes[0].split(":", 1)[1].strip().split(" ", 1)[1]
         self.assertEqual(base64.b64decode(token).decode(), USERINFO)
+
+
+class AbsoluteRequestLineTest(unittest.TestCase):
+    """RFC 2326: a request line leva URL absoluta, sem userinfo.
+
+    Regressão de campo: com alvo relativo (`/camera`) o MediaMTX fecha a
+    conexão (`invalid URL (/camera)`), a sonda dava `timeout_no_options` e o
+    observador nunca via fonte viva. O fake agora responde 400 a alvo relativo.
+    """
+
+    def _server(self, mode: str = "video",
+                **kwargs) -> FakeRtspServer:
+        server = FakeRtspServer(mode, **kwargs)
+        self.addCleanup(server.close)
+        return server
+
+    def test_options_e_describe_usam_url_absoluta(self) -> None:
+        server = self._server("video")
+
+        result = probe.describe(server.uri(), timeout=1.0)
+
+        self.assertTrue(result.alive)
+        esperado = server.uri()
+        self.assertEqual(server.relative_requests, [],
+                         "request line relativa: o MediaMTX recusaria")
+        self.assertEqual(
+            server.request_lines(),
+            [f"OPTIONS {esperado} RTSP/1.0",
+             f"DESCRIBE {esperado} RTSP/1.0"])
+
+    def test_request_line_nao_carrega_userinfo(self) -> None:
+        server = self._server("video")
+        uri = server.uri(userinfo=USERINFO)
+
+        result = probe.describe(uri, timeout=1.0)
+
+        self.assertTrue(result.alive)
+        request_lines = server.request_lines()
+        self.assertEqual(
+            request_lines,
+            [f"OPTIONS {server.uri()} RTSP/1.0",
+             f"DESCRIBE {server.uri()} RTSP/1.0"])
+        for text in server.requests:
+            # A credencial vai só no header; a request line absoluta não tem
+            # authority com userinfo (DIV-001).
+            self.assertNotIn(USERINFO, text.split("\r\n")[0])
+            self.assertNotIn(USUARIO_FALSO, text.split("\r\n")[0])
+            self.assertNotIn(SENHA_FALSA, text.split("\r\n")[0])
+        autorizacoes = [line for text in server.requests
+                        for line in text.split("\r\n")
+                        if line.lower().startswith("authorization:")]
+        self.assertEqual(len(autorizacoes), 2)
+        self.assertTrue(autorizacoes[0].startswith("Authorization: Basic "))
+
+    def test_query_string_chega_na_request_line(self) -> None:
+        server = self._server("video")
+
+        result = probe.describe(server.uri(path="camera?a=1&b=2"), timeout=1.0)
+
+        self.assertTrue(result.alive)
+        esperado = f"rtsp://127.0.0.1:{server.port}/camera?a=1&b=2"
+        self.assertEqual(
+            server.request_lines(),
+            [f"OPTIONS {esperado} RTSP/1.0",
+             f"DESCRIBE {esperado} RTSP/1.0"])
+
+
+class RequestUrlTest(unittest.TestCase):
+    """Unitário do helper que monta a URL absoluta (sem abrir socket)."""
+
+    def test_ipv6_sai_entre_colchetes(self) -> None:
+        self.assertEqual(probe._request_url("::1", 8554, "/live"),
+                         "rtsp://[::1]:8554/live")
+
+    def test_ipv6_com_porta_default(self) -> None:
+        host, porta, url = probe._request_target("rtsp://[::1]/live")
+        self.assertEqual(host, "::1")
+        self.assertEqual(porta, probe.RTSP_DEFAULT_PORT)
+        self.assertEqual(url, "rtsp://[::1]:554/live")
+
+    def test_ipv4_tem_porta_explicita_e_preserva_query(self) -> None:
+        self.assertEqual(
+            probe._request_target("rtsp://cam.local:8554/live?a=1"),
+            ("cam.local", 8554, "rtsp://cam.local:8554/live?a=1"))
+        self.assertEqual(probe._request_target("rtsp://cam.local/live"),
+                         ("cam.local", 554, "rtsp://cam.local:554/live"))
+
+    def test_url_absoluta_nao_carrega_userinfo(self) -> None:
+        _host, _porta, url = probe._request_target(
+            f"rtsp://{USERINFO}@cam.local:8554/live")
+        self.assertEqual(url, "rtsp://cam.local:8554/live")
+        self.assertNotIn(USUARIO_FALSO, url)
+        self.assertNotIn(SENHA_FALSA, url)
 
 
 class MaskUriTest(unittest.TestCase):

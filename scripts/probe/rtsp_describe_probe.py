@@ -6,6 +6,11 @@ existe e declara vídeo?". Fala RTSP 1.0 na mão sobre `socket` TCP da stdlib �
 nada de `gi`, nada de pipeline —, então roda no container do watchdog (que só
 tem `python3-gi` para a sonda de nível 2) e em qualquer máquina sem GPU.
 
+A request line leva a URL **absoluta** (`OPTIONS rtsp://host:porta/path?query
+RTSP/1.0`), como a RFC 2326 exige: o MediaMTX fecha a conexão com
+`invalid URL (/path)` quando o alvo é relativo. A URL absoluta nunca carrega
+userinfo — host e porta vêm de `parts.hostname`/`parts.port`.
+
 Contrato de saída (`DescribeResult.status`):
 
   - `"200"`      DESCRIBE aceito e o SDP anuncia `m=video`;
@@ -118,8 +123,30 @@ def _credentials(uri: str) -> Optional[str]:
     return "Basic " + base64.b64encode(token).decode()
 
 
+def _request_url(host: str, port: int, target: str) -> str:
+    """URL **absoluta** da request line: `rtsp://host:porta/path?query`.
+
+    A RFC 2326 (RTSP 1.0) exige URL absoluta na request line; o MediaMTX recusa
+    o alvo relativo fechando a conexão com `invalid URL (/path)`. Por isso a
+    montagem é explícita aqui em vez de reaproveitar `parts.netloc`:
+
+      - o host vem de `parts.hostname`, nunca de `parts.netloc`, então a URL
+        não carrega userinfo (DIV-001: a credencial vai **só** no header
+        `Authorization: Basic` montado por `_credentials()`);
+      - a porta aparece sempre, a mesma usada no `socket.create_connection`;
+      - host IPv6 sai entre colchetes (`rtsp://[::1]:8554/live`), senão a URL
+        fica inválida.
+    """
+    literal = f"[{host}]" if ":" in host else host
+    return f"rtsp://{literal}:{port}{target}"
+
+
 def _request_target(uri: str) -> Tuple[str, int, str]:
-    """`(host, porta, path?query)` de uma URI RTSP, validando o mínimo.
+    """`(host, porta, URL absoluta da request line)` de uma URI RTSP.
+
+    `host`/`porta` são o alvo do `socket.create_connection`; a URL absoluta é
+    o alvo da request line (`OPTIONS <url> RTSP/1.0`, idem DESCRIBE), já sem
+    userinfo e com porta explícita — ver `_request_url`.
 
     Levanta `ValueError` (mensagem sem credencial) para esquema errado, host
     ausente ou porta ilegível — o chamador transforma em `STATUS_ERROR`.
@@ -139,7 +166,9 @@ def _request_target(uri: str) -> Tuple[str, int, str]:
     target = parts.path or "/"
     if parts.query:
         target = f"{target}?{parts.query}"
-    return parts.hostname, port or RTSP_DEFAULT_PORT, target
+    resolved_port = port or RTSP_DEFAULT_PORT
+    return parts.hostname, resolved_port, _request_url(parts.hostname,
+                                                       resolved_port, target)
 
 
 # ---------------------------------------------------------------------------
@@ -221,10 +250,14 @@ def _read_response(sock: socket.socket) -> Tuple[int, str, str]:
     return code, phrase, body.decode(errors="replace")
 
 
-def _exchange(sock, method, target, cseq, authorization):
-    """Envia uma requisição RTSP e devolve a resposta lida."""
+def _exchange(sock, method, request_url, cseq, authorization):
+    """Envia uma requisição RTSP e devolve a resposta lida.
+
+    `request_url` é absoluta (`rtsp://host:porta/path?query`): a RFC 2326 não
+    aceita alvo relativo na request line e o MediaMTX recusa com `invalid URL`.
+    """
     lines = [
-        f"{method} {target} RTSP/1.0",
+        f"{method} {request_url} RTSP/1.0",
         f"CSeq: {cseq}",
         f"User-Agent: {USER_AGENT}",
     ]
@@ -254,7 +287,7 @@ def describe(uri: str, timeout: float = DEFAULT_TIMEOUT_S) -> DescribeResult:
     started = time.monotonic()
     masked = mask_uri(uri)
     try:
-        host, port, target = _request_target(uri)
+        host, port, request_url = _request_target(uri)
     except ValueError as exc:
         return DescribeResult(status=STATUS_ERROR, reason=str(exc),
                               uri=masked,
@@ -279,13 +312,13 @@ def describe(uri: str, timeout: float = DEFAULT_TIMEOUT_S) -> DescribeResult:
     with sock:
         sock.settimeout(timeout)
         try:
-            code, _phrase, _body = _exchange(sock, "OPTIONS", target, 1,
+            code, _phrase, _body = _exchange(sock, "OPTIONS", request_url, 1,
                                              authorization)
             if code == 0:
                 return DescribeResult(status=STATUS_TIMEOUT,
                                       reason="timeout_no_options", uri=masked,
                                       elapsed_s=_elapsed())
-            code, phrase, body = _exchange(sock, "DESCRIBE", target, 2,
+            code, phrase, body = _exchange(sock, "DESCRIBE", request_url, 2,
                                            authorization)
         except TimeoutError:
             return DescribeResult(status=STATUS_TIMEOUT,
