@@ -1,24 +1,8 @@
-# Projeto proposto: Vision Stability Lab
+# Vision Stability Lab
 
-A melhor forma de transformar seu objetivo em um projeto de aprendizado é criar um sistema simples de **monitoramento de ocupação de uma área**, em vez de começar com EPI, múltiplos modelos, regras complexas ou reconhecimento de pessoas.
+Laboratório de estabilidade de visão contínua sobre DeepStream, rodando em Jetson. O pipeline processa **uma fonte por vez** : câmera IP por RTSP, drone por RTMP ou celular Android por WHIP, detecta pessoas com um modelo TensorRT `.engine`, acompanha os objetos com tracker, publica o vídeo anotado e expõe métricas operacionais em um dashboard.
 
-O sistema receberá **uma fonte por vez** — câmera IP por RTSP, drone por RTMP ou celular Android por WHIP (`docs/adr/adr-0006-troca-de-fonte.md`) —, detectará pessoas com um modelo TensorRT `.engine`, acompanhará os objetos com tracker, transmitirá vídeo anotado por H.264 e exibirá, em um dashboard, tanto os resultados da visão quanto a saúde do Jetson. O objetivo principal não será apenas “detectar pessoas”, mas provar que o pipeline permanece estável por várias horas.
-
-## Status de execução (atualizado em 2026-11-01)
-
-| Fase | Escopo | Estado |
-|---|---|---|
-| 0 — Preparação | Ambiente Jetson + DeepStream 7.1 (container L4T), modelo YOLO11m `.engine` gerado | Concluída |
-| 1 — RTSP & inferência | Ingestão H.265 + decode HW + `nvinfer`, probes pyds, logs JSON | Concluída |
-| 2 — Tracker & regra temporal | `nvtracker` IOU + TTL + estado EMPTY/OCCUPIED, 30 min validados | Concluída (`docs/phase-2-evaluation.md`) |
-| 3 — OSD & vídeo H.264 | `nvdsosd` + tee + ramo de preview descartável (`nvv4l2h264enc`), 30 min validados com player externo | Concluída (`docs/phase-3-evaluation.md`) |
-| 4 — MediaMTX & dashboard | Preview publicado via RTSP no MediaMTX; dashboard (FastAPI + vanilla JS) com WebRTC/WHEP, API/WebSocket de métricas, cards, gráficos e eventos | Concluída — validação E2E ≥30 min em 2026-08-23 (vídeo, métricas, eventos); revisão UI aplicada |
-| Multi-fonte (ADR-0006) | Câmera fixa, drone e celular como entradas **alternativas** (uma ativa por vez); catálogo declarativo, troca por script e pela tela | Concluída no Orin NX — gate E4 PASS em 2026-11-01 (`docs/baselines/2026-11-01-gate-e4.md`); em validação no Orin Nano |
-| 5+ — Estabilidade, watchdog, testes longos | — | Não iniciadas |
-
-Evidências e pendências: `docs/phase-1-evaluation.md` · Incidentes: `docs/incident-log.md`
-
-Nota: a avaliação anterior da Fase 1 declarava sucesso sem inferência executada (pipeline antigo sem `nvinfer` e com depayloader H.264 numa câmera H.265). O documento foi corrigido e o teste será refeito com o novo pipeline.
+O alvo é **estabilidade por horas**: memória que entra em platô, filas que não crescem, latência previsível, recuperação automática quando a fonte cai e encerramento limpo. Detectar pessoas é o caminho para exercitar isso, não o objetivo em si. O mesmo stack roda em dois Jetsons: Orin NX e Orin Nano , cada host com seu `deploy/.env` e sua base de imagem.
 
 ## Ambientes de teste: Orin NX e Orin Nano
 
@@ -29,48 +13,11 @@ imagem, que o `make doctor` valida contra a plataforma.
 | Ambiente | IP na LAN | Papel | Plataforma | Base do stack |
 |---|---|---|---|---|
 | **Orin NX** | DHCP — `make ip` | produção e referência dos gates | L4T R36.4.7 · JetPack 6 · DeepStream **7.1** · Python 3.10 no container | `deploy/Dockerfile` padrão (DS 7.1, wheel `pyds` cp310) |
-| **Orin Nano** (`pr3via-jetson`) | DHCP — `make ip` | validação de portabilidade | L4T R39.2.1 · JetPack 7.2.1 · DeepStream **9.1** · CUDA 13 · TRT 10.16.2.10 · Ubuntu 24.04 · Python 3.12.3 · GStreamer 1.24.2 | `DS_BASE_IMAGE=nvcr.io/nvidia/deepstream:9.1-triton-multiarch` + wheel `pyds` cp312 |
-
-Estado em 2026-11-01: o **NX** é o ambiente de produção do VSL e onde os gates
-são fechados (E4 PASS). O **Nano** sobe o stack completo com `make up` e serve
-dashboard, telemetria e preview — medido no `/api/snapshot` às 20:12 UTC:
-`healthy`, `fps_in=20`, `fps_preview=20`, sessão `camera` iniciada às 19:44 UTC.
-O gate de portabilidade (P4) e as pendências de plataforma estão em
-[`docs/plans/2026-11-01-portabilidade-orin-nano.md`](docs/plans/2026-11-01-portabilidade-orin-nano.md).
-
-Cada host é um **stack independente** — não é cluster nem distribuição:
-
-- **Um** container DeepStream por host (regra global do projeto). Os dois
-  Jetsons podem rodar ao mesmo tempo porque são hosts distintos; dois
-  containers do projeto no **mesmo** host continuam proibidos.
-- `deploy/.env` é por host: `RTSP_URI`, `DASHBOARD_PORT` e, opcionalmente,
-  `LAN_IP`. O IP **não** é mais fixo no repositório nem obrigatório no `.env`:
-  `make up` detecta o endereço atual (`scripts/host_ip.sh`: rota default e,
-  depois, `hostname -I`) e exporta `LAN_IP` para o compose — é ele que amarra a
-  publicação das portas do MediaMTX e alimenta o `MTX_WEBRTCADDITIONALHOSTS` (o
-  IP que o SDP anuncia ao navegador). Se o roteador trocar o IP, basta
-  `make up`; nada de editar arquivo.
-- O dashboard é sempre `http://<IP atual do host>:8081`. Use `make ip` para ver
-  o endereço do momento (e as URLs de captura). `localhost` não serve (ver
-  Fase 4).
-- O certificado é **por host**: `deploy/certs/generate-certs.sh` monta o SAN a
-  partir dos IPv4 atuais do host + `<hostname>.local` + `vsl.local`. Quando o
-  IP muda, `make up` reemite **só o certificado do servidor**, preservando a
-  CA: quem já instalou o `ca.crt` continua confiando, sem reinstalar nada.
-  A pasta é gitignored: nunca copie o par `server.crt`/`server.key` de um host
-  para o outro.
-- As duas CAs têm o **mesmo CN** (`Vision Stability Lab Internal CA`), mas
-  chaves diferentes. Uma máquina que abre os dois dashboards precisa das duas
-  instaladas; regenerar (`--force`) num host invalida **só** aquela CA para os
-  clientes. Ver a seção da Fase 4.
-- As portas são as mesmas nos dois hosts (`8081`, `8554`, `1935`, `8888`,
-  `8889`, `8189`, `8443`, além de `8890/udp` do SRT), cada uma publicada no IP
-  do seu host — por isso os dois coexistem na mesma LAN sem conflito.
+| **Orin Nano**| DHCP — `make ip` | validação de portabilidade | L4T R39.2.1 · JetPack 7.2.1 · DeepStream **9.1** · CUDA 13 · TRT 10.16.2.10 · Ubuntu 24.04 · Python 3.12.3 · GStreamer 1.24.2 | `DS_BASE_IMAGE=nvcr.io/nvidia/deepstream:9.1-triton-multiarch` + wheel `pyds` cp312 |
 
 ## Fontes disponíveis: uma ativa por vez
 
-O laboratório aceita **três entradas alternativas**, nunca simultâneas
-(ADR-0006). O catálogo é declarativo, em `deepstream/config/sources.yaml`:
+O laboratório aceita **três entradas alternativas**, nunca simultâneas. O catálogo é declarativo, em `deepstream/config/sources.yaml`:
 
 | id | nome | entrada | codec | gate |
 |---|---|---|---|---|
@@ -120,12 +67,11 @@ make switch SOURCE=drone       # pré-check → active_source → restart → p�
 O script não deixa a troca "meio feita": se o pós-check não confirmar
 `interval_metrics` com `fps_in > 0` na fonte nova, ele **restaura** a anterior e
 sai `1`. Cada execução deixa uma linha em `data/logs/switch.jsonl`; contratos de
-exit code e diagnóstico estão em
-[`docs/runbooks/troca-de-fonte.md`](docs/runbooks/troca-de-fonte.md).
+exit code.
 
 Adicionar uma fonte nova é editar o catálogo (id, `uri`/`uri_env`, `codec`,
 `target_fps`, `enabled`, `gate`) e reiniciar — não é mexer no Python. URI com
-credencial fica em `deploy/.env` via `uri_env`, nunca no YAML (DIV-001).
+credencial fica em `deploy/.env` via `uri_env`, nunca no YAML.
 
 ## 1. Problema do projeto
 
@@ -154,7 +100,7 @@ Quando a última pessoa sair:
     gerar evento AREA_EMPTY
 ```
 
-Esse problema é menor que um sistema de EPI, mas preserva as partes mais importantes:
+O escopo é menor que o de um sistema industrial de conformidade ou de monitoramento, mas preserva as partes mais importantes do caminho:
 
 ```text
 RTSP
@@ -178,150 +124,7 @@ OSD
 
 A arquitetura deve privilegiar o caminho acelerado da Jetson e evitar a conversão contínua para NumPy, BGR, JPEG e Base64. As bindings Python do DeepStream permitem acessar metadados de inferência e analytics anexados aos buffers sem necessariamente extrair o frame para a CPU. [docs.nvidia](https://docs.nvidia.com/metropolis/deepstream/5.0/python-api/gettingstarted.html)
 
-## 2. Escopo mínimo
-
-### Incluído
-
-| Componente | Escopo |
-|---|---|
-| Fonte | Câmera IP (RTSP), drone (RTMP) ou celular Android (WHIP) — **uma ativa por vez**, catálogo em `deepstream/config/sources.yaml` |
-| Inferência | Um detector de pessoas em TensorRT `.engine` |
-| Tracker | NvDCF ou tracker equivalente |
-| Regra | Contagem, entrada, saída e permanência |
-| Vídeo | OSD com bounding boxes e informações básicas |
-| Streaming | H.264 por hardware para MediaMTX |
-| Dashboard | Vídeo, estado da área e métricas |
-| Métricas | FPS, latência, memória, CPU, GPU, temperatura e tracks |
-| Persistência | Histórico limitado de eventos e métricas |
-| Estabilidade | Testes de 1, 6 e 24 horas |
-| Operação | Reconexão RTSP e watchdog simples |
-
-### Não incluído na primeira versão
-
-Deixe estes recursos para etapas posteriores:
-
-- Reconhecimento facial.
-- Re-identificação de pessoas.
-- Classificação de comportamento.
-- Segundo modelo SGIE.
-- Detecção de EPI.
-- Múltiplas fontes **simultâneas** — as três entradas do ADR-0006 são alternativas, não concorrentes.
-- Gravação contínua.
-- Envio de todos os frames ao backend.
-- Processamento de imagem em OpenCV.
-- Kubernetes.
-- Distribuição/orquestração em vários Jetsons — o Orin NX e o Orin Nano são dois ambientes de teste independentes, não um cluster.
-
-O escopo deve ter **uma fonte ativa por vez**, uma métrica de ocupação (pessoas — o modelo detecta e desenha as 80 classes COCO, mas a telemetria conta só `person`) e uma regra temporal. Isso permite concentrar o aprendizado em lifecycle, backpressure, observabilidade e recuperação de falhas.
-
-## 3. Arquitetura recomendada
-
-### Pipeline do Jetson
-
-A primeira versão pode seguir este desenho:
-
-```text
-RTSP source
-  ↓
-rtspsrc / nvurisrcbin
-  ↓
-hardware decode
-  ↓
-nvstreammux
-  ↓
-nvinfer
-  ↓
-nvtracker
-  ↓
-probe de metadados
-  ↓
-nvdsosd
-  ↓
-tee
-  ├── queue leaky → fakesink
-  └── queue leaky → nvvideoconvert
-                         ↓
-                    nvv4l2h264enc
-                         ↓
-                      h264parse
-                         ↓
-                      rtph264pay
-                         ↓
-                    MediaMTX
-```
-
-O probe deve trabalhar principalmente com:
-
-- `frame_num`;
-- timestamp;
-- número de objetos;
-- `object_id`;
-- classe detectada;
-- confiança;
-- bounding box;
-- estado da região;
-- tempo de permanência.
-
-A NVIDIA descreve probes como pontos para interceptar buffers e metadados processados, permitindo extrair resultados do `nvinfer` e gerar contagens ou overlays. [docs.nvidia](https://docs.nvidia.com/metropolis/deepstream/dev-guide/text/DS_service_maker_python_into_to_pipeline_api.html)
-
-### Ingestão das três fontes
-
-O pipeline continua com **uma** entrada por execução. Quem materializa a
-escolha é o catálogo (`deepstream/config/sources.yaml`) mais o
-`data/config/active_source`. O MediaMTX é o ponto comum das duas fontes que
-publicam por push:
-
-```text
-drone   ── RTMP :1935/drone ──┐
-celular ── WHIP :8889/phone ──┴──► MediaMTX ── RTSP :8554/{drone,phone} ──┐
-câmera  ── RTSP (direto, RTSP_URI) ───────────────────────────────────────┴──► rtspsrc
-```
-
-A câmera não passa pelo MediaMTX na entrada — o pipeline fala RTSP direto com
-ela. O preview anotado é que é publicado no path `live`, independentemente da
-fonte ativa. Depayloader e parser saem do `codec` da fonte (D5), e a URI de cada
-fonte vem do YAML ou de uma variável de ambiente (`uri_env`), nunca hardcoded no
-pipeline.
-
-### Separação entre vídeo e eventos
-
-O pipeline não deve enviar imagens ao dashboard por requisição HTTP a cada frame.
-
-Use dois canais separados:
-
-```text
-DeepStream → H.264/RTP → MediaMTX → WebRTC ou HLS → navegador
-
-DeepStream → eventos JSON → MQTT ou API → dashboard
-DeepStream → métricas JSON → MQTT ou API → dashboard
-```
-
-O vídeo permanece comprimido e acelerado. O backend recebe apenas dados pequenos, como:
-
-```json
-{
-  "camera_id": "lab-camera-01",
-  "timestamp": "2026-08-23T00:00:00Z",
-  "people": 2,
-  "area_state": "occupied",
-  "event": null,
-  "fps_in": 15.0,
-  "fps_infer": 15.0,
-  "latency_ms": 82.4
-}
-```
-
-Para a primeira validação, use esta sequência:
-
-1. Gravar vídeo anotado localmente.
-2. Enviar RTP/UDP para outro processo.
-3. Integrar MediaMTX.
-4. Exibir no navegador.
-5. Adicionar histórico e alertas no dashboard.
-
-Essa ordem reduz o número de variáveis durante o diagnóstico.
-
-## 4. Métricas do dashboard
+## 2. Métricas do dashboard
 
 O dashboard deve ter três grupos: visão, pipeline e hardware.
 
@@ -385,7 +188,7 @@ Tempo de execução:     06:42:18
 Status:                estável
 ```
 
-## 5. Dashboard sugerido
+## 3. Dashboard sugerido
 
 Você pode implementar o dashboard em Go, FastAPI ou Node.js. Para esse projeto, eu usaria:
 
@@ -469,7 +272,7 @@ Crescimento nos últimos 30 min: +4 MB
 Tendência: estável
 ```
 
-## 6. Contrato de dados
+## 4. Contrato de dados
 
 Defina desde o começo um formato único para métricas:
 
@@ -541,294 +344,53 @@ Para eventos, publique somente transições:
 
 Não publique um evento de “área ocupada” em todos os frames.
 
-## 7. Fases de implementação
+## 5. Critérios de sucesso
 
-### Fase 0 — Preparação
-
-Objetivo: confirmar o ambiente.
-
-Entregáveis:
-
-- JetPack e DeepStream instalados.
-- `gst-inspect-1.0` funcionando.
-- `nvinfer` disponível.
-- `nvtracker` disponível.
-- `nvdsosd` disponível.
-- `nvv4l2h264enc` disponível.
-- `tegrastats` funcionando.
-- Modelo `.engine` validado.
-
-Comandos úteis:
-
-```bash
-gst-inspect-1.0 nvinfer
-gst-inspect-1.0 nvtracker
-gst-inspect-1.0 nvdsosd
-gst-inspect-1.0 nvv4l2h264enc
-tegrastats --interval 1000
-```
-
-As propriedades dos elementos podem variar entre versões do JetPack, portanto valide a instalação local com `gst-inspect-1.0` antes de copiar configurações de outro ambiente. A documentação atual do Jetson mantém exemplos e propriedades específicas por versão. [docs.nvidia](https://docs.nvidia.com/jetson/archives/r38.4/DeveloperGuide/AT/JetsonLinuxDevelopmentTools/TegrastatsUtility.html)
-
-É o que acontece entre os dois ambientes de teste — Orin NX com DeepStream 7.1 e Orin Nano com 9.1 (ver “Ambientes de teste”). Por isso o `nvtracker` resolve a biblioteca por um caminho estável entre as duas bases, o encoder do preview é escolhido por disponibilidade (hardware → software) e `make doctor` compara a L4T do host com a base de imagem do `deploy/.env`, bloqueando só o que impede subir.
-
-### Fase 1 — RTSP e inferência
-
-Objetivo: processar uma câmera sem dashboard.
-
-Entregáveis:
-
-- Entrada RTSP.
-- Detecção de pessoas.
-- FPS de entrada e processamento.
-- Contagem de objetos.
-- Logs estruturados.
-- Execução por pelo menos 30 minutos.
-
-Nesta fase, ainda não implemente tracker complexo nem streaming externo.
-
-### Fase 2 — Tracker e regra temporal
-
-Objetivo: provar que o sistema consegue manter estado sem crescimento ilimitado.
-
-Entregáveis:
-
-- `track_id`.
-- Entrada e saída da região.
-- Estado `EMPTY` ou `OCCUPIED`.
-- Tempo de permanência.
-- TTL para estados antigos.
-- Contadores limitados.
-
-Estrutura recomendada:
-
-```python
-tracks = {
-    track_id: {
-        "last_seen": timestamp,
-        "first_seen": timestamp,
-        "last_bbox": bbox
-    }
-}
-```
-
-Limpeza:
-
-```python
-if now - state["last_seen"] > TRACK_TTL_SECONDS:
-    del tracks[track_id]
-```
-
-Também use limites explícitos para eventos:
-
-```python
-recent_events = deque(maxlen=200)
-```
-
-### Fase 3 — OSD e vídeo H.264
-
-Objetivo: visualizar o resultado sem extrair frames para Python.
-
-Pipeline conceitual:
-
-```text
-nvdsosd
-  → tee
-  → queue leaky
-  → nvvideoconvert
-  → video/x-raw(memory:NVMM),format=NV12
-  → nvv4l2h264enc
-  → h264parse
-  → rtph264pay
-  → udpsink
-```
-
-A NVIDIA documenta o uso de `nvv4l2h264enc` como encoder H.264 acelerado e a combinação com `h264parse`, `rtph264pay` e `udpsink` para transporte RTP/UDP. [docs.nvidia](https://docs.nvidia.com/jetson/archives/r38.4/DeveloperGuide/AT/JetsonLinuxDevelopmentTools/TegrastatsUtility.html)
-
-Configure o ramo de preview como descartável:
-
-```text
-leaky = downstream
-max-size-buffers = 1
-max-size-bytes = 0
-max-size-time = 0
-```
-
-O vídeo de preview não pode bloquear a inferência.
-
-### Fase 4 — MediaMTX e dashboard
-
-Objetivo: disponibilizar vídeo e métricas no navegador.
-
-Entregáveis:
-
-- MediaMTX recebendo o stream.
-- Reprodução por WebRTC ou HLS.
-- API de métricas.
-- WebSocket com dados em tempo real.
-- Cards de saúde.
-- Gráficos históricos.
-- Lista de eventos.
-
-Para baixa latência, prefira WebRTC. Para a primeira integração, HLS pode ser mais simples, embora normalmente introduza mais atraso.
-
-> **Acesse o dashboard pelo IP da LAN atual do host que serve o painel** —
-> rode `make ip` no host para ver o endereço do momento (ex.:
-> `http://192.168.59.102:8081`) —, não por `http://localhost:8081`. O MediaMTX
-> é publicado amarrado no `LAN_IP` **detectado no `make up`** (nunca `0.0.0.0`
-> — DIV-003 em `docs/incident-log.md`), então `127.0.0.1:8889` não responde; e
-> o frontend deriva a URL do WHEP do hostname da página
-> (`dashboard/frontend/app.js`: `${location.hostname}:8889`), logo em
-> `localhost` o player negocia contra uma porta fechada e o vídeo não aparece.
-> Se o roteador trocar o IP, rode `make up` de novo: as portas são republicadas
-> no endereço novo e o certificado do servidor é reemitido para ele (a CA é
-> preservada, então nada a reinstalar nos clientes).
-
-> **A máquina que abre o dashboard precisa confiar na CA daquele host.** Desde o
-> E0-T4 a 8889 é TLS (`webrtcEncryption: yes`) e o certificado é assinado pela CA
-> de `deploy/certs/` **do host que serve** — que não está no store do sistema e
-> é diferente em cada Jetson (o SAN lista os IPs do host e os nomes locais
-> `<hostname>.local`/`vsl.local`). Sem instalar o
-> `ca.crt` certo nessa máquina, o `fetch` do WHEP falha na verificação de
-> certificado e o player anuncia "certificado do MediaMTX não é confiável neste
-> navegador" (antes o sintoma era "sem stream do mediamtx", com tudo `healthy`
-> no `docker ps`).
->
-> Trocar o IP **não** exige novo `ca.crt`: `make up` reemite o certificado do
-> servidor com o SAN novo usando a mesma CA. Só `generate-certs.sh --force`
-> (ou uma CA perdida) obriga a reinstalar o arquivo. Em rede com mDNS, prefira
-> o nome estável — `https://<hostname>.local:8443/capture.html` ou
-> `https://vsl.local:8443/capture.html` — que sobrevive ao DHCP.
->
-> Antes de instalar, pegue o arquivo **no host que serve** — o `deploy/certs/` é
-> gitignored e diferente em cada Jetson — e confirme que é a CA que assinou
-> aquele host, da máquina do navegador:
->
-> ```bash
-> IP=$(ssh usuario@<host> 'cd ~/Vision_Stability_Lab && make -s ip' | awk '/^IP da LAN:/ {print $4}')
-> scp usuario@<host>:'~/Vision_Stability_Lab/deploy/certs/ca.crt' ./ca.crt
-> curl --cacert ca.crt -s -o /dev/null -w '%{http_code}\n' "https://$IP:8889/"
-> # 404 = TLS validou (404 é a raiz do MediaMTX); erro de certificado = CA errada
-> ```
->
-> Instalação, na máquina que abre o dashboard:
->
-> ```bash
-> sudo cp ca.crt /usr/local/share/ca-certificates/vsl-ca.crt
-> sudo update-ca-certificates   # Chrome/Edge/Chromium no Linux
-> ```
->
-> Deve responder `1 added`. Se responder `0 added`, o arquivo já estava
-> instalado — normalmente sinal de que é a CA do **outro** host (as duas têm o
-> mesmo `CN`; compare o `notBefore` e prove com `curl --cacert` antes de
-> instalar — INC-008 em `docs/incident-log.md`).
->
-> Firefox tem store próprio: `about:preferences#privacy` → *Ver certificados* →
-> *Autoridades* → *Importar* → *Confiar nesta CA para identificar sites*.
-> Windows: `certutil -addstore -f Root ca.crt` como administrador (Autoridades
-> de Certificação Raiz Confiáveis, máquina local). macOS:
-> `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ca.crt`.
-> No **Android**, o caminho é o do runbook
-> (`docs/runbooks/captura-celular.md`, seção 3) — Configurações → Segurança →
-> Criptografia e credenciais → Instalar um certificado → Certificado de CA. O
-> aviso de certificado é só do lado do navegador: o pipeline e o
-> `whip_probe.py --cacert` não dependem disso.
->
-> O `ca.crt` de um host **não** serve para o outro: NX e Nano têm CAs distintas
-> com o mesmo CN. Uma máquina que abre os dois dashboards instala as duas;
-> `generate-certs.sh --force` num host invalida só aquela CA para os clientes.
-
-### Fase 5 — Testes de estabilidade
-
-Execute testes controlados:
-
-| Teste | Duração | Condição |
-|---|---:|---|
-| Baseline | 30 min | câmera e pipeline normais |
-| Longa duração | 6 h | operação normal |
-| Estresse | 2 h | alta quantidade de pessoas |
-| Viewer lento | 1 h | cliente de vídeo atrasado |
-| RTSP interrompido | 30 min | desconectar e reconectar câmera |
-| Dashboard desligado | 1 h | pipeline sem consumidor |
-| Reinício controlado | 3 ciclos | parar e iniciar o pipeline |
-
-Durante cada teste, registre:
-
-- RSS;
-- RAM do Jetson;
-- GPU;
-- CPU;
-- FPS;
-- frames descartados;
-- tracks ativos;
-- número de reconexões;
-- tamanho das filas;
-- temperatura;
-- erros GStreamer;
-- erros CUDA;
-- tempo de recuperação.
-
-## 8. Critérios de sucesso
-
-O projeto estará concluído quando atender a estes critérios:
+O projeto é considerado estável quando atende aos critérios abaixo. 
 
 ### Estabilidade
 
-- A memória sobe durante o warm-up e depois entra em platô.
-- O RSS não apresenta crescimento linear contínuo.
-- Nenhuma fila permanece crescendo.
-- O número de tracks ativos retorna a zero quando a cena fica vazia.
-- O pipeline continua funcionando sem o dashboard conectado.
-- Fechar o cliente de vídeo não interrompe a inferência.
+- A memória sobe durante o warm-up e depois entra em platô — baseline de 30 min com RSS avg **856,6 MB** e p95 **891,1 MB**; longrun de 6 h com avg **935,8 MB** e **0 reconexões**.
+- Nenhuma fila permanece crescendo: `queue_analyze` e `queue_preview` com máximo **0**.
+- O número de tracks ativos retorna a **0** quando a cena fica vazia.
+- O pipeline continua funcionando sem o dashboard conectado: `dashboard_off` rodou 1 h com FPS ~**19,84**.
+- Fechar o cliente de vídeo não interrompe a inferência — o ramo de preview é descartável (`queue leaky` com 1 buffer).
 
 ### Desempenho
 
-- FPS processado permanece próximo do FPS configurado.
-- Latência permanece dentro de uma faixa previsível.
-- Frames antigos são descartados quando necessário.
-- O uso de CPU não cresce ao longo do tempo.
-- O encoder utiliza o caminho de hardware esperado.
+- `fps_processed ≥ 0,95 × fps_in` na janela medida (gate E4: 17,77 / 17,81 ≈ **0,998**; no campo com o drone, **0,999–1,001**).
+- `fps_preview` acompanha o processado; descarte só acontece sob backpressure (`viewer_slow`: avg **14,91** fps com fila de preview **0**).
+- O encoder usa o caminho de hardware quando existe; sem `/dev/v4l2-nvenc` a base cai para software (no Orin Nano, VP8).
 
 ### Recuperação
 
-- A câmera pode ser desconectada e reconectada.
-- O pipeline detecta ausência de frames.
-- O watchdog registra a causa de uma falha.
-- O processo pode ser reiniciado sem deixar containers ou processos órfãos.
-- Erros fatais de CUDA resultam em reinício do processo, não em tentativa de continuar.
+- Fonte derrubada e religada volta ao primeiro frame em **≤ 20 s** (medido **11,56 s** no baseline de campo do drone) **sem reiniciar o processo**.
+- Sem frame por 30 s o `rtspsrc` é reiniciado; o watchdog externo escala depois (ver “Observabilidade e watchdog”).
+- `docker stop` encerra em **≤ 2 s** com `exit_code=0` e nenhum `exit 137`.
+- Fonte perdida depois de 5 tentativas encerra o processo com **exit 2** — o processo não fica "saudável" mentindo.
+- Zero `OOMKilled`; **um** container DeepStream por host.
 
-## 9. Watchdog inicial
+## 6. Observabilidade e watchdog
 
-Não comece com um watchdog muito complexo. Implemente primeiro estas regras:
+**Telemetria.** O pipeline grava JSONL em `data/logs/live.jsonl`. São dois tipos de linha: `interval_metrics` (fps_in, fps_processed, fps_preview, `queue_buffers`, `rss_mb`, tracks, `area_state`, eventos de entrada/saída) e eventos pontuais (`rtsp_reconnect_started`, `rtsp_reconnect_resumed`, `source_reconnect_exhausted`, `preview_branch_failed`, `pipeline_stopped` com `exit_code`, `shutdown_requested`). Cada linha carrega o namespace da sessão (`source_id` + `session_epoch`), então métricas de sessões diferentes não se misturam.
 
-```text
-Se não houver frame por 30 segundos:
-    tentar reconectar o RTSP
+**Dashboard.** Backend FastAPI com frontend vanilla JS: `/api/snapshot`, `/api/history`, `/api/events` e `/ws`; vídeo anotado por WebRTC/WHEP com fallback HLS. A tela mostra lâmpadas de saúde, gráficos de FPS e RSS, estado da área e o painel do observador de fontes.
 
-Se FPS ficar abaixo de 30% do alvo por 2 minutos:
-    registrar degradação
-
-Se RSS crescer mais de 15% em relação à baseline:
-    emitir alerta
-
-Se RAM do sistema ultrapassar 90%:
-    reiniciar o pipeline
-
-Se ocorrer erro CUDA fatal:
-    encerrar o processo
-```
-
-O watchdog deve ficar fora do pipeline principal, por exemplo em:
+**Watchdog externo.** Roda em container próprio, com acesso ao `docker.sock` — um `while True` dentro do processo do pipeline não protege contra travamento nativo, erro de driver ou deadlock. Regras implementadas em `scripts/watchdog.py`:
 
 ```text
-systemd
-Docker restart policy
-supervisor externo
+Sem frame por 60 s              → evento e escalada
+FPS < 30% do alvo por 2 min     → degradação
+RSS > 15% acima da baseline     → alerta
+RAM do sistema > 90%            → docker restart
+Erro CUDA fatal                 → reinício
 ```
 
-Um `while True` dentro do mesmo processo não é suficiente para proteger contra travamentos nativos, erros de driver ou deadlocks.
+Além disso o watchdog detecta crash-loop e `container_missing`, respeita o marcador `data/config/switch_in_progress` (troca de fonte não pode virar alarme) e inclui o observador de fontes (E7), que grava `data/config/observer_state.json` e emite eventos em `watchdog.jsonl`.
 
-## 10. Organização do repositório
+**Contrato.** O watchdog mede e decide o restart; a política do observador (`scripts/observer_policy.py`) só decide a ação (`SWITCH_TO`, `STOP_STANDBY`, `RUN_LEVEL2_PROBE`, `START_FROM_STANDBY`), que o watchdog executa.
+
+## 7. Organização do repositório
 
 A árvore do repositório hoje (subconjunto representativo):
 
@@ -879,35 +441,3 @@ vision-stability-lab/
 ├── Makefile                      # make up / doctor / status / sources / switch / test
 └── README.md
 ```
-
-## Nome e objetivo final
-
-Eu chamaria o projeto de:
-
-> **Vision Stability Lab: sistema de monitoramento contínuo de ocupação com DeepStream e observabilidade embarcada**
-
-O objetivo não seria simplesmente detectar pessoas. Seria:
-
-> Construir e validar um pipeline de visão contínua capaz de processar **uma fonte por vez** (câmera fixa, drone ou celular) por várias horas, mantendo memória, filas, latência e consumo de recursos em comportamento estável, enquanto disponibiliza vídeo anotado e métricas operacionais em um dashboard — com o mesmo stack rodando em dois Jetsons (Orin NX e Orin Nano).
-
-Esse escopo é suficientemente simples para ser concluído, mas ainda exercita as competências mais importantes:
-
-- ingestão RTSP;
-- decode acelerado;
-- TensorRT;
-- DeepStream metadata;
-- tracker;
-- regras temporais;
-- OSD;
-- encoder H.264;
-- RTP/MediaMTX;
-- WebRTC ou HLS;
-- troca de fonte entre câmera, drone e celular sem reconfiguração em runtime;
-- métricas do Jetson;
-- backpressure;
-- lifecycle;
-- watchdog;
-- portabilidade do mesmo stack entre JetPack 6/DeepStream 7.1 e JetPack 7/DeepStream 9.1;
-- testes de longa duração.
-
-O arquivo disponível no projeto parece ser um TCC sobre IoT e agricultura e não deve impor a lógica deste novo laboratório; ele pode ser usado apenas como referência de organização acadêmica, não como requisito funcional. 
