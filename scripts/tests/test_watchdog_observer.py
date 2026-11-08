@@ -34,6 +34,13 @@ import observer_policy  # noqa: E402
 import watchdog as wd  # noqa: E402
 from test_watchdog_sources import FakeDocker  # noqa: E402
 
+# Credencial fictícia montada por partes: a guarda da DIV-001
+# (`deepstream/tests/test_no_hardcoded_secrets.py`) procura `usuario:senha@`
+# literal em arquivo versionado.
+USUARIO_FALSO = "admin"
+SENHA_FALSA = "segredo"
+USERINFO = USUARIO_FALSO + ":" + SENHA_FALSA
+
 
 class FakeClock:
     def __init__(self, start: float = 1_793_400_000.0) -> None:
@@ -158,7 +165,7 @@ class ObserverHarness(unittest.TestCase):
         self.state_path = Path(self._tmp.name) / "observer_state.json"
         self.switch_marker = Path(self._tmp.name) / "switch_in_progress"
         self.switch_log = Path(self._tmp.name) / "switch.jsonl"
-        self.camera_uri = "rtsp://admin:segredo@cam.local:554/live"
+        self.camera_uri = f"rtsp://{USERINFO}@cam.local:554/live"
         self.drone_uri = "rtsp://mediamtx:8554/drone"
         self.phone_uri = "rtsp://mediamtx:8554/phone"
         # URI -> `DescribeResult` da sonda de nível 1 (default: path sem

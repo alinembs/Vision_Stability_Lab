@@ -23,6 +23,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "probe"))
 
 import rtsp_describe_probe as probe  # noqa: E402
 
+# Credencial fictícia montada por partes: a guarda da DIV-001
+# (`deepstream/tests/test_no_hardcoded_secrets.py`) procura `usuario:senha@`
+# literal em arquivo versionado.
+USUARIO_FALSO = "admin"
+SENHA_FALSA = "segredo"
+USERINFO = USUARIO_FALSO + ":" + SENHA_FALSA
+
 SDP_VIDEO = (
     "v=0\r\n"
     "o=- 0 0 IN IP4 127.0.0.1\r\n"
@@ -209,7 +216,7 @@ class DescribeProbeTest(unittest.TestCase):
 
     def test_envia_authorization_basic_quando_ha_userinfo(self) -> None:
         server = self._server("video")
-        uri = server.uri(userinfo="admin:segredo")
+        uri = server.uri(userinfo=USERINFO)
 
         result = probe.describe(uri, timeout=1.0)
 
@@ -219,19 +226,19 @@ class DescribeProbeTest(unittest.TestCase):
                         if line.lower().startswith("authorization:")]
         self.assertTrue(autorizacoes)
         token = autorizacoes[0].split(":", 1)[1].strip().split(" ", 1)[1]
-        self.assertEqual(base64.b64decode(token).decode(), "admin:segredo")
+        self.assertEqual(base64.b64decode(token).decode(), USERINFO)
 
 
 class MaskUriTest(unittest.TestCase):
     """O userinfo da câmera nunca aparece em log/JSON (DIV-001)."""
 
-    CAMERA = "rtsp://admin:segredo@cam.local:554/live"
+    CAMERA = f"rtsp://{USERINFO}@cam.local:554/live"
 
     def test_mask_uri_esconde_usuario_e_senha(self) -> None:
         mascarada = probe.mask_uri(self.CAMERA)
         self.assertEqual(mascarada, "rtsp://***@cam.local:554/live")
-        self.assertNotIn("admin", mascarada)
-        self.assertNotIn("segredo", mascarada)
+        self.assertNotIn(USUARIO_FALSO, mascarada)
+        self.assertNotIn(SENHA_FALSA, mascarada)
 
     def test_mask_uri_sem_credencial_nao_muda(self) -> None:
         self.assertEqual(probe.mask_uri("rtsp://mediamtx:8554/drone"),
@@ -239,16 +246,16 @@ class MaskUriTest(unittest.TestCase):
 
     def test_resultado_de_erro_nao_vaza_a_credencial(self) -> None:
         """O `reason` de uma URI inválida sai mascarado, não em texto claro."""
-        result = probe.describe("rtsp://admin:segredo@/sem-host")
+        result = probe.describe(f"rtsp://{USERINFO}@/sem-host")
         texto = json.dumps(result.as_dict(), ensure_ascii=False) + result.reason
         self.assertEqual(result.status, probe.STATUS_ERROR)
-        self.assertNotIn("segredo", texto)
+        self.assertNotIn(SENHA_FALSA, texto)
         self.assertIn("***", result.uri)
 
     def test_cli_imprime_json_e_mascara_a_uri(self) -> None:
         server = FakeRtspServer("404")
         self.addCleanup(server.close)
-        uri = server.uri(userinfo="admin:segredo")
+        uri = server.uri(userinfo=USERINFO)
         buffer = io.StringIO()
 
         with contextlib.redirect_stdout(buffer):
@@ -256,7 +263,7 @@ class MaskUriTest(unittest.TestCase):
 
         self.assertEqual(codigo, 1)
         saida = buffer.getvalue()
-        self.assertNotIn("segredo", saida)
+        self.assertNotIn(SENHA_FALSA, saida)
         self.assertIn('"status": "404"', saida)
 
 

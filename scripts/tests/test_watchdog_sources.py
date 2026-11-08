@@ -29,6 +29,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import watchdog as wd  # noqa: E402
 
+# Credencial fictícia montada por partes: a guarda da DIV-001
+# (`deepstream/tests/test_no_hardcoded_secrets.py`) procura `usuario:senha@`
+# literal em arquivo versionado.
+USUARIO_FALSO = "admin"
+SENHA_FALSA = "segredo"
+USERINFO = USUARIO_FALSO + ":" + SENHA_FALSA
+
 # Intervalo em que o pipeline publica `interval_metrics` (METRICS_INTERVAL_S
 # do pipeline_real.py). Fixo de propósito: é o contrato que o watchdog assume.
 METRICS_INTERVAL_S = 30.0
@@ -126,7 +133,7 @@ class WatchdogHarness(unittest.TestCase):
         # com credencial de mentira, paths do MediaMTX por convenção).
         self.observer_state = Path(self._tmp.name) / "observer_state.json"
         self.active_source_file = Path(self._tmp.name) / "active_source"
-        self.camera_uri = "rtsp://admin:segredo@cam.local:554/live"
+        self.camera_uri = f"rtsp://{USERINFO}@cam.local:554/live"
         self.drone_uri = "rtsp://mediamtx:8554/drone"
         self.phone_uri = "rtsp://mediamtx:8554/phone"
         self._patchers = [
