@@ -145,10 +145,104 @@ aparece.
      fragmenta em campo;
    - **limitação do encoder** — `bandwidth` (rede) ou `cpu` (encoder);
    - **câmera (`getSettings`)** — descreve o sensor, **não** a transmissão:
-     costuma mentir para cima.
+     costuma mentir para cima. Depois do `·` vem a câmera efetiva
+     (`traseira`/`frontal`);
+   - **aparelho** — o `deviceId` efetivo, com o rótulo que o Chrome informa
+     (ex.: `camera2 0, facing back`); é a linha que separa "pedi a traseira" de
+     "o aparelho entregou a traseira";
+   - **orientação** — tem de dizer **paisagem** (ver "Câmera traseira e
+     paisagem" abaixo).
 6. **Encerrar** faz `DELETE` na sessão. Fechar a aba também faz (`pagehide`),
    mas o botão é o caminho confiável: o MediaMTX só libera o path quando a
    sessão cai.
+
+### Câmera traseira e paisagem
+
+**Por que a traseira é o padrão.** É a câmera que aponta para a cena que o
+pipeline mede. O Chrome Android abria a **frontal** quando o `getUserMedia` não
+pedia `facingMode`, e o operador aparecia no lugar do ambiente. O seletor
+**câmera** na tela oferece `traseira` (padrão) e `frontal`; a escolha fica em
+`localStorage` na chave **`vsl-facing`** (`environment` = traseira,
+`user` = frontal), lida com `try/catch` para não quebrar em navegação privada.
+
+A escolha vale **no início da captura**: durante a publicação o seletor fica
+`disabled` com a nota "encerre para trocar de câmera" — trocar no meio exigiria
+renegociar a trilha com o MediaMTX, caminho que não é suportado. Se o aparelho
+não tem a câmera pedida (`OverconstrainedError`), a página cai para `ideal` e
+depois para "qualquer câmera" em vez de falhar: um celular só com frontal
+publica pela frontal, e o diagnóstico mostra a diferença entre **câmera pedida**
+e **câmera (`getSettings`)**.
+
+**Qual versão o celular carregou.** O rodapé mostra o selo
+`capture.js 2026-11-08c` (constante `CAPTURE_VERSION`, também no
+`console.info`). Sem esse selo não há como distinguir "a correção não funciona"
+de "o aparelho está rodando o JS antigo": a página é servida por bind mount,
+mas o Chrome guarda o arquivo em cache e pode existir cópia velha em outro
+host. Para provar o que o aparelho executou:
+
+1. no celular, leia o rodapé — tem de dizer a mesma versão que está no arquivo
+   do host: `grep CAPTURE_VERSION dashboard/frontend/capture.js`;
+2. no host, confirme o que o nginx está entregando:
+   `curl -sk https://<ip>:8443/capture.js | grep CAPTURE_VERSION`;
+3. se o rodapé mostrar versão antiga, o aparelho está com cache. `?v=<algo>` na
+   URL **não** invalida `/capture.js` (o script é carregado por `src` fixo):
+   recarregue forçado no celular (Chrome → ⋮ → Recarregar, ou feche a aba e
+   abra de novo) e confira o rodapé outra vez. Se continuar antigo, o
+   host/nginx em uso não é o diretório que você editou.
+
+**Seleção por dispositivo (`deviceId`) — o caminho garantido.** `facingMode`
+não é garantia: há aparelho que aceita `exact environment` e devolve a frontal
+mesmo assim. Depois que a permissão é concedida, o `capture.js` chama
+`enumerateDevices()` e preenche o seletor **dispositivo** com a primeira opção
+`automática (traseira/frontal)` (value vazio = cadeia de `facingMode`) e uma
+opção por `videoinput`, com o rótulo do aparelho (ex.:
+`camera2 0, facing back`; rótulo vazio vira `câmera N`). A opção selecionada é
+a da trilha ativa (`track.getSettings().deviceId`).
+
+A escolha fica em `localStorage` na chave **`vsl-facing-device`** (mesmo
+`try/catch` de `vsl-facing`) e vale no **próximo início**: durante a publicação
+o seletor fica `disabled` com a nota "encerre para trocar de câmera". Com um
+`deviceId` gravado, o `getUserMedia` pede `deviceId: {exact: …}` mantendo os
+tetos de 1280×720/16:9; se o id não existir mais (`OverconstrainedError`/
+`NotFoundError` — aparelho trocado, storage de outra sessão), a preferência é
+**apagada** e a página cai na cadeia de `facingMode`, em vez de falhar.
+`NotReadableError` continua fatal, com a mensagem de câmera ocupada. Sem
+`enumerateDevices` (ou se ele falhar), o seletor fica só com "automática" e
+tudo funciona como antes. Para voltar ao automático, escolha
+`automática (traseira/frontal)` — a chave é removida do `localStorage`.
+
+**Roteiro de diagnóstico da traseira.** 1) Inicie a captura uma vez — é o que
+libera os rótulos dos aparelhos. 2) Encerre e escolha no seletor **dispositivo**
+a opção cujo rótulo diz `facing back`. 3) Inicie de novo e leia as três linhas:
+
+- **câmera pedida** — deve começar com `deviceId …`;
+- **aparelho** — o rótulo do `deviceId` efetivo (ou o id truncado, quando o
+  Chrome não informa nome);
+- **câmera (`getSettings`)** — o que o sensor reporta (`traseira`/`frontal`).
+
+Se **aparelho** for o dispositivo com `facing back` e **câmera
+(`getSettings`)** ainda disser `frontal`, o pedido foi cumprido e quem rotula
+errado é o sensor/Chrome: limitação do aparelho, não da página. A prova final é
+a **prévia local** — se ela mostra a cena (e não o operador), é a câmera
+traseira que está sendo publicada, independente do rótulo.
+
+**Por que paisagem importa.** O `nvstreammux` do pipeline é fixo em **1280×720**
+(`deepstream/pipeline_real.py:425`) e roda **sem `enable-padding`**: ele
+reescala o que chega para 1280×720 sem preservar o aspecto. Em retrato o teto de
+720p age na **altura**, então a captura sai ~404×720 e o mux estica para 16:9 —
+imagem deformada, detecção pior. Em paisagem o pedido de 1280×720/16:9 é
+atendido como está. Por isso a página avisa (banner de aviso, não erro) quando
+`getSettings()` vem com altura maior que a largura: **o aviso não bloqueia a
+publicação**, ele só pede para girar o aparelho.
+
+O aviso (e o seletor de câmera) é avaliado **no início da captura**. Girar o
+aparelho com a sessão publicando não renegocia o frame: encerre, confira a linha
+**orientação** e inicie de novo — o MediaMTX só libera o path depois do `DELETE`.
+
+Se outro aplicativo (ou outra aba) estiver com a câmera escolhida aberta, o
+Chrome lança `NotReadableError` e a página **falha de propósito**, com a mensagem
+"está em uso por outro aplicativo": cair calado para a outra câmera publicaria a
+imagem errada.
 
 No host, o mesmo path aparece no log do container:
 
@@ -227,6 +321,8 @@ cobre as duas portas.
 | **Conecta, mostra "publicando", mas o pipeline não recebe** | mídia não chega: UDP 8189 bloqueado na rede, ou ICE incompleto | `ss -lntup \| grep 8189` (tem de estar em `192.168.59.102`); `ffprobe`/`rtspsrc` no path; no log do MediaMTX, `[path phone] is publishing` |
 | **Banda acima de ~2,5 Mbps ou resolução acima de 720p** | o teto de banda **não** foi aplicado (o Chrome recusa `setParameters` antes do offer; a segunda tentativa é depois do answer) | linha "teto de banda": se disser "recusado — transmitindo no default", a rodada **não** testou o teto. A captura vale, a qualidade é a de chamada de vídeo |
 | **Resolução enviada abaixo de 1280×720** | o encoder adaptou (1280×720 é `ideal` **e** `max`: teto, não exigência — o aparelho que não tem 720p entrega o que tem) | leia a **resolução enviada**, não `getSettings()`. Aproxime o aparelho e melhore a luz |
+| **Vem em retrato / imagem esticada (gente e objeto achatados)** | aparelho na vertical: o teto de 720p age na altura (~404×720) e o `nvstreammux` (1280×720 fixo, **sem** `enable-padding`) estica para 16:9 | linha **orientação**: `retrato` é o sintoma. Gire o aparelho para paisagem (o aviso na tela não bloqueia o publish) e confira **resolução enviada** = 1280×720 |
+| **"A câmera traseira está em uso por outro aplicativo"** | `NotReadableError`: outro app (ou outra aba de captura) está com a câmera escolhida | feche o app/aba e clique em **Iniciar captura** de novo. A página não troca de câmera sozinha de propósito — publicaria a imagem errada |
 | **fps enviado baixo (< 24)** | quase sempre luz baixa; o Chrome derruba a taxa | "fps enviado" (`outbound-rtp`) e "limitação do encoder" (`cpu` vs `bandwidth`) |
 | **`curl --cacert` passa mas `curl` sem ele falha** | esperado: a CA interna não está no store do sistema | é o comportamento correto (fail closed). Sempre passe `--cacert deploy/certs/ca.crt` |
 | **`docker ps` mostra tudo `healthy` e nada funciona** | os healthchecks validam config/telemetria, não o caminho de mídia | `whip_probe.py --path phone` + `docker logs vision-mediamtx`; "healthy" não é prova de vídeo |
