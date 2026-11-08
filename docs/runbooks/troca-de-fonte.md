@@ -70,6 +70,14 @@ o marcador alheio enquanto ele está válido; **expirado** vira órfão e é
 liberado, para que a queda de quem o criou não bloqueie a troca para sempre.
 Nos dois casos: repita quando ele liberar.
 
+Se o pós-check falhar (exit 1) vindo do standby, o FAIL **devolve o container ao
+ar na fonte anterior**: o rollback recria o container (`up -d --force-recreate`)
+em vez de deixá-lo parado. Isso é intencional — o estado anterior é "pipeline
+rodando na fonte anterior", não "parado". Se aquela fonte continua morta, o
+observador a para de novo no ciclo seguinte e o pipeline **volta ao standby**
+(`switch_in_progress` já saiu, então a parada é tratada como fonte morta).
+Nenhuma ação do operador é necessária para "voltar ao standby".
+
 ## Antes de trocar: a fonte pedida está publicando?
 
 | Fonte | Como publicar | Observação |

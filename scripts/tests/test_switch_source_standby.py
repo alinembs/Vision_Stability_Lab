@@ -26,7 +26,7 @@ responde `exec`, `inspect` e `compose up`, gravando cada invocação em JSONL. O
 pipeline de verdade, e **depois** do offset de telemetria medido pelo script,
 então a espera termina no primeiro registro lido (sem dormir).
 
-Estado do teste em diretório temporário (`CONFIG_DIR`, `ENV_FILE`,
+Estado do teste em diretório temporário (`SWITCH_CONFIG_DIR`, `ENV_FILE`,
 `TELEMETRY_FILE`, `SWITCH_LOG`) e cwd temporário: o `data/config/` e o
 `data/logs/` do repositório não são tocados.
 
@@ -37,6 +37,7 @@ Nota: `scripts/tests` não tem `__init__.py` de propósito (ver
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -112,6 +113,37 @@ if argv[:1] == ["compose"] and "up" in argv:
 raise SystemExit(0)
 '''
 
+# Shim de `PYTHON` (o `.sh` respeita a variável): reproduz a corrida do TOCTOU
+# do marcador órfão. Na **primeira** decisão `marker-expired` sobre o marcador
+# original, outro dono (observador/dashboard) reescreve o path com um marcador
+# **válido** e só então respondemos "expirado" (exit 0) — exatamente a janela em
+# que o script antigo movia e apagava o marcador alheio. Todas as outras
+# chamadas vão para o Python real (`os.execv`), então a revalidação do arquivo
+# movido devolve o veredito de verdade.
+SHIM_PYTHON = '''#!/usr/bin/env python3
+"""`PYTHON` de mentira para o teste da corrida do marcador expirado."""
+import os
+import sys
+
+argv = sys.argv[1:]
+alcance = os.environ.get("SHIM_TARGET_MARKER", "")
+delta = os.environ.get("SHIM_RACER_STAMP", "")
+alheio = os.environ.get("SHIM_RACER_MARKER", "")
+if (alheio and alcance and delta and "marker-expired" in argv
+        and "--file" in argv
+        and argv[argv.index("--file") + 1] == alcance
+        and not os.path.exists(delta)):
+    # Outro dono ganhou a corrida: marcador válido no path, e a decisão que o
+    # script recebe é a do órfão que ele leu antes.
+    with open(delta, "w", encoding="utf-8") as handle:
+        handle.write("1")
+    with open(alcance, "w", encoding="utf-8") as handle:
+        handle.write(alheio)
+    raise SystemExit(0)
+real = os.environ["SHIM_REAL_PYTHON"]
+os.execv(real, [real, *argv])
+'''
+
 
 def _em(segundos: float) -> str:
     """`expires_at` no formato que script e observador usam."""
@@ -121,6 +153,10 @@ def _em(segundos: float) -> str:
 
 class SwitchHarness(unittest.TestCase):
     """Ambiente isolado do `.sh`: shim no PATH e estado todo em tmp."""
+
+    # Conteúdo que o shim de `PYTHON` grava no marcador "roubado"; vazio
+    # desliga o racer (os demais casos continuam iguais).
+    racer_marker = ""
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -132,6 +168,10 @@ class SwitchHarness(unittest.TestCase):
         shim = self.bin / "docker"
         shim.write_text(SHIM_DOCKER, encoding="utf-8")
         shim.chmod(0o755)
+        python_shim = self.bin / "python"
+        python_shim.write_text(SHIM_PYTHON, encoding="utf-8")
+        python_shim.chmod(0o755)
+        self.python_shim = python_shim
 
         # Só o que `switch_source_lib.resolve` precisa para o `sources.yaml`
         # real: `drone` é `uri: rtsp://${MTX_HOST:-mediamtx}:8554/drone`, e
@@ -164,9 +204,10 @@ class SwitchHarness(unittest.TestCase):
         env.pop("ACTIVE_SOURCE", None)
         env.update({
             "PATH": f"{self.bin}{os.pathsep}{env.get('PATH', '')}",
+            "PYTHON": str(self.python_shim),
             "ENV_FILE": str(self.env_file),
             "COMPOSE_FILE": str(self.compose_file),
-            "CONFIG_DIR": str(self.config_dir),
+            "SWITCH_CONFIG_DIR": str(self.config_dir),
             "TELEMETRY_FILE": str(self.telemetry),
             "SWITCH_LOG": str(self.switch_log),
             "APP_CONTAINER": CONTAINER,
@@ -178,6 +219,11 @@ class SwitchHarness(unittest.TestCase):
             "SHIM_SOURCE_ID": source,
             "SHIM_ACTIVE_SOURCE_FILE": str(self.control_file),
             "SHIM_TELEMETRY": str(self.telemetry),
+            # Racers da corrida do marcador: vazio = shim só delega ao Python real.
+            "SHIM_REAL_PYTHON": sys.executable,
+            "SHIM_TARGET_MARKER": str(self.marker),
+            "SHIM_RACER_STAMP": str(self.dir / "racer.stamp"),
+            "SHIM_RACER_MARKER": self.racer_marker,
         })
         return subprocess.run(
             [str(SCRIPT), source, "--skip-precheck", *args],  # pré-check = socket
@@ -298,6 +344,45 @@ class MarcadorOrfaoTest(SwitchHarness):
 
         self.assert_troca_confirmada(proc)
         self.assertEqual(list(self.config_dir.glob("switch_in_progress*")), [])
+
+
+class CorridaDoOrfaoTest(SwitchHarness):
+    """Achado 1 (HIGH): o órfão pode virar marcador válido antes do descarte.
+
+    Entre `marker_expired` (leitura) e o `mv`/`rm` do descarte, outro dono pode
+    remover o órfão e criar um marcador **válido** no mesmo path. Sem revalidar
+    o arquivo movido, o script apagava o mutex alheio e reivindicava a troca —
+    dois atores mexendo no mesmo container. O shim de `PYTHON` reproduz a
+    corrida: responde "expirado" e, antes de devolver, grava um marcador válido
+    de outro dono (o observador) no path.
+    """
+
+    @property
+    def racer_marker(self) -> str:  # type: ignore[override]
+        return ('{"to": "camera", "owner": "observer:watchdog", '
+                f'"expires_at": "{_em(3600)}", "origin": "watchdog"}}\n')
+
+    def test_orfao_que_vira_valido_e_devolvido_e_a_troca_cede(self) -> None:
+        self.write_marker("script:999:1", _em(-3600))   # órfão de quem morreu
+        esperado = self.racer_marker
+
+        proc = self.run_switch(running=True)
+
+        self.assertEqual(proc.returncode, 3, proc.stderr)
+        self.assertIn("reason=troca_em_andamento", proc.stdout)
+        # O marcador do outro dono voltou ao path original, byte a byte...
+        self.assertEqual(self.marker.read_text(encoding="utf-8"), esperado)
+        # ...e não sobrou `.stale.*` do descarte.
+        self.assertEqual(
+            list(self.config_dir.glob("switch_in_progress.*")), [],
+            "arquivo temporário do descarte ficou para trás")
+        # Nada foi escrito e o pipeline não foi tocado.
+        self.assertFalse(self.control_file.exists())
+        self.assertEqual(self.compose_up_calls(), [])
+        registros = self.switch_records()
+        self.assertEqual(registros[-1]["result"], "FAIL")
+        self.assertEqual(registros[-1]["reason"], "troca_em_andamento")
+        self.assertEqual(registros[-1]["probe"], "blocked")
 
 
 if __name__ == "__main__":

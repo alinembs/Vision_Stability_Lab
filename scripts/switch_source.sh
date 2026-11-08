@@ -70,10 +70,14 @@ COMPOSE_FILE="${COMPOSE_FILE:-$REPO_ROOT/deploy/docker-compose.yml}"
 APP_CONTAINER="${APP_CONTAINER:-vision-stability-app}"
 COMPOSE_SERVICE="${COMPOSE_SERVICE:-vision-app}"
 # Sobrescrevível por ambiente para o teste de ponta a ponta do script poder
-# trabalhar em diretório temporário (o default continua o da bancada).
-CONFIG_DIR="${CONFIG_DIR:-$REPO_ROOT/data/config}"
-CONTROL_FILE="$CONFIG_DIR/active_source"
-SWITCH_MARKER="$CONFIG_DIR/switch_in_progress"
+# trabalhar em diretório temporário (o default continua o da bancada). O nome é
+# `SWITCH_CONFIG_DIR` **de propósito**, igual ao dashboard (`switch_control.py`)
+# e ao compose de troca: um `CONFIG_DIR` herdado de perfil de shell/CI apontava
+# o script para outro diretório, e o pipeline continuava lendo o antigo — troca
+# que "passa" sem efeito (falha silenciosa).
+SWITCH_CONFIG_DIR="${SWITCH_CONFIG_DIR:-$REPO_ROOT/data/config}"
+CONTROL_FILE="$SWITCH_CONFIG_DIR/active_source"
+SWITCH_MARKER="$SWITCH_CONFIG_DIR/switch_in_progress"
 TELEMETRY_FILE="${TELEMETRY_FILE:-$REPO_ROOT/data/logs/live.jsonl}"
 SWITCH_LOG="${SWITCH_LOG:-$REPO_ROOT/data/logs/switch.jsonl}"
 PRECHECK_SECONDS="${PRECHECK_SECONDS:-5}"
@@ -127,7 +131,7 @@ trap cleanup EXIT
 
 write_control() {
     local value="$1" tmp="$CONTROL_FILE.tmp.$$"
-    mkdir -p -- "$CONFIG_DIR"
+    mkdir -p -- "$SWITCH_CONFIG_DIR"
     printf '%s\n' "$value" >"$tmp"
     mv -f -- "$tmp" "$CONTROL_FILE"
 }
@@ -137,36 +141,60 @@ marker_expired() {
     # órfão, pode descartar; exit 1 = em curso). Honrar `expires_at` é o que
     # impede que um `kill -9` no meio da troca deixe o marcador e **nenhuma**
     # execução futura troque fonte até alguém apagar à mão.
-    "$PYTHON" "$LIB" marker-expired --file "$SWITCH_MARKER" \
+    local file="${1:-$SWITCH_MARKER}"
+    "$PYTHON" "$LIB" marker-expired --file "$file" \
         --ttl "$(( ${TIMEOUT_S%.*} + 60 ))" >/dev/null 2>&1
 }
 
+# Recusa a troca cedendo o mutex: usada tanto pelo marcador válido de outro
+# dono quanto pelo válido que apareceu durante o descarte do órfão (TOCTOU).
+# Nunca escreve `active_source` e sempre deixa a tentativa auditada.
+refuse_busy() {
+    log "outra troca de fonte em andamento; abortando"
+    PRECHECK_NOTE="blocked"
+    record_switch "FAIL" "troca_em_andamento"
+    die 3 "FAIL source=$SOURCE_ID reason=troca_em_andamento (nada foi escrito; container intacto)"
+}
+
 write_marker() {
-    local expires payload
+    local expires payload stale
     expires="$(date -u -d "+$(( ${TIMEOUT_S%.*} + 60 )) seconds" \
         +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
-    mkdir -p -- "$CONFIG_DIR"
+    mkdir -p -- "$SWITCH_CONFIG_DIR"
     payload="$(printf '{"to": "%s", "expires_at": "%s", "owner": "%s", "origin": "script"}' \
         "$SOURCE_ID" "$expires" "$SWITCH_OWNER")"
+    stale="$SWITCH_MARKER.stale.$$"
     # Reivindicação atômica (`set -C` = noclobber): se o arquivo já existe, é
     # porque outra troca (script ou dashboard) está em curso — ou é órfão de
     # uma execução morta. Só o órfão (expirado) é descartado.
     if ! (set -C; printf '%s\n' "$payload" >"$SWITCH_MARKER") 2>/dev/null; then
         if marker_expired; then
             log "marcador órfão (expirado) em $SWITCH_MARKER: descartando"
-            mv -f -- "$SWITCH_MARKER" "$SWITCH_MARKER.stale.$$" 2>/dev/null || true
-            rm -f -- "$SWITCH_MARKER.stale.$$" 2>/dev/null || true
+            # TOCTOU: entre a checagem acima e um `rm`, outro dono (observador,
+            # dashboard) pode remover o órfão e criar um marcador **válido** no
+            # mesmo path — e nós apagaríamos o mutex dele. `mv` é atômico e o
+            # inode renomeado é de quem renomeou: revalida-se o arquivo movido.
+            # Mesmo desenho de `switch_control._discard_stale_marker` (dashboard).
+            if ! mv -f -- "$SWITCH_MARKER" "$stale" 2>/dev/null; then
+                log "marcador desapareceu antes do descarte; reivindicando de novo"
+            elif ! marker_expired "$stale"; then
+                # Perdemos a corrida: o "órfão" virou marcador válido de outro
+                # dono. Devolve ao lugar e cede. `mv -n` (não `-f`) de propósito:
+                # se um terceiro marcador ocupou o path, não o sobrescrevemos.
+                log "marcador virou válido durante o descarte: devolvendo e cedendo"
+                mv -n -- "$stale" "$SWITCH_MARKER" 2>/dev/null || true
+                if [[ -e "$stale" ]]; then
+                    log "AVISO: $SWITCH_MARKER ocupado; marcador alheio preservado em $stale"
+                fi
+                refuse_busy
+            else
+                rm -f -- "$stale" 2>/dev/null || true
+            fi
             if ! (set -C; printf '%s\n' "$payload" >"$SWITCH_MARKER") 2>/dev/null; then
-                log "outra troca de fonte em andamento; abortando"
-                PRECHECK_NOTE="blocked"
-                record_switch "FAIL" "troca_em_andamento"
-                die 3 "FAIL source=$SOURCE_ID reason=troca_em_andamento (nada foi escrito; container intacto)"
+                refuse_busy
             fi
         else
-            log "outra troca de fonte em andamento; abortando"
-            PRECHECK_NOTE="blocked"
-            record_switch "FAIL" "troca_em_andamento"
-            die 3 "FAIL source=$SOURCE_ID reason=troca_em_andamento (nada foi escrito; container intacto)"
+            refuse_busy
         fi
     fi
 }
@@ -309,6 +337,12 @@ if [[ "$wait_ok" == "1" ]]; then
 fi
 
 log "pós-check NÃO confirmou a troca: $wait_reason"
+# Rollback: `recreate_app` sobe o container de volta na fonte anterior **mesmo**
+# quando a troca começou com o pipeline em standby (o observador o havia parado
+# por falta de fonte). É deliberado — o FAIL precisa deixar o estado como
+# estava, e "parado" não é o mesmo que "rodando na fonte anterior"; se a fonte
+# anterior continua morta, o observador a para de novo no ciclo seguinte
+# (volta ao standby). Não troque por `start`/`stop` condicional sem rever isso.
 rollback=$("$PYTHON" "$LIB" rollback --ok "$wait_ok" --reason "$wait_reason" \
     --previous "$PREVIOUS_VALUE" --expected "$SOURCE_ID" \
     --observed "$observed" 2>/dev/null || true)

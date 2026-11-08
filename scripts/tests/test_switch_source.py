@@ -858,7 +858,7 @@ class MarcadorDoScriptTest(unittest.TestCase):
                 "SOURCE_ID=drone",
                 "TIMEOUT_S=90",
                 "SWITCH_OWNER=test:1:2",
-                f"CONFIG_DIR={shlex.quote(tmp)}",
+                f"SWITCH_CONFIG_DIR={shlex.quote(tmp)}",
                 f"SWITCH_MARKER={shlex.quote(str(Path(tmp) / 'switch_in_progress'))}",
                 "log() { :; }",
                 "marker_expired() { return 1; }",
