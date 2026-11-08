@@ -26,7 +26,10 @@ import whip_probe  # noqa: E402
 # literal em arquivo versionado — aqui o par é montado em tempo de execução.
 USUARIO_FALSO = "admin"
 SENHA_FALSA = "senhaFalsa123"
-URL_SEM_CREDENCIAL = "rtsp://192.168.59.102:8555/drone"
+# Hosts de fixture em 192.0.2.0/24 (RFC 5737, TEST-NET-1) de propósito: fixture
+# não pode coincidir com o IP de LAN de um host real, senão um teste que passe a
+# resolver `host_ip.sh` passa por coincidência. Vale para todas as URLs abaixo.
+URL_SEM_CREDENCIAL = "rtsp://192.0.2.10:8555/drone"
 
 
 def com_credencial(url: str, usuario: str = USUARIO_FALSO, senha: str = SENHA_FALSA) -> str:
@@ -191,13 +194,13 @@ class TestSanitizeUrl(unittest.TestCase):
 
     def test_mascara_usuario_e_senha(self):
         saida = probe.sanitize_url(URL_COM_CREDENCIAL)
-        self.assertEqual(saida, "rtsp://***@192.168.59.102:8555/drone")
+        self.assertEqual(saida, "rtsp://***@192.0.2.10:8555/drone")
         self.assertNotIn(SENHA_FALSA, saida)
         self.assertNotIn(USUARIO_FALSO, saida)
 
     def test_preserva_host_porta_e_path(self):
         saida = probe.sanitize_url(URL_COM_CREDENCIAL)
-        self.assertIn("192.168.59.102", saida)
+        self.assertIn("192.0.2.10", saida)
         self.assertIn("8555", saida)
         self.assertIn("/drone", saida)
 
@@ -238,7 +241,7 @@ class TestScrubText(unittest.TestCase):
         texto = f"Could not open resource {URL_COM_CREDENCIAL}"
         saida = probe.scrub_text(texto, URL_COM_CREDENCIAL)
         self.assertNotIn(SENHA_FALSA, saida)
-        self.assertIn("rtsp://***@192.168.59.102:8555/drone", saida)
+        self.assertIn("rtsp://***@192.0.2.10:8555/drone", saida)
 
     def test_remove_senha_sozinha(self):
         saida = probe.scrub_text(
@@ -350,8 +353,8 @@ class TestPadAddedDoRtspsrc(unittest.TestCase):
 class TestArgsEUrl(unittest.TestCase):
     def test_url_valida(self):
         self.assertEqual(
-            probe.validate_url("  rtsp://192.168.59.102:8554/drone  "),
-            "rtsp://192.168.59.102:8554/drone",
+            probe.validate_url("  rtsp://192.0.2.10:8554/drone  "),
+            "rtsp://192.0.2.10:8554/drone",
         )
 
     def test_url_vazia(self):
@@ -360,11 +363,11 @@ class TestArgsEUrl(unittest.TestCase):
 
     def test_url_sem_esquema(self):
         with self.assertRaises(ValueError):
-            probe.validate_url("192.168.59.102:8554/drone")
+            probe.validate_url("192.0.2.10:8554/drone")
 
     def test_url_com_esquema_errado(self):
         with self.assertRaises(ValueError):
-            probe.validate_url("http://192.168.59.102:8888/live")
+            probe.validate_url("http://192.0.2.10:8888/live")
 
     def test_url_sem_host(self):
         with self.assertRaises(ValueError):
@@ -478,7 +481,7 @@ class TestBuildReport(unittest.TestCase):
             min_fps=5.0,
             elapsed_s=2.0,
         )
-        self.assertEqual(report["url"], "rtsp://***@192.168.59.102:8555/drone")
+        self.assertEqual(report["url"], "rtsp://***@192.0.2.10:8555/drone")
         self.assertNotIn(SENHA_FALSA, str(report))
 
     def test_relatorio_reprova_por_gaps(self):
@@ -554,8 +557,8 @@ class TestWhipProbe(unittest.TestCase):
         "m=video 9 UDP/TLS/RTP/SAVPF 96 97\r\n"
         "c=IN IP4 0.0.0.0\r\n"
         "a=ice-ufrag:ufrag\r\n"
-        "a=candidate:1 1 UDP 2130706431 192.168.59.102 8189 typ host\r\n"
-        "a=candidate:2 1 TCP 2130706431 192.168.59.102 8189 typ host tcptype passive\r\n"
+        "a=candidate:1 1 UDP 2130706431 192.0.2.10 8189 typ host\r\n"
+        "a=candidate:2 1 TCP 2130706431 192.0.2.10 8189 typ host tcptype passive\r\n"
         "a=rtpmap:96 H264/90000\r\n"
         "a=rtpmap:97 H265/90000\r\n"
         "a=fmtp:96 packetization-mode=1\r\n"
@@ -573,7 +576,7 @@ class TestWhipProbe(unittest.TestCase):
         for candidate in parsed["candidates"]:
             self.assertNotIn("\r", candidate)
             self.assertIn("typ host", candidate)
-        self.assertEqual(parsed["candidate_hosts"], ["192.168.59.102"])
+        self.assertEqual(parsed["candidate_hosts"], ["192.0.2.10"])
 
     def test_codecs_da_resposta_preenchidos(self):
         parsed = whip_probe.parse_answer_sdp(self.ANSWER)
@@ -611,11 +614,11 @@ class TestWhipProbeTls(unittest.TestCase):
 
     def test_base_http_nao_monta_contexto(self):
         # Instalação sem `webrtcEncryption`: nada de TLS no caminho.
-        self.assertIsNone(whip_probe.build_ssl_context("http://192.168.59.102:8889"))
+        self.assertIsNone(whip_probe.build_ssl_context("http://192.0.2.10:8889"))
 
     def test_cacert_verifica_o_servidor(self):
         contexto = whip_probe.build_ssl_context(
-            "https://192.168.59.102:8889", cacert="deploy/certs/ca.crt"
+            "https://192.0.2.10:8889", cacert="deploy/certs/ca.crt"
         )
         self.assertIsNotNone(contexto)
         self.assertEqual(contexto.verify_mode, ssl.CERT_REQUIRED)
@@ -623,7 +626,7 @@ class TestWhipProbeTls(unittest.TestCase):
 
     def test_insecure_desliga_verificacao(self):
         contexto = whip_probe.build_ssl_context(
-            "https://192.168.59.102:8889", insecure=True
+            "https://192.0.2.10:8889", insecure=True
         )
         self.assertEqual(contexto.verify_mode, ssl.CERT_NONE)
         self.assertFalse(contexto.check_hostname)
@@ -631,13 +634,13 @@ class TestWhipProbeTls(unittest.TestCase):
     def test_sem_cacert_usa_o_store_do_sistema(self):
         # Fail closed: a CA interna do VSL não está no store, então a sonda
         # recusa o servidor em vez de "quase" validar.
-        contexto = whip_probe.build_ssl_context("https://192.168.59.102:8889")
+        contexto = whip_probe.build_ssl_context("https://192.0.2.10:8889")
         self.assertEqual(contexto.verify_mode, ssl.CERT_REQUIRED)
 
     def test_cacert_inexistente_levanta_em_vez_de_passar(self):
         with self.assertRaises((OSError, ssl.SSLError)):
             whip_probe.build_ssl_context(
-                "https://192.168.59.102:8889", cacert="/caminho/que/nao/existe.crt"
+                "https://192.0.2.10:8889", cacert="/caminho/que/nao/existe.crt"
             )
 
     def test_tls_label_distingue_os_modos(self):

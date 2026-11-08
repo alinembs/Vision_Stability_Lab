@@ -22,8 +22,11 @@ import ingest_report_lib as lib  # noqa: E402
 # literal em arquivo versionado.
 USUARIO_FALSO = "admin"
 SENHA_FALSA = "senhaFalsa123"
-URL_LIMPA = "rtsp://192.168.59.102:8554/drone"
-URL_CAMERA = "rtsp://192.168.59.108:5543/live/channel0"
+# Hosts de fixture em 192.0.2.0/24 (RFC 5737, TEST-NET-1) de propósito: fixture
+# não pode coincidir com o IP de LAN de um host real, senão um teste que passe a
+# resolver `host_ip.sh` passa por coincidência.
+URL_LIMPA = "rtsp://192.0.2.10:8554/drone"
+URL_CAMERA = "rtsp://192.0.2.8:5543/live/channel0"
 
 
 def com_credencial(url: str) -> str:
@@ -44,7 +47,7 @@ class TestUrl(unittest.TestCase):
     def test_sanitiza_credencial_preservando_host_porta_e_path(self):
         self.assertEqual(
             lib.sanitize_url(URL_COM_CREDENCIAL),
-            "rtsp://***@192.168.59.108:5543/live/channel0",
+            "rtsp://***@192.0.2.8:5543/live/channel0",
         )
 
     def test_url_sem_credencial_volta_inalterada(self):
