@@ -4,15 +4,42 @@ rtmpAddress: :1935
 hlsAddress: :8888
 webrtcAddress: :8889
 
-# Porto único de mídia ICE (UDP mux): publicado no compose como 8189/udp —
-# sem ele, navegadores fora do host não fecham o ICE (tela preta).
-webrtcICEUDPMuxAddress: :8189
+# Mídia ICE/UDP e ICE/TCP no mesmo port 8189 (publicado no compose como
+# 8189/udp e 8189/tcp). Sem este bind o WHIP conclui a sinalização e o vídeo
+# nunca chega — sintoma documentado no ADR-0005 do projeto arquo (T0.2).
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189
 
-# Necessário para o navegador no PC fechar o ICE com o WebRTC do MediaMTX:
-# anuncia o IP LAN do Jetson como candidato além do que ele detecta sozinho.
-webrtcAdditionalHosts: [192.168.59.150]
+# `no` evita anunciar `docker0`/`br-*` (172.x) como candidato: o navegador
+# escolheria um caminho inalcançável e ficaria em tela preta (ADR-0005, T0.2).
+# A lista fica vazia de propósito: o compose injeta
+# `MTX_WEBRTCADDITIONALHOSTS=${LAN_IP}` (IP atual do host, detectado por
+# `scripts/host_ip.sh`). Fixar o IP aqui quebrava o WebRTC quando o roteador
+# entregava outro endereço ao Jetson (2026-11-02).
+webrtcIPsFromInterfaces: no
+webrtcAdditionalHosts: []
+
+# RTSP por TCP: casa com `protocols=4` (tcp) usado pelo pipeline
+# (deepstream/pipeline_real.py).
+rtspTransports: [tcp]
+
+# TLS do WHIP (E0-T4). Fora de `localhost`, o navegador só entrega a câmera
+# (`getUserMedia`) em contexto seguro, e o POST do WHIP também precisa sair em
+# HTTPS. O material vem de `deploy/certs/generate-certs.sh`, montado read-only
+# em `/certs` pelo compose; a CA gerada ali é a que se instala no celular.
+#
+# Isto **não** torna a página segura: a origem do documento é outra (8443,
+# serviço `capture-web`). Ver `deploy/nginx/capture-web.conf`.
+webrtcEncryption: yes
+webrtcServerCert: /certs/server.crt
+webrtcServerKey: /certs/server.key
 
 api: no
 
 paths:
+  # Preview anotado publicado pelo pipeline.
   live:
+  # Fonte 1 — drone (push RTMP → republicado em RTSP para o pipeline).
+  drone:
+  # Fonte 2 — celular (publish WHIP → republicado em RTSP para o pipeline).
+  phone:

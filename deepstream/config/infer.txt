@@ -1,3 +1,18 @@
+# nvinfer do YOLO11m (COCO, 80 classes) — custom parser `NvDsInferParseYolo`
+# (`data/parser/libnvdsinfer_custom_impl_Yolo.so`).
+#
+# Formato de saída DESTE ONNX (`data/yolo11m.onnx`): `[1, 8400, 6]`, uma linha
+# por âncora com `x, y, w, h, score, class_id` — o `argmax` das classes já vem
+# resolvido no grafo (`node_slice_*` + `ReduceMax`/`ArgMax`/`node_cat_26`). O
+# parser lê o score na coluna 4 e o `class_id` na coluna 5 (confirmado no
+# binário: deslocamentos `6*i + 4` e `6*i + 5`, com `class_id` convertido por
+# `fcvtzs`).
+#
+# `num-detected-classes` tem de ser 80 — não é o que o modelo detecta, é o
+# tamanho da tabela `perClassPreclusterThreshold` que o parser indexa pelo
+# `class_id`. Com 1 aqui, qualquer detecção que não fosse `person` (id 0) caía
+# em índice inválido/descartada e o OSD só desenhava pessoas. O arquivo
+# `data/labels.txt` tem de ter as mesmas 80 linhas, na ordem COCO.
 [property]
 gpu-id=0
 net-scale-factor=0.00392156862745098
@@ -9,13 +24,17 @@ network-type=0
 process-mode=1
 maintain-aspect-ratio=1
 cluster-mode=2
-num-detected-classes=1
+num-detected-classes=80
 gie-unique-id=1
 network-mode=2
 custom-lib-path=../../data/parser/libnvdsinfer_custom_impl_Yolo.so
 parse-bbox-func-name=NvDsInferParseYolo
 
-[class-attrs-0]
+# `class-attrs-all` vale para todas as 80 classes: o threshold do parser é lido
+# por classe, então um bloco só por classe deixaria buracos na tabela. Ajuste
+# fino (classe a classe) pode ser feito com `[class-attrs-<id>]` depois deste
+# bloco — ele prevalece.
+[class-attrs-all]
 pre-cluster-threshold=0.5
 topk=20
 nms-iou-threshold=0.45

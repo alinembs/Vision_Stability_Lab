@@ -1,28 +1,110 @@
 services:
   mediamtx:
-    image: bluenviron/mediamtx:latest
+    # Versão pinada: a configuração de ICE mudou de nome entre releases
+    # (`webrtcICEUDPMuxAddress` → `webrtcLocalUDPAddress`). Sem pin, um `latest`
+    # quebrado ignora a chave em silêncio e o WebRTC fica sem mídia.
+    image: bluenviron/mediamtx:1.21.3
     container_name: vision-mediamtx
     restart: unless-stopped
+    environment:
+      # O `mediamtx.yml` versionado não fixa IP: o compose injeta
+      # `MTX_WEBRTCADDITIONALHOSTS` com o endereço que o host tem **agora**
+      # (LAN_IP detectado pelo Makefile a cada `make up`). Env do MediaMTX
+      # vence o arquivo; sem isso o SDP sairia com um IP que o host não tem
+      # mais e o WebRTC não completaria depois de uma troca de DHCP.
+      - MTX_WEBRTCADDITIONALHOSTS=${LAN_IP:?defina LAN_IP (rode make up)}
     ports:
-      - "8554:8554"
-      - "1935:1935"
-      - "8888:8888"
-      - "8889:8889"
-      - "8890:8890/udp"
-      - "8189:8189/udp"
+      # Publicação amarrada ao IP da LAN, nunca em 0.0.0.0: RTSP/RTMP/WebRTC
+      # do MediaMTX não têm autenticação (DIV-003, docs/incident-log.md) e não
+      # devem escutar em todas as interfaces do host (tailscale0, bridges).
+      # LAN_IP é detectado por `scripts/host_ip.sh` no `make up`; não fica
+      # gravado no repositório nem exige editar arquivo quando o roteador
+      # entrega outro endereço (2026-11-02). Forçar: `LAN_IP=<ip> make up`.
+      - "${LAN_IP:?defina LAN_IP (rode make up)}:8554:8554"
+      - "${LAN_IP:?defina LAN_IP (rode make up)}:1935:1935"
+      - "${LAN_IP:?defina LAN_IP (rode make up)}:8888:8888"
+      - "${LAN_IP:?defina LAN_IP (rode make up)}:8889:8889"
+      - "${LAN_IP:?defina LAN_IP (rode make up)}:8890:8890/udp"
+      - "${LAN_IP:?defina LAN_IP (rode make up)}:8189:8189/udp"
+      - "${LAN_IP:?defina LAN_IP (rode make up)}:8189:8189/tcp"
     volumes:
       - ../mediamtx/mediamtx.yml:/mediamtx.yml
+      # Certificado e chave do WHIP (E0-T4). Gerados por
+      # `deploy/certs/generate-certs.sh`; a pasta é gitignored por inteiro.
+      # Sem este mount o MediaMTX sobe e cai na primeira conexão WebRTC:
+      # `webrtcEncryption: yes` sem `webrtcServerCert/Key` legíveis não tem
+      # como servir TLS.
+      - ../deploy/certs:/certs:ro
+
+  capture-web:
+    # Origem HTTPS da página de captura do celular (E0-T4). O TLS da 8889 não
+    # empresta contexto seguro ao documento: `getUserMedia` depende da origem
+    # que serviu a página, não do destino do `fetch`. Sem imagem customizada —
+    # nginx serve `dashboard/frontend/` direto dos arquivos versionados.
+    image: nginx:1.27-alpine
+    container_name: vision-capture-web
+    restart: unless-stopped
+    ports:
+      # Amarrado ao IP da LAN, como as portas do MediaMTX (DIV-003): a página
+      # entrega a câmera de quem a abrir, não é serviço para a internet.
+      - "${LAN_IP:?defina LAN_IP (rode make up)}:8443:8443"
+    volumes:
+      - ../deploy/nginx/capture-web.conf:/etc/nginx/conf.d/default.conf:ro
+      # Mesmo diretório que o backend do dashboard serve em /static.
+      - ../dashboard/frontend:/usr/share/nginx/html:ro
+      # O MESMO certificado do WHIP — um `ca.crt` no celular cobre as duas portas.
+      - ../deploy/certs:/certs:ro
+    healthcheck:
+      # Sem `deploy/certs/server.crt` o nginx não sobe ("cannot load
+      # certificate"), e a página de captura fica indisponível com o
+      # `docker ps` parecendo saudável (I3): por isso o healthcheck bate na
+      # 8443 de verdade, e não em `nginx -t`.
+      test: ["CMD-SHELL", "wget -q --no-check-certificate -O /dev/null https://127.0.0.1:8443/capture.html || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   vision-app:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+      args:
+        # Base do DeepStream, por plataforma (ver `make doctor`). Padrão: o
+        # Orin NX deste host (L4T R36 / DS 7.1). No Orin Nano (JP 7.2 /
+        # DS 9.1) sobrescreva com `DS_BASE_IMAGE=...` no `deploy/.env`.
+        DS_BASE_IMAGE: ${DS_BASE_IMAGE:-nvcr.io/nvidia/deepstream-l4t:7.1-triton-multiarch}
     container_name: vision-stability-app
     restart: unless-stopped
+    # `docker-init` (tini) como PID 1. Sem ele o processo do pipeline **é** o
+    # PID 1 e o kernel ignora sinais de ação default no init: um `SIGTERM` que
+    # chega no boot (entrypoint da NVIDIA + imports, ~3 s medidos) não é
+    # atendido, o Docker espera a carência e mata com `SIGKILL` (exit 137 —
+    # INC-006). Com o init, o sinal derruba o processo na hora.
+    init: true
     privileged: true
     runtime: nvidia
     environment:
-      - RTSP_URI=rtsp://admin:cameraepi1@192.168.59.108:5543/live/channel0
+      # Credencial fora do repositório: preencha deploy/.env (veja deploy/.env.example).
+      # Sem RTSP_URI o pipeline encerra com mensagem clara (deepstream/rtsp_env.py).
+      - RTSP_URI=${RTSP_URI:-}
+      # Codec da fonte (h264/h265): escolhe rtph265depay/h265parse vs H.264 em
+      # pipeline_real.py. Modelo em deploy/.env.example.
+      - RTSP_CODEC=${RTSP_CODEC:-h265}
+      # Fonte ativa por configuração (E2-T1/T2). Vazio = usa
+      # `data/config/active_source` e, na ausência dele, `default_source` do
+      # `deepstream/config/sources.yaml` — o compose sobe sem `.env` e sem
+      # `ACTIVE_SOURCE` (nada quebra por variável ausente).
+      - ACTIVE_SOURCE=${ACTIVE_SOURCE:-}
+      # Caminho alternativo do YAML de fontes (vazio = o versionado).
+      - SOURCES_CONFIG=${SOURCES_CONFIG:-}
+      # Rollback nível 1 (seção 9 do plano): `VSL_SOURCE_SELECTION=off` volta ao
+      # comportamento de antes do E2 (RTSP_URI + RTSP_CODEC). Precisa chegar ao
+      # container, senão a flag não faz nada.
+      - VSL_SOURCE_SELECTION=${VSL_SOURCE_SELECTION:-}
+      # Host do MediaMTX nas URIs de drone/celular; vazio = `mediamtx`, o DNS
+      # do serviço dentro da rede do compose.
+      - MTX_HOST=${MTX_HOST:-}
       - LOG_LEVEL=INFO
       - PREVIEW_ENABLED=${PREVIEW_ENABLED:-1}
       - PREVIEW_TRANSPORT=${PREVIEW_TRANSPORT:-rtsp}
@@ -31,6 +113,17 @@ services:
       - PREVIEW_PORT=${PREVIEW_PORT:-5600}
       - PREVIEW_BITRATE=${PREVIEW_BITRATE:-4000000}
       - PREVIEW_IDR_GOP=${PREVIEW_IDR_GOP:-30}
+      # Reconexão da fonte (E2). Ficam aqui porque são o que o operador
+      # ajusta em campo: sem elas no compose, mudar o comportamento exigiria
+      # editar o Python dentro do container. Defaults iguais aos do
+      # `pipeline_real.py` (`:-5` evita chegar vazio e quebrar o `int()`).
+      - SOURCE_RECONNECT_MAX_ATTEMPTS=${SOURCE_RECONNECT_MAX_ATTEMPTS:-5}
+      - SOURCE_RECONNECT_RESET_S=${SOURCE_RECONNECT_RESET_S:-600}
+      - SOURCE_FRAME_TIMEOUT_S=${SOURCE_FRAME_TIMEOUT_S:-15}
+      - SOURCE_RETRY_S=${SOURCE_RETRY_S:-10}
+      # Teto do `set_state(NULL)` no encerramento: é o que garante
+      # `docker stop` ≤ 2 s (e nenhum exit 137) mesmo com a fonte morta.
+      - PIPELINE_STOP_TIMEOUT_S=${PIPELINE_STOP_TIMEOUT_S:-1.5}
     volumes:
       - ../deepstream:/app/deepstream
       - ../data:/app/data
@@ -56,8 +149,29 @@ services:
       - TELEMETRY_FILE=/app/data/logs/live.jsonl
       - WATCHDOG_LOG=/app/data/logs/watchdog.jsonl
       - TARGET_FPS=${WATCHDOG_TARGET_FPS:-25}
+      # Sonda de nível 1 (DESCRIBE) na fonte `camera`: mesma variável/origem do
+      # serviço do app (a credencial continua fora do repositório, DIV-001).
+      - RTSP_URI=${RTSP_URI:-}
+      # Drone/celular são paths do MediaMTX: o host tem que ser o DNS do
+      # serviço dentro da rede do compose (com a sonda não GStreamer, resolver
+      # o nome já basta).
+      - MTX_HOST=mediamtx
+      # Mesma fonte ativa que o app enxerga. Com `ACTIVE_SOURCE` no ambiente a
+      # escolha é do operador: o observador só registra (`active_source_env_set`)
+      # e não decide troca por cima dela.
+      - ACTIVE_SOURCE=${ACTIVE_SOURCE:-}
+      # Observador de fontes (E7). Ordem de precedência explícita: esta imagem
+      # não carrega PyYAML, então o `sources.yaml` chega aqui já decidido.
+      - OBSERVER_AUTO_SWITCH=${OBSERVER_AUTO_SWITCH:-1}
+      - OBSERVER_SOURCE_PRIORITY=${OBSERVER_SOURCE_PRIORITY:-camera,drone,phone}
     volumes:
+      # rw de propósito: o watchdog escreve `data/config/observer_state.json` e
+      # `data/config/active_source`. Com `:ro` a troca automática e o retrato
+      # do observador (dashboard) falhariam em silêncio.
       - ../data:/app/data
+      # Sondas e módulo de decisão versionados; não reescrevem nada.
+      - ../scripts:/app/scripts:ro
+      - ../deepstream:/app/deepstream:ro
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - vision-app
@@ -69,9 +183,20 @@ services:
     container_name: vision-dashboard
     restart: unless-stopped
     ports:
-      - "8080:8000"
+      # 8080 é do arquo-web neste host; o VSL usa 8081 (F6 do plano).
+      # `DASHBOARD_BIND` existe para o modo troca pela tela: com o socket do
+      # Docker montado (root-equivalente) e token em HTTP claro, o painel NÃO
+      # deve escutar na LAN — `make up-switch` fixa 127.0.0.1 e o acesso é por
+      # túnel SSH (H1 da revisão independente do E4, 2026-11-01).
+      - "${DASHBOARD_BIND:-0.0.0.0}:${DASHBOARD_PORT:-8081}:8000"
     environment:
       - TELEMETRY_FILE=/app/data/logs/live.jsonl
+      # Catálogo de fontes (E4-T1): o dashboard lista as três fontes mesmo
+      # antes de a fonte ter telemetria. Path só de leitura; nenhuma
+      # credencial é montada (a câmera referencia RTSP_URI, DIV-001).
+      - SOURCES_CONFIG=/app/deepstream/config/sources.yaml
+      - MTX_HOST=${MTX_HOST:-}
     volumes:
       - ../data:/app/data:ro
       - ../dashboard:/app/dashboard
+      - ../deepstream/config:/app/deepstream/config:ro

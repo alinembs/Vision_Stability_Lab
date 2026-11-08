@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f4f1ea">
+<title>Captura pelo celular · Vision Stability Lab</title>
+<!--
+  Página de captura do E0-T4: publica o vídeo do celular por WHIP no MediaMTX.
+
+  **Por que ela é servida em HTTPS próprio (8443) e não pela 8889:** o navegador
+  decide `isSecureContext` pela origem que serviu o documento. Uma página em
+  `http://<ip>` não ganha contexto seguro só porque o `fetch` de destino é
+  HTTPS, e sem contexto seguro o Chrome nem expõe `navigator.mediaDevices`.
+  O TLS do WHIP (8889) autentica o servidor de mídia; a origem segura da página
+  é o nginx em `deploy/nginx/capture-web.conf`.
+
+  **Autocontida de propósito:** nenhum `fetch` para o dashboard (8081) e nenhum
+  para `http://` (mixed content é bloqueado). Só carrega `style.css`,
+  `codec-gate.js` e `capture.js`, deste mesmo diretório.
+-->
+<script>
+  // Mesma preferência de tema do dashboard; satélites não têm botão próprio.
+  (function () {
+    try {
+      document.documentElement.dataset.theme =
+        localStorage.getItem("vsl-theme") === "dark" ? "dark" : "light";
+    } catch (e) {
+      document.documentElement.dataset.theme = "light";
+    }
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+<style>
+  /* Só o que esta página acrescenta ao estilo do dashboard: formulário,
+     tabela de diagnóstico e faixa de erro. Nada de estilo global novo. */
+  .capture-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: minmax(340px, 1.6fr) minmax(300px, 1fr);
+    gap: 12px;
+    padding: 12px 22px 8px;
+  }
+  .video-panel { grid-column: 1; }
+  .diag-panel { grid-column: 2; }
+  @media (max-width: 900px) {
+    .capture-grid { grid-template-columns: 1fr; }
+    .video-panel, .diag-panel { grid-column: 1; }
+  }
+  .alert {
+    margin: 0 22px 8px;
+    padding: 10px 14px;
+    border: 1px solid var(--bad);
+    border-left-width: 4px;
+    border-radius: 4px;
+    background: var(--alert-bg);
+    color: var(--alert-text);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: flex-end;
+    padding: 12px 14px;
+    border-top: 1px solid var(--line);
+  }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    color: var(--dim);
+  }
+  .field input {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 5px 8px;
+    width: 120px;
+  }
+  .field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .btn[disabled] { cursor: not-allowed; }
+  #status { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--dim); }
+  #status.status-ok { color: var(--accent); }
+  #status.status-warn { color: var(--warn); }
+  #status.status-bad { color: var(--bad); }
+  #status.status-busy { color: var(--accent); }
+  .diag-rows .row output { text-align: right; overflow: hidden; text-overflow: ellipsis; max-width: 60%; }
+  /* .note e .link vêm de style.css (componentes compartilhados com a página de codec) */
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <div>
+      <h1>CAPTURA PELO CELULAR</h1>
+      <span class="brand-sub">whip → mediamtx → rtsp · path phone</span>
+    </div>
+  </div>
+  <div class="clock">
+    <span id="status" role="status" aria-live="polite">parado</span>
+    <span class="tag">estado</span>
+  </div>
+</header>
+
+<!-- Erro de captura/publicação: `role="alert"` para o leitor de tela anunciar
+     sem o operador precisar procurar a mensagem na tela. -->
+<p id="error" class="alert hidden" role="alert"></p>
+
+<main class="capture-grid">
+
+  <section class="panel video-panel">
+    <div class="panel-head">
+      <span class="eyebrow">prévia local · o que a câmera entrega</span>
+      <a class="link" href="/codec-gate-selftest.html">autoteste do gate</a>
+    </div>
+    <div class="video-frame">
+      <!-- `muted` + `playsinline` são obrigatórios no Chrome Android: sem eles a
+           prévia local fica preta e o vídeo pode abrir em tela cheia. -->
+      <video id="preview" autoplay muted playsinline aria-label="Prévia da câmera do celular"></video>
+    </div>
+    <div class="controls">
+      <div class="field">
+        <label for="path">path no MediaMTX</label>
+        <input id="path" name="path" type="text" value="phone" autocomplete="off"
+               spellcheck="false" aria-describedby="path-help">
+      </div>
+      <button id="btn-start" class="btn" type="button">Iniciar captura</button>
+      <button id="btn-stop" class="btn" type="button" disabled>Encerrar</button>
+    </div>
+    <p class="note" id="path-help">
+      O pipeline lê o mesmo path por RTSP (<code id="rtsp-hint">rtsp://&lt;host&gt;:8554/phone</code>).
+      Encerrar aqui faz <code>DELETE</code> na sessão — é o que libera o path.
+    </p>
+    <div class="video-strip">
+      <div class="readout"><output id="r-out-res">—</output><span class="tag">resolução enviada</span></div>
+      <div class="readout"><output id="r-out-fps">—</output><span class="tag">fps enviado</span></div>
+      <div class="readout"><output id="r-bitrate">—</output><span class="tag">banda</span></div>
+      <div class="readout"><output id="r-nack">—</output><span class="tag">nack</span></div>
+    </div>
+  </section>
+
+  <aside class="panel diag-panel">
+    <div class="panel-head">
+      <span class="eyebrow">diagnóstico</span>
+    </div>
+    <div class="state-rows diag-rows">
+      <div class="row"><span>pedido (ideal)</span><output id="r-req">—</output></div>
+      <div class="row"><span>câmera (getSettings)</span><output id="r-cam">—</output></div>
+      <div class="row"><span>limitação do encoder</span><output id="r-limit">—</output></div>
+      <div class="row"><span>teto de banda</span><output id="r-cap">não tentado</output></div>
+      <div class="row"><span>H.264 no aparelho</span><output id="r-caps">—</output></div>
+      <div class="row"><span>codec fixado</span><output id="r-codec">—</output></div>
+      <div class="row"><span>contexto seguro</span><output id="r-secure">—</output></div>
+      <div class="row"><span>sessão</span><output id="r-session">—</output></div>
+      <div class="row"><span>endpoint WHIP</span><output id="r-whip">—</output></div>
+    </div>
+    <p class="note">
+      <strong>resolução enviada</strong> e <strong>fps enviado</strong> saem de
+      <code>outbound-rtp</code> (o que o servidor recebe). <strong>câmera</strong> é
+      <code>getSettings()</code> e descreve o sensor, não a transmissão: ele costuma
+      mentir para cima. <code>qualityLimitationReason</code> separa rede
+      (<code>bandwidth</code>) de CPU (<code>cpu</code>).
+    </p>
+  </aside>
+
+</main>
+
+<footer class="footbar">
+  <span>fase 0 · E0-T4 · android apenas (D6: iOS fora de escopo)</span>
+  <!-- Host derivado de `location.hostname` no `capture.js` (M6): a página vale
+       por IP da LAN e por `vsl.local`, que está no SAN do certificado. -->
+  <span id="origin-line">https://&lt;host&gt;:8443 · whip em :8889</span>
+</footer>
+
+<script src="/codec-gate.js"></script>
+<script src="/capture.js"></script>
+</body>
+</html>

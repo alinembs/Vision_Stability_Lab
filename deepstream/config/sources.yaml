@@ -1,0 +1,68 @@
+# Fontes do Vision Stability Lab — UMA ativa por vez (D1, ADR-0006).
+#
+# A fonte ativa é escolhida por configuração, não por `vim` no Python:
+#   1. `ACTIVE_SOURCE` no ambiente (ex.: `ACTIVE_SOURCE=drone docker compose ...`);
+#   2. o arquivo `data/config/active_source` (escrito por scripts/switch_source.sh);
+#   3. `default_source` abaixo;
+#   4. a primeira fonte com `enabled: true`.
+# Id que não existe aqui é ERRO com a lista de ids válidos — nunca fallback
+# silencioso. Carregado por `deepstream/sources.py` (load_sources()).
+version: 1
+
+# Câmera fixa: é a fonte do lab desde a fase 1 e a única com gate de latência.
+default_source: camera
+
+sources:
+  - id: camera
+    name: "câmera fixa"
+    # A URI da câmera tem usuário e senha: fica em `RTSP_URI` (deploy/.env no
+    # host, variável do compose no container), nunca neste arquivo (DIV-001).
+    # Variável ausente no ambiente é erro explícito, não default embutido.
+    uri_env: RTSP_URI
+    # Codec é da fonte, não do container (D5): a câmera publica H.265.
+    codec: h265
+    transport: tcp
+    # 200 ms é o valor que o pipeline já usava no rtspsrc; TCP porque a LAN
+    # não garante ordem/UDP sem perda para o decoder de hardware.
+    latency_ms: 200
+    # Alvo nominal de 20 fps. As amostras de ~19,9 fps são de 2026-08-23/24
+    # (baseline v1); em 2026-10-30 a mediana é 12,0 e o regime atual da fonte
+    # é ~7,0 — é por isso que o gate de fps é por fonte (E5-T1), não global.
+    target_fps: 20
+    enabled: true
+    # D3: a câmera entra no gate de latência p95 do E6 (alvo ≤ 300 ms).
+    gate:
+      latency_p95_ms: 300
+
+  - id: drone
+    name: "drone"
+    # Drone publica RTMP em `rtmp://<LAN>:1935/drone`; o MediaMTX reexpõe como
+    # RTSP no path `drone`. MediaMTX não tem autenticação (DIV-003), então a
+    # URI pode ser literal — e derivada de variável, não fixa no arquivo.
+    # `MTX_HOST` default `mediamtx` = DNS do compose dentro da rede do stack;
+    # rodando no host (probe, teste do próprio sources.py) use
+    # `MTX_HOST=192.168.59.102`, porque as portas são publicadas na LAN.
+    uri: "rtsp://${MTX_HOST:-mediamtx}:8554/drone"
+    codec: h264
+    transport: tcp
+    latency_ms: 200
+    target_fps: 25
+    enabled: true
+    # D3: latência do drone é REPORTADA, não gated (link de rádio).
+    gate:
+      latency_p95_ms: null
+      report_only: true
+
+  - id: phone
+    name: "celular"
+    # Celular Android publica por WHIP no path `phone` do MediaMTX (iOS fora de
+    # escopo, D6). Nada de credencial: o path não tem autenticação (DIV-003).
+    uri: "rtsp://${MTX_HOST:-mediamtx}:8554/phone"
+    codec: h264
+    transport: tcp
+    latency_ms: 200
+    target_fps: 25
+    enabled: true
+    # Celular na LAN entra no gate, como a câmera (E6-T1).
+    gate:
+      latency_p95_ms: 300

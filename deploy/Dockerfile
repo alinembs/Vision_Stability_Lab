@@ -1,4 +1,9 @@
-FROM nvcr.io/nvidia/deepstream-l4t:7.1-triton-multiarch
+# Base do DeepStream. O padrão é o que este host roda hoje (Orin NX: L4T
+# R36.x / JetPack 6 / DeepStream 7.1). Para o Orin Nano (JetPack 7.2 / DS 9.1)
+# o `make doctor` avisa quando a plataforma não bate e a imagem precisa ser
+# trocada — ver `docs/plans/2026-11-01-portabilidade-orin-nano.md`.
+ARG DS_BASE_IMAGE=nvcr.io/nvidia/deepstream-l4t:7.1-triton-multiarch
+FROM ${DS_BASE_IMAGE}
 
 WORKDIR /app
 
@@ -13,16 +18,51 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gstreamer1.0-tools \
     && rm -rf /var/lib/apt/lists/*
 
+# Libs de mídia que a base DS 9.1 (Ubuntu 24.04) **remove deixando o dpkg
+# "install ok installed"**: sem restaurar, o GStreamer não registra os
+# elementos que dependem delas (`vp8enc`/`vp9enc` somem por falta de
+# `libvpx.so.9`, e `libgstlibav.so` fica com 9 libs "not found").
+#
+# Por que importa: no Orin Nano não há `/dev/v4l2-nvenc` (NVENC indisponível)
+# e a base não traz encoder H.264 por software (`plugins-ugly` não tem mais o
+# x264 e a `libavcodec` só expõe o decoder H.264) — o preview precisa do
+# `vp8enc` (VP8, aceito no WebRTC do MediaMTX). Medido em 2026-11-01.
+# `--reinstall` é obrigatório: o apt considera esses pacotes satisfeitos.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libvpx9 \
+    && apt-get install -y --reinstall \
+        libvpx9 libavcodec60 libavformat60 libavutil58 libavfilter9 \
+        libswscale7 libswresample4 libpostproc57 libmp3lame0 libmpg123-0 \
+        libx264-164 libx265-199 libxvidcore4 \
+        gstreamer1.0-libav \
+    && ldconfig \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt /app/requirements.txt
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# pyds 1.2.0 (cp310/aarch64) — wheel oficial compatível com DeepStream 7.1.
-# O release v1.2.2 só publica cp312; o build local v1.1.8 falha contra os
-# headers do DS 7.1 (INC-003). Wheel baixado de:
+# pyds: o wheel precisa casar com o **Python da imagem base** — cp310 no
+# DeepStream 7.1 (L4T R36 / JetPack 6) e cp312 no JetPack 7 + DS 9.1. Fixar o
+# arquivo (como antes) amarrava a imagem a uma única plataforma; agora o build
+# escolhe o wheel de `deploy/wheels/` que casa com o interpretador e falha com
+# mensagem clara quando não há nenhum — em vez de deixar um `import pyds`
+# quebrado em runtime (classe do INC-003).
+#
+# Wheel oficial cp310 do DS 7.1 (único que funciona contra os headers do 7.1;
+# ver INC-003):
 # https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.2.0/pyds-1.2.0-cp310-cp310-linux_aarch64.whl
-COPY deploy/wheels/pyds-1.2.0-cp310-cp310-linux_aarch64.whl /tmp/
-RUN pip3 install --no-cache-dir /tmp/pyds-1.2.0-cp310-cp310-linux_aarch64.whl \
-    && rm /tmp/pyds-1.2.0-cp310-cp310-linux_aarch64.whl
+# Para DS 9.1 (Python 3.12) o release v1.2.2 publica cp312.
+COPY deploy/wheels/ /tmp/wheels/
+RUN set -u; \
+    tag="cp$(python3 -c 'import sys; print("%d%d" % sys.version_info[:2])')"; \
+    whl="$(ls /tmp/wheels/pyds-*-"$tag"-*-linux_aarch64.whl 2>/dev/null | head -1 || true)"; \
+    if [ -z "$whl" ]; then \
+        echo "ERRO: nenhum wheel pyds para Python $tag em deploy/wheels/." >&2; \
+        echo "Coloque o wheel que casa com a base ($tag) e refaça o build." >&2; \
+        exit 1; \
+    fi; \
+    echo "pyds: usando $whl"; \
+    pip3 install --no-cache-dir "$whl" && rm -rf /tmp/wheels
 
 COPY . /app
 

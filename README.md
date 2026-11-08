@@ -2,9 +2,9 @@
 
 A melhor forma de transformar seu objetivo em um projeto de aprendizado é criar um sistema simples de **monitoramento de ocupação de uma área**, em vez de começar com EPI, múltiplos modelos, regras complexas ou reconhecimento de pessoas.
 
-O sistema receberá uma câmera RTSP, detectará pessoas com um modelo TensorRT `.engine`, acompanhará os objetos com tracker, transmitirá vídeo anotado por H.264 e exibirá, em um dashboard, tanto os resultados da visão quanto a saúde do Jetson. O objetivo principal não será apenas “detectar pessoas”, mas provar que o pipeline permanece estável por várias horas.
+O sistema receberá **uma fonte por vez** — câmera IP por RTSP, drone por RTMP ou celular Android por WHIP (`docs/adr/adr-0006-troca-de-fonte.md`) —, detectará pessoas com um modelo TensorRT `.engine`, acompanhará os objetos com tracker, transmitirá vídeo anotado por H.264 e exibirá, em um dashboard, tanto os resultados da visão quanto a saúde do Jetson. O objetivo principal não será apenas “detectar pessoas”, mas provar que o pipeline permanece estável por várias horas.
 
-## Status de execução (2026-08-23)
+## Status de execução (atualizado em 2026-11-01)
 
 | Fase | Escopo | Estado |
 |---|---|---|
@@ -13,11 +13,119 @@ O sistema receberá uma câmera RTSP, detectará pessoas com um modelo TensorRT 
 | 2 — Tracker & regra temporal | `nvtracker` IOU + TTL + estado EMPTY/OCCUPIED, 30 min validados | Concluída (`docs/phase-2-evaluation.md`) |
 | 3 — OSD & vídeo H.264 | `nvdsosd` + tee + ramo de preview descartável (`nvv4l2h264enc`), 30 min validados com player externo | Concluída (`docs/phase-3-evaluation.md`) |
 | 4 — MediaMTX & dashboard | Preview publicado via RTSP no MediaMTX; dashboard (FastAPI + vanilla JS) com WebRTC/WHEP, API/WebSocket de métricas, cards, gráficos e eventos | Concluída — validação E2E ≥30 min em 2026-08-23 (vídeo, métricas, eventos); revisão UI aplicada |
+| Multi-fonte (ADR-0006) | Câmera fixa, drone e celular como entradas **alternativas** (uma ativa por vez); catálogo declarativo, troca por script e pela tela | Concluída no Orin NX — gate E4 PASS em 2026-11-01 (`docs/baselines/2026-11-01-gate-e4.md`); em validação no Orin Nano |
 | 5+ — Estabilidade, watchdog, testes longos | — | Não iniciadas |
 
 Evidências e pendências: `docs/phase-1-evaluation.md` · Incidentes: `docs/incident-log.md`
 
 Nota: a avaliação anterior da Fase 1 declarava sucesso sem inferência executada (pipeline antigo sem `nvinfer` e com depayloader H.264 numa câmera H.265). O documento foi corrigido e o teste será refeito com o novo pipeline.
+
+## Ambientes de teste: Orin NX e Orin Nano
+
+A mesma árvore do repositório serve **dois** Jetsons. Não há fork nem branch de
+portabilidade: o que muda entre eles é o `deploy/.env` de cada host e a base de
+imagem, que o `make doctor` valida contra a plataforma.
+
+| Ambiente | IP na LAN | Papel | Plataforma | Base do stack |
+|---|---|---|---|---|
+| **Orin NX** | DHCP — `make ip` | produção e referência dos gates | L4T R36.4.7 · JetPack 6 · DeepStream **7.1** · Python 3.10 no container | `deploy/Dockerfile` padrão (DS 7.1, wheel `pyds` cp310) |
+| **Orin Nano** (`pr3via-jetson`) | DHCP — `make ip` | validação de portabilidade | L4T R39.2.1 · JetPack 7.2.1 · DeepStream **9.1** · CUDA 13 · TRT 10.16.2.10 · Ubuntu 24.04 · Python 3.12.3 · GStreamer 1.24.2 | `DS_BASE_IMAGE=nvcr.io/nvidia/deepstream:9.1-triton-multiarch` + wheel `pyds` cp312 |
+
+Estado em 2026-11-01: o **NX** é o ambiente de produção do VSL e onde os gates
+são fechados (E4 PASS). O **Nano** sobe o stack completo com `make up` e serve
+dashboard, telemetria e preview — medido no `/api/snapshot` às 20:12 UTC:
+`healthy`, `fps_in=20`, `fps_preview=20`, sessão `camera` iniciada às 19:44 UTC.
+O gate de portabilidade (P4) e as pendências de plataforma estão em
+[`docs/plans/2026-11-01-portabilidade-orin-nano.md`](docs/plans/2026-11-01-portabilidade-orin-nano.md).
+
+Cada host é um **stack independente** — não é cluster nem distribuição:
+
+- **Um** container DeepStream por host (regra global do projeto). Os dois
+  Jetsons podem rodar ao mesmo tempo porque são hosts distintos; dois
+  containers do projeto no **mesmo** host continuam proibidos.
+- `deploy/.env` é por host: `RTSP_URI`, `DASHBOARD_PORT` e, opcionalmente,
+  `LAN_IP`. O IP **não** é mais fixo no repositório nem obrigatório no `.env`:
+  `make up` detecta o endereço atual (`scripts/host_ip.sh`: rota default e,
+  depois, `hostname -I`) e exporta `LAN_IP` para o compose — é ele que amarra a
+  publicação das portas do MediaMTX e alimenta o `MTX_WEBRTCADDITIONALHOSTS` (o
+  IP que o SDP anuncia ao navegador). Se o roteador trocar o IP, basta
+  `make up`; nada de editar arquivo.
+- O dashboard é sempre `http://<IP atual do host>:8081`. Use `make ip` para ver
+  o endereço do momento (e as URLs de captura). `localhost` não serve (ver
+  Fase 4).
+- O certificado é **por host**: `deploy/certs/generate-certs.sh` monta o SAN a
+  partir dos IPv4 atuais do host + `<hostname>.local` + `vsl.local`. Quando o
+  IP muda, `make up` reemite **só o certificado do servidor**, preservando a
+  CA: quem já instalou o `ca.crt` continua confiando, sem reinstalar nada.
+  A pasta é gitignored: nunca copie o par `server.crt`/`server.key` de um host
+  para o outro.
+- As duas CAs têm o **mesmo CN** (`Vision Stability Lab Internal CA`), mas
+  chaves diferentes. Uma máquina que abre os dois dashboards precisa das duas
+  instaladas; regenerar (`--force`) num host invalida **só** aquela CA para os
+  clientes. Ver a seção da Fase 4.
+- As portas são as mesmas nos dois hosts (`8081`, `8554`, `1935`, `8888`,
+  `8889`, `8189`, `8443`, além de `8890/udp` do SRT), cada uma publicada no IP
+  do seu host — por isso os dois coexistem na mesma LAN sem conflito.
+
+## Fontes disponíveis: uma ativa por vez
+
+O laboratório aceita **três entradas alternativas**, nunca simultâneas
+(ADR-0006). O catálogo é declarativo, em `deepstream/config/sources.yaml`:
+
+| id | nome | entrada | codec | gate |
+|---|---|---|---|---|
+| `camera` | câmera fixa | RTSP direto no pipeline (`RTSP_URI`, `deploy/.env`) | H.265 | latência p95 ≤ 300 ms |
+| `drone` | drone | RTMP `rtmp://<LAN_IP>:1935/drone` → MediaMTX path `drone` → RTSP `:8554/drone` | H.264 | reportado, não gated (link de rádio) |
+| `phone` | celular (Android) | WHIP `https://<LAN_IP>:8889/phone/whip` → path `phone` → RTSP `:8554/phone` | H.264 | latência p95 ≤ 300 ms |
+
+```text
+câmera fixa ── RTSP (H.265) ──────────────────────────────┐
+drone       ── RTMP :1935/drone ──┐                       │
+celular     ── WHIP :8889/phone ──┴──► MediaMTX ──────────┤ RTSP :8554/{drone,phone}
+                                                          ▼
+                                        pipeline (batch_size=1, uma fonte)
+                                                          │
+                                                          └──► preview H.264 no path `live` ──► dashboard (WHEP)
+```
+
+Regras que valem para qualquer fonte:
+
+- **Uma ativa por vez** (D1): `batch_size=1`, sem tiler, sem grade no OSD e sem
+  engine `b3`. A memória unificada do Jetson é o orçamento que decide isso.
+- **Estado isolado por sessão** (D2): todo registro de telemetria carrega
+  `source_id` e `session_epoch`; trocar de fonte reinicia tracks, eventos,
+  dwell e contadores. Nada atravessa fontes.
+- **Codec por fonte** (D5): o depayloader/parser vem do catálogo, não de uma
+  variável global do container.
+- **Sem reconfiguração em runtime** (D4): trocar de fonte é escrever
+  `data/config/active_source` e reiniciar o processo do pipeline.
+- **Pré-check obrigatório** (D7): a fonte pedida tem de estar publicando (sonda
+  RTSP de 5 s); se não estiver, nada é escrito e o container fica intacto.
+
+Precedência da fonte ativa — a primeira que existir vence:
+
+```text
+ACTIVE_SOURCE (ambiente) > data/config/active_source > default_source > primeira com enabled: true
+```
+
+Trocar:
+
+```bash
+make source                    # fonte ativa no disco
+make sources                   # catálogo visto pelo dashboard (paths mascarados)
+make switch SOURCE=drone       # pré-check → active_source → restart → pós-check
+./scripts/switch_source.sh phone --timeout 120
+```
+
+O script não deixa a troca "meio feita": se o pós-check não confirmar
+`interval_metrics` com `fps_in > 0` na fonte nova, ele **restaura** a anterior e
+sai `1`. Cada execução deixa uma linha em `data/logs/switch.jsonl`; contratos de
+exit code e diagnóstico estão em
+[`docs/runbooks/troca-de-fonte.md`](docs/runbooks/troca-de-fonte.md).
+
+Adicionar uma fonte nova é editar o catálogo (id, `uri`/`uri_env`, `codec`,
+`target_fps`, `enabled`, `gate`) e reiniciar — não é mexer no Python. URI com
+credencial fica em `deploy/.env` via `uri_env`, nunca no YAML (DIV-001).
 
 ## 1. Problema do projeto
 
@@ -76,7 +184,7 @@ A arquitetura deve privilegiar o caminho acelerado da Jetson e evitar a convers�
 
 | Componente | Escopo |
 |---|---|
-| Fonte | Uma câmera ou arquivo publicado como RTSP |
+| Fonte | Câmera IP (RTSP), drone (RTMP) ou celular Android (WHIP) — **uma ativa por vez**, catálogo em `deepstream/config/sources.yaml` |
 | Inferência | Um detector de pessoas em TensorRT `.engine` |
 | Tracker | NvDCF ou tracker equivalente |
 | Regra | Contagem, entrada, saída e permanência |
@@ -97,14 +205,14 @@ Deixe estes recursos para etapas posteriores:
 - Classificação de comportamento.
 - Segundo modelo SGIE.
 - Detecção de EPI.
-- Múltiplas câmeras.
+- Múltiplas fontes **simultâneas** — as três entradas do ADR-0006 são alternativas, não concorrentes.
 - Gravação contínua.
 - Envio de todos os frames ao backend.
 - Processamento de imagem em OpenCV.
 - Kubernetes.
-- Distribuição em vários Jetsons.
+- Distribuição/orquestração em vários Jetsons — o Orin NX e o Orin Nano são dois ambientes de teste independentes, não um cluster.
 
-O escopo deve ter somente uma câmera, uma classe de objeto e uma regra temporal. Isso permite concentrar o aprendizado em lifecycle, backpressure, observabilidade e recuperação de falhas.
+O escopo deve ter **uma fonte ativa por vez**, uma métrica de ocupação (pessoas — o modelo detecta e desenha as 80 classes COCO, mas a telemetria conta só `person`) e uma regra temporal. Isso permite concentrar o aprendizado em lifecycle, backpressure, observabilidade e recuperação de falhas.
 
 ## 3. Arquitetura recomendada
 
@@ -155,6 +263,25 @@ O probe deve trabalhar principalmente com:
 - tempo de permanência.
 
 A NVIDIA descreve probes como pontos para interceptar buffers e metadados processados, permitindo extrair resultados do `nvinfer` e gerar contagens ou overlays. [docs.nvidia](https://docs.nvidia.com/metropolis/deepstream/dev-guide/text/DS_service_maker_python_into_to_pipeline_api.html)
+
+### Ingestão das três fontes
+
+O pipeline continua com **uma** entrada por execução. Quem materializa a
+escolha é o catálogo (`deepstream/config/sources.yaml`) mais o
+`data/config/active_source`. O MediaMTX é o ponto comum das duas fontes que
+publicam por push:
+
+```text
+drone   ── RTMP :1935/drone ──┐
+celular ── WHIP :8889/phone ──┴──► MediaMTX ── RTSP :8554/{drone,phone} ──┐
+câmera  ── RTSP (direto, RTSP_URI) ───────────────────────────────────────┴──► rtspsrc
+```
+
+A câmera não passa pelo MediaMTX na entrada — o pipeline fala RTSP direto com
+ela. O preview anotado é que é publicado no path `live`, independentemente da
+fonte ativa. Depayloader e parser saem do `codec` da fonte (D5), e a URI de cada
+fonte vem do YAML ou de uma variável de ambiente (`uri_env`), nunca hardcoded no
+pipeline.
 
 ### Separação entre vídeo e eventos
 
@@ -299,6 +426,22 @@ A tela principal poderia ter:
 └──────────────────────┴────────────────────────┘
 ```
 
+### Fontes no dashboard
+
+O painel implementado tem uma faixa **“fontes · uma ativa por vez”** com o
+catálogo (`GET /api/sources`), o path de cada fonte em modo leitura, o selo da
+ativa e um botão *ativar* por fonte. Gráficos e eventos podem ser filtrados por
+fonte (`/api/history?source=`, `/api/events?source=`), e o cabeçalho mostra a
+fonte ativa com `session_epoch` e uptime.
+
+O botão *ativar* é **opt-in**: no deploy padrão o endpoint
+`POST /api/source/switch` responde `503` e o dashboard é somente leitura. Para
+habilitar, `make up-switch SWITCH_TOKEN=…` — o painel passa a escutar em
+`127.0.0.1` (acesso por túnel SSH), porque o overlay monta o socket do Docker
+(DIV-004 em `docs/incident-log.md`). O caminho executado é o mesmo do
+`switch_source.sh`: pré-check, `active_source`, restart e pós-check com
+rollback.
+
 ### Indicadores de estabilidade
 
 Use estados simples:
@@ -375,6 +518,15 @@ Defina desde o começo um formato único para métricas:
 
 Publique métricas a cada 1 ou 5 segundos para o dashboard, mas persista somente uma amostra a cada 15 ou 30 segundos. Assim, você evita transformar o banco em outra fonte de crescimento ilimitado.
 
+> **Contrato implementado (multi-fonte).** Todo registro carrega `source_id`,
+> `source_name`, `session_epoch` e `run`, e os endpoints aceitam `?source=<id>`
+> (`/api/history?source=drone`, `/api/events?source=phone`). O `/api/snapshot`
+> traz `source: {id, name, session_epoch, since}` e `health` derivado **apenas**
+> da sessão ativa: `healthy` exige `interval_metrics` fresco (<90 s) com
+> `fps_processed > 0`; `stale` com telemetria velha; `down` sem telemetria. Um
+> id sem histórico devolve lista vazia (HTTP 200), não erro — e nenhum ponto de
+> uma fonte aparece na série de outra.
+
 Para eventos, publique somente transições:
 
 ```json
@@ -417,6 +569,8 @@ tegrastats --interval 1000
 ```
 
 As propriedades dos elementos podem variar entre versões do JetPack, portanto valide a instalação local com `gst-inspect-1.0` antes de copiar configurações de outro ambiente. A documentação atual do Jetson mantém exemplos e propriedades específicas por versão. [docs.nvidia](https://docs.nvidia.com/jetson/archives/r38.4/DeveloperGuide/AT/JetsonLinuxDevelopmentTools/TegrastatsUtility.html)
+
+É o que acontece entre os dois ambientes de teste — Orin NX com DeepStream 7.1 e Orin Nano com 9.1 (ver “Ambientes de teste”). Por isso o `nvtracker` resolve a biblioteca por um caminho estável entre as duas bases, o encoder do preview é escolhido por disponibilidade (hardware → software) e `make doctor` compara a L4T do host com a base de imagem do `deploy/.env`, bloqueando só o que impede subir.
 
 ### Fase 1 — RTSP e inferência
 
@@ -518,6 +672,72 @@ Entregáveis:
 
 Para baixa latência, prefira WebRTC. Para a primeira integração, HLS pode ser mais simples, embora normalmente introduza mais atraso.
 
+> **Acesse o dashboard pelo IP da LAN atual do host que serve o painel** —
+> rode `make ip` no host para ver o endereço do momento (ex.:
+> `http://192.168.59.102:8081`) —, não por `http://localhost:8081`. O MediaMTX
+> é publicado amarrado no `LAN_IP` **detectado no `make up`** (nunca `0.0.0.0`
+> — DIV-003 em `docs/incident-log.md`), então `127.0.0.1:8889` não responde; e
+> o frontend deriva a URL do WHEP do hostname da página
+> (`dashboard/frontend/app.js`: `${location.hostname}:8889`), logo em
+> `localhost` o player negocia contra uma porta fechada e o vídeo não aparece.
+> Se o roteador trocar o IP, rode `make up` de novo: as portas são republicadas
+> no endereço novo e o certificado do servidor é reemitido para ele (a CA é
+> preservada, então nada a reinstalar nos clientes).
+
+> **A máquina que abre o dashboard precisa confiar na CA daquele host.** Desde o
+> E0-T4 a 8889 é TLS (`webrtcEncryption: yes`) e o certificado é assinado pela CA
+> de `deploy/certs/` **do host que serve** — que não está no store do sistema e
+> é diferente em cada Jetson (o SAN lista os IPs do host e os nomes locais
+> `<hostname>.local`/`vsl.local`). Sem instalar o
+> `ca.crt` certo nessa máquina, o `fetch` do WHEP falha na verificação de
+> certificado e o player anuncia "certificado do MediaMTX não é confiável neste
+> navegador" (antes o sintoma era "sem stream do mediamtx", com tudo `healthy`
+> no `docker ps`).
+>
+> Trocar o IP **não** exige novo `ca.crt`: `make up` reemite o certificado do
+> servidor com o SAN novo usando a mesma CA. Só `generate-certs.sh --force`
+> (ou uma CA perdida) obriga a reinstalar o arquivo. Em rede com mDNS, prefira
+> o nome estável — `https://<hostname>.local:8443/capture.html` ou
+> `https://vsl.local:8443/capture.html` — que sobrevive ao DHCP.
+>
+> Antes de instalar, pegue o arquivo **no host que serve** — o `deploy/certs/` é
+> gitignored e diferente em cada Jetson — e confirme que é a CA que assinou
+> aquele host, da máquina do navegador:
+>
+> ```bash
+> IP=$(ssh usuario@<host> 'cd ~/Vision_Stability_Lab && make -s ip' | awk '/^IP da LAN:/ {print $4}')
+> scp usuario@<host>:'~/Vision_Stability_Lab/deploy/certs/ca.crt' ./ca.crt
+> curl --cacert ca.crt -s -o /dev/null -w '%{http_code}\n' "https://$IP:8889/"
+> # 404 = TLS validou (404 é a raiz do MediaMTX); erro de certificado = CA errada
+> ```
+>
+> Instalação, na máquina que abre o dashboard:
+>
+> ```bash
+> sudo cp ca.crt /usr/local/share/ca-certificates/vsl-ca.crt
+> sudo update-ca-certificates   # Chrome/Edge/Chromium no Linux
+> ```
+>
+> Deve responder `1 added`. Se responder `0 added`, o arquivo já estava
+> instalado — normalmente sinal de que é a CA do **outro** host (as duas têm o
+> mesmo `CN`; compare o `notBefore` e prove com `curl --cacert` antes de
+> instalar — INC-008 em `docs/incident-log.md`).
+>
+> Firefox tem store próprio: `about:preferences#privacy` → *Ver certificados* →
+> *Autoridades* → *Importar* → *Confiar nesta CA para identificar sites*.
+> Windows: `certutil -addstore -f Root ca.crt` como administrador (Autoridades
+> de Certificação Raiz Confiáveis, máquina local). macOS:
+> `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ca.crt`.
+> No **Android**, o caminho é o do runbook
+> (`docs/runbooks/captura-celular.md`, seção 3) — Configurações → Segurança →
+> Criptografia e credenciais → Instalar um certificado → Certificado de CA. O
+> aviso de certificado é só do lado do navegador: o pipeline e o
+> `whip_probe.py --cacert` não dependem disso.
+>
+> O `ca.crt` de um host **não** serve para o outro: NX e Nano têm CAs distintas
+> com o mesmo CN. Uma máquina que abre os dois dashboards instala as duas;
+> `generate-certs.sh --force` num host invalida só aquela CA para os clientes.
+
 ### Fase 5 — Testes de estabilidade
 
 Execute testes controlados:
@@ -610,41 +830,53 @@ Um `while True` dentro do mesmo processo não é suficiente para proteger contra
 
 ## 10. Organização do repositório
 
-Uma estrutura adequada seria:
+A árvore do repositório hoje (subconjunto representativo):
 
 ```text
 vision-stability-lab/
 ├── deepstream/
-│   ├── app.py
-│   ├── pipeline.py
-│   ├── probes.py
+│   ├── pipeline_real.py          # pipeline instrumentado (OSD, preview, probes)
+│   ├── sources.py                # catálogo e fonte ativa (ADR-0006)
+│   ├── source_state.py           # isolamento por sessão (source_id/session_epoch)
+│   ├── source_reconnect.py       # máquina de reconexão da fonte
 │   ├── tracker_state.py
 │   ├── health_metrics.py
 │   ├── tegrastats_reader.py
 │   └── config/
-│       ├── source.yaml
+│       ├── sources.yaml          # câmera | drone | celular (uma ativa por vez)
 │       ├── infer.txt
-│       ├── tracker.yml.legacy
+│       ├── tracker_iou.ini
 │       └── osd.yml
 ├── dashboard/
-│   ├── backend/
-│   └── frontend/
+│   ├── backend/                  # FastAPI: /api/snapshot, /api/history, /api/events, /ws
+│   ├── frontend/                 # vanilla JS: player WHEP, cards, gráficos, fontes
+│   └── tests/
 ├── mediamtx/
-│   └── mediamtx.yml
+│   └── mediamtx.yml              # paths live/drone/phone, TLS na 8889
 ├── deploy/
 │   ├── Dockerfile
 │   ├── docker-compose.yml
-│   └── systemd/
+│   ├── docker-compose.switch.yml # overlay opt-in da troca pela tela
+│   ├── nginx/capture-web.conf    # página de captura do celular (8443)
+│   ├── certs/                    # gitignored: ca.crt/server.crt por host
+│   └── .env                      # por host: RTSP_URI, DASHBOARD_PORT (LAN_IP opcional: auto)
 ├── scripts/
-│   ├── run_test.sh
-│   ├── collect_metrics.sh
-│   └── analyze_memory.py
+│   ├── switch_source.sh          # troca com pré-check, pós-check e rollback
+│   ├── switch_source_lib.py
+│   ├── watchdog.py
+│   └── probe/                    # rtsp_read_probe, whip_probe, rtmp_publisher, source_probe
 ├── data/
-│   └── .gitkeep
+│   ├── config/active_source      # fonte ativa (uma linha)
+│   ├── parser/
+│   └── logs/                     # live.jsonl (telemetria), switch.jsonl (auditoria)
 ├── docs/
 │   ├── architecture.md
-│   ├── test-plan.md
+│   ├── adr/                      # ADR-0006 (multi-fonte)
+│   ├── plans/
+│   ├── baselines/
+│   ├── runbooks/                 # captura-celular, troca-de-fonte, drone-campo
 │   └── incident-log.md
+├── Makefile                      # make up / doctor / status / sources / switch / test
 └── README.md
 ```
 
@@ -656,7 +888,7 @@ Eu chamaria o projeto de:
 
 O objetivo não seria simplesmente detectar pessoas. Seria:
 
-> Construir e validar um pipeline de visão contínua capaz de processar uma fonte RTSP por várias horas, mantendo memória, filas, latência e consumo de recursos em comportamento estável, enquanto disponibiliza vídeo anotado e métricas operacionais em um dashboard.
+> Construir e validar um pipeline de visão contínua capaz de processar **uma fonte por vez** (câmera fixa, drone ou celular) por várias horas, mantendo memória, filas, latência e consumo de recursos em comportamento estável, enquanto disponibiliza vídeo anotado e métricas operacionais em um dashboard — com o mesmo stack rodando em dois Jetsons (Orin NX e Orin Nano).
 
 Esse escopo é suficientemente simples para ser concluído, mas ainda exercita as competências mais importantes:
 
@@ -670,10 +902,12 @@ Esse escopo é suficientemente simples para ser concluído, mas ainda exercita a
 - encoder H.264;
 - RTP/MediaMTX;
 - WebRTC ou HLS;
+- troca de fonte entre câmera, drone e celular sem reconfiguração em runtime;
 - métricas do Jetson;
 - backpressure;
 - lifecycle;
 - watchdog;
+- portabilidade do mesmo stack entre JetPack 6/DeepStream 7.1 e JetPack 7/DeepStream 9.1;
 - testes de longa duração.
 
 O arquivo disponível no projeto parece ser um TCC sobre IoT e agricultura e não deve impor a lógica deste novo laboratório; ele pode ser usado apenas como referência de organização acadêmica, não como requisito funcional. 

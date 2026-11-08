@@ -10,9 +10,23 @@ __pycache__/
 # Ferramentas locais
 .superpowers/
 .openclaude/
+# Grafo de conhecimento local (graphify): regenerável, fica fora do git
+graphify-out/
 
 # Sistema
 .DS_Store
 
 # Telemetria em runtime (não versionar)
-data/logs/live.jsonl
+data/logs/*.jsonl
+
+# Estado local da fonte ativa (E2-T1). Valor de bancada, não configuração:
+# o exemplo versionado é data/config/active_source.example.
+data/config/active_source
+
+# Marcador de troca de fonte em andamento (E2-T3): existe só durante
+# scripts/switch_source.sh; o trap do script o remove, mas um kill -9
+# deixaria o arquivo para trás.
+data/config/switch_in_progress
+
+# Credenciais locais (usar deploy/.env.example como base)
+deploy/.env

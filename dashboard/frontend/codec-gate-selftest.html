@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f4f1ea">
+<title>Autoteste do gate de codec · Vision Stability Lab</title>
+<!--
+  Prova executável do gate H.264 (E0-T4), sem framework de teste.
+
+  Não há runner de JS no projeto (sem npm, sem build) e o gate tem de ser
+  exercitado no **navegador**, que é onde ele roda de verdade. Então os fixtures
+  moram em `codec-gate.js` (`CodecGate.FIXTURES`) e esta página roda todos e
+  imprime PASS/FAIL. Abrir aqui é a evidência:
+
+    https://<ip-do-host>:8443/codec-gate-selftest.html   (`make ip` mostra o IP)
+
+  A página imprime o resultado agregado em `#summary`, para que a leitura por
+  `curl` (ou uma captura de tela) sirva de registro.
+-->
+<script>
+  // Mesma preferência de tema do dashboard; satélites não têm botão próprio.
+  (function () {
+    try {
+      document.documentElement.dataset.theme =
+        localStorage.getItem("vsl-theme") === "dark" ? "dark" : "light";
+    } catch (e) {
+      document.documentElement.dataset.theme = "light";
+    }
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+<style>
+  .wrap { padding: 16px 22px 24px; display: flex; flex-direction: column; gap: 12px; flex: 1; }
+  .summary {
+    font-family: var(--condensed);
+    font-size: 21px;
+    letter-spacing: .06em;
+  }
+  .summary.pass { color: var(--accent); }
+  .summary.fail { color: var(--bad); }
+  #selftest { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #selftest th, #selftest td {
+    text-align: left;
+    padding: 9px 16px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  #selftest th {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    color: var(--dim);
+    border-bottom-color: var(--line);
+  }
+  #selftest td.result { font-weight: 700; white-space: nowrap; }
+  #selftest tr.pass td.result { color: var(--accent); }
+  #selftest tr.fail td.result { color: var(--bad); }
+  #selftest td.detail { color: var(--dim); }
+  /* .note e .link vêm de style.css (componentes compartilhados com a página de captura) */
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <div>
+      <h1>AUTOTESTE · GATE DE CODEC</h1>
+      <span class="brand-sub">h.264 primeiro na m-line ou não publica</span>
+    </div>
+  </div>
+  <div class="clock">
+    <a class="link" href="/capture.html">página de captura</a>
+  </div>
+</header>
+
+<main class="wrap">
+  <!-- `role="status"` para o leitor de tela anunciar o agregado. -->
+  <p id="summary" class="summary" role="status">rodando…</p>
+
+  <section class="panel">
+    <div class="panel-head">
+      <span class="eyebrow">fixtures de SDP e de transceiver</span>
+      <button id="run" class="btn" type="button">Rodar de novo</button>
+    </div>
+    <table id="selftest">
+      <thead>
+        <tr>
+          <th scope="col">caso</th>
+          <th scope="col">esperado</th>
+          <th scope="col">obtido</th>
+          <th scope="col">resultado</th>
+          <th scope="col">detalhe</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <p class="note">
+    A regra que os fixtures travam: o gate lê a <strong>m-line do offer</strong>, não
+    <code>sender.getParameters()</code> — aquele campo só é populado depois da
+    negociação e tratá-lo como vazio deu NO-GO falso no spike de 2026-10-27
+    (ADR-0005). H.264 precisa ser o <strong>primeiro</strong> payload de vídeo; áudio
+    antes no SDP não conta. Se algum caso falhar aqui, o publisher está liberando
+    um offer que o MediaMTX vai recusar (ele não transcodifica).
+    <br>
+    Também é verificável sem navegador no host:
+    <code>curl -s --cacert deploy/certs/ca.crt https://&lt;ip-do-host&gt;:8443/codec-gate.js | node --check</code>
+    (sintaxe) — a execução dos casos, só no navegador.
+  </p>
+</main>
+
+<footer class="footbar">
+  <span>fase 0 · E0-T4 · fixtures em codec-gate.js</span>
+  <span id="count">—</span>
+</footer>
+
+<script src="/codec-gate.js"></script>
+<script>
+  (function () {
+    "use strict";
+
+    function run() {
+      var results = window.CodecGate.runSelfTest();
+      var body = document.querySelector("#selftest tbody");
+      var passed = 0;
+      body.textContent = "";
+
+      results.forEach(function (item) {
+        if (item.pass) passed += 1;
+        var row = document.createElement("tr");
+        row.className = item.pass ? "pass" : "fail";
+
+        var name = document.createElement("td");
+        name.textContent = item.name;
+
+        var expected = document.createElement("td");
+        expected.textContent = item.expected;
+
+        var actual = document.createElement("td");
+        actual.textContent = item.actual;
+
+        var result = document.createElement("td");
+        result.className = "result";
+        result.textContent = item.pass ? "PASS" : "FAIL";
+
+        var detail = document.createElement("td");
+        detail.className = "detail";
+        detail.textContent = item.detail || "—";
+
+        row.appendChild(name);
+        row.appendChild(expected);
+        row.appendChild(actual);
+        row.appendChild(result);
+        row.appendChild(detail);
+        body.appendChild(row);
+      });
+
+      var allPass = passed === results.length;
+      var summary = document.getElementById("summary");
+      summary.className = "summary " + (allPass ? "pass" : "fail");
+      summary.textContent = (allPass ? "PASS " : "FAIL ") + passed + "/" + results.length +
+        " casos do gate H.264";
+      document.getElementById("count").textContent = passed + "/" + results.length;
+    }
+
+    document.getElementById("run").addEventListener("click", run);
+    run();
+  })();
+</script>
+</body>
+</html>
