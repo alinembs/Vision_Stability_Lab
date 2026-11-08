@@ -125,6 +125,26 @@ cleanup() {
         && grep -q "\"owner\": \"$SWITCH_OWNER\"" "$SWITCH_MARKER" 2>/dev/null; then
         rm -f -- "$SWITCH_MARKER" 2>/dev/null || true
     fi
+    # Resto do descarte do órfão que não coube de volta. Na corrida tripla
+    # (órfão expirado -> marcador válido de A durante o `mv` -> marcador válido
+    # de B ocupando o path canônico antes do `mv -n` de volta), o marcador de A
+    # fica preso em `switch_in_progress.stale.$$` e ninguém o recolhe: o `mv -n`
+    # não sobrescreve B, e o dono de A já não consegue recolocá-lo (o `cleanup`
+    # dele só olha o path canônico). Só o `.stale.$$` **deste** processo é
+    # tratado aqui — `*.stale.*` de outro PID é de outra execução e continua
+    # valendo a regra de não apagar arquivo alheio.
+    #
+    # O mutex é o path canônico: um marcador deslocado não protege mais nada.
+    # Nenhum leitor (`switch_control.py`, `watchdog.py`) lê `*.stale.*`, então
+    # mantê-lo só sujaria o diretório. O conteúdo vai para o log antes do `rm`
+    # para preservar a evidência de quem era o marcador deslocado (`owner`,
+    # `to`, `expires_at`). O path canônico **nunca** é tocado aqui: a regra de
+    # não apagar marcador alheio vale para ele e continua valendo.
+    local own_stale="$SWITCH_MARKER.stale.$$"
+    if [[ -f "$own_stale" ]]; then
+        log "marcador alheio deslocado: $(tr -d '\n' <"$own_stale" 2>/dev/null || true) (removendo $own_stale)"
+        rm -f -- "$own_stale" 2>/dev/null || true
+    fi
     rm -f -- "$CONTROL_FILE.tmp.$$" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -184,7 +204,7 @@ write_marker() {
                 log "marcador virou válido durante o descarte: devolvendo e cedendo"
                 mv -n -- "$stale" "$SWITCH_MARKER" 2>/dev/null || true
                 if [[ -e "$stale" ]]; then
-                    log "AVISO: $SWITCH_MARKER ocupado; marcador alheio preservado em $stale"
+                    log "AVISO: $SWITCH_MARKER ocupado; marcador alheio não coube de volta e fica em $stale (será registrado no log e removido no cleanup)"
                 fi
                 refuse_busy
             else

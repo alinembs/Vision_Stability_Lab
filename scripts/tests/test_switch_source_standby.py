@@ -129,9 +129,10 @@ argv = sys.argv[1:]
 alcance = os.environ.get("SHIM_TARGET_MARKER", "")
 delta = os.environ.get("SHIM_RACER_STAMP", "")
 alheio = os.environ.get("SHIM_RACER_MARKER", "")
-if (alheio and alcance and delta and "marker-expired" in argv
-        and "--file" in argv
-        and argv[argv.index("--file") + 1] == alcance
+decisao = "marker-expired" in argv and "--file" in argv
+alvo = argv[argv.index("--file") + 1] if decisao else ""
+if (alheio and alcance and delta and decisao
+        and alvo == alcance
         and not os.path.exists(delta)):
     # Outro dono ganhou a corrida: marcador válido no path, e a decisão que o
     # script recebe é a do órfão que ele leu antes.
@@ -140,6 +141,20 @@ if (alheio and alcance and delta and "marker-expired" in argv
     with open(alcance, "w", encoding="utf-8") as handle:
         handle.write(alheio)
     raise SystemExit(0)
+# Terceira ponta da corrida (tripla): quando o script revalida o arquivo já
+# deslocado, um **segundo** dono ocupa o path canônico e a resposta é
+# "válido" (exit 1) — o `mv -n` de volta não sobrescreve ninguém, então o
+# marcador deslocado fica órfão de arquivo até o `cleanup`.
+delta_b = os.environ.get("SHIM_RACER_STAMP_B", "")
+alheio_b = os.environ.get("SHIM_RACER_MARKER_B", "")
+if (alheio_b and alcance and delta_b and decisao
+        and alvo.startswith(alcance + ".stale.")
+        and not os.path.exists(delta_b)):
+    with open(delta_b, "w", encoding="utf-8") as handle:
+        handle.write("1")
+    with open(alcance, "w", encoding="utf-8") as handle:
+        handle.write(alheio_b)
+    raise SystemExit(1)
 real = os.environ["SHIM_REAL_PYTHON"]
 os.execv(real, [real, *argv])
 '''
@@ -155,8 +170,10 @@ class SwitchHarness(unittest.TestCase):
     """Ambiente isolado do `.sh`: shim no PATH e estado todo em tmp."""
 
     # Conteúdo que o shim de `PYTHON` grava no marcador "roubado"; vazio
-    # desliga o racer (os demais casos continuam iguais).
+    # desliga o racer (os demais casos continuam iguais). `racer_marker_b` é o
+    # terceiro dono da corrida tripla: ocupa o path canônico na revalidação.
     racer_marker = ""
+    racer_marker_b = ""
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -224,6 +241,8 @@ class SwitchHarness(unittest.TestCase):
             "SHIM_TARGET_MARKER": str(self.marker),
             "SHIM_RACER_STAMP": str(self.dir / "racer.stamp"),
             "SHIM_RACER_MARKER": self.racer_marker,
+            "SHIM_RACER_STAMP_B": str(self.dir / "racer_b.stamp"),
+            "SHIM_RACER_MARKER_B": self.racer_marker_b,
         })
         return subprocess.run(
             [str(SCRIPT), source, "--skip-precheck", *args],  # pré-check = socket
@@ -379,6 +398,63 @@ class CorridaDoOrfaoTest(SwitchHarness):
         # Nada foi escrito e o pipeline não foi tocado.
         self.assertFalse(self.control_file.exists())
         self.assertEqual(self.compose_up_calls(), [])
+        registros = self.switch_records()
+        self.assertEqual(registros[-1]["result"], "FAIL")
+        self.assertEqual(registros[-1]["reason"], "troca_em_andamento")
+        self.assertEqual(registros[-1]["probe"], "blocked")
+
+
+class CorridaTriplaTest(SwitchHarness):
+    """Órfão expirado + dois marcadores válidos na janela do descarte.
+
+    Sequência reproduzida pelo shim de `PYTHON`:
+
+    1. o script lê o órfão e recebe "expirado" (exit 0), mas antes disso o
+       observador (**A**) gravou um marcador válido no path canônico;
+    2. o script move A para `switch_in_progress.stale.$$` e revalida: o
+       dashboard (**B**) ocupa o path canônico e a resposta é "válido" (exit 1);
+    3. o `mv -n` de volta não sobrescreve B, então A fica preso no `.stale.$$`.
+
+    O mutex continua correto (o canônico tem B e a troca cede: exit 3). O
+    defeito era o arquivo de A sobrar no diretório de configuração para
+    sempre: o `cleanup` agora registra o conteúdo dele no log — evidência de
+    quem era o marcador deslocado — e remove **só** o `.stale.$$` do próprio
+    processo.
+    """
+
+    @property
+    def racer_marker(self) -> str:  # type: ignore[override]
+        """Marcador válido de A, o que o `mv` leva para o `.stale.$$`."""
+        return ('{"to": "camera", "owner": "observer:watchdog", '
+                f'"expires_at": "{_em(3600)}", "origin": "watchdog"}}\n')
+
+    @property
+    def racer_marker_b(self) -> str:  # type: ignore[override]
+        """Marcador válido de B, o que ocupa o canônico no `mv -n` de volta."""
+        return ('{"to": "drone", "owner": "dashboard:teste", '
+                f'"expires_at": "{_em(3600)}", "origin": "dashboard"}}\n')
+
+    def test_deslocado_sem_lugar_e_logado_e_removido_no_cleanup(self) -> None:
+        self.write_marker("script:999:1", _em(-3600))   # órfão de quem morreu
+        deslocado = json.loads(self.racer_marker)
+        ocupante = self.racer_marker_b
+
+        proc = self.run_switch(running=True)
+
+        self.assertEqual(proc.returncode, 3, proc.stderr)
+        self.assertIn("reason=troca_em_andamento", proc.stdout)
+        # Nada foi escrito e o pipeline não foi tocado.
+        self.assertFalse(self.control_file.exists())
+        self.assertEqual(self.compose_up_calls(), [])
+        # O marcador canônico é o de B: nem sobrescrito pelo `mv -n`, nem
+        # apagado pelo `cleanup` (a regra de não apagar marcador alheio vale).
+        self.assertEqual(self.marker.read_text(encoding="utf-8"), ocupante)
+        # O deslocado de A não sobra no diretório de configuração...
+        self.assertEqual(
+            list(self.config_dir.glob("switch_in_progress.stale.*")), [],
+            "marcador deslocado ficou para trás")
+        # ...mas o dono dele fica registrado no log antes da remoção.
+        self.assertIn(deslocado["owner"], proc.stderr)
         registros = self.switch_records()
         self.assertEqual(registros[-1]["result"], "FAIL")
         self.assertEqual(registros[-1]["reason"], "troca_em_andamento")
