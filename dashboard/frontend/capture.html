@@ -61,6 +61,13 @@
     font-size: 12px;
     line-height: 1.5;
   }
+  /* Aviso que não interrompe a captura (retrato): mesma faixa, cor de `warn`.
+     Vermelho aqui ensinaria o operador a ignorar vermelho. */
+  .alert.alert-warn {
+    border-color: var(--warn);
+    background: var(--warn-soft);
+    color: var(--warn);
+  }
   .controls {
     display: flex;
     flex-wrap: wrap;
@@ -86,7 +93,22 @@
     padding: 5px 8px;
     width: 120px;
   }
-  .field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* O seletor de câmera é o mesmo componente do campo `path`: mesma altura,
+     borda e tipografia, para não parecer um controle de outra tela. */
+  .field select {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 5px 8px;
+    width: 120px;
+  }
+  .field select[disabled] { color: var(--dim); cursor: not-allowed; }
+  .field-note { font-size: 9px; line-height: 1.3; color: var(--dim); max-width: 120px; }
+  .field input:focus-visible,
+  .field select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .btn[disabled] { cursor: not-allowed; }
   #status { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--dim); }
   #status.status-ok { color: var(--accent); }
@@ -94,6 +116,38 @@
   #status.status-bad { color: var(--bad); }
   #status.status-busy { color: var(--accent); }
   .diag-rows .row output { text-align: right; overflow: hidden; text-overflow: ellipsis; max-width: 60%; }
+  /* Celular em paisagem: sobram ~320–400 px de altura depois da barra do
+     Chrome. Empilhado (regra de 900 px acima) a prévia sozinha toma a tela e o
+     diagnóstico — que é o que o operador precisa ler em campo — fica fora do
+     campo de visão. Duas colunas e moldura baixa mantêm prévia, controles e
+     diagnóstico na mesma tela, sem rolagem excessiva.
+     Fica no fim do bloco de propósito: media query não ganha especificidade, e
+     as regras acima (`.controls`, `.alert`) venceriam se ela viesse antes. */
+  @media (orientation: landscape) and (max-height: 560px) {
+    .capture-grid {
+      grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+      gap: 8px;
+      padding: 6px 10px 4px;
+    }
+    .video-panel, .diag-panel { grid-column: auto; }
+    .video-panel .video-frame {
+      flex: none;
+      aspect-ratio: auto;
+      height: clamp(120px, 34vh, 220px);
+      min-height: 0;
+    }
+    .controls { padding: 8px 10px; gap: 8px; }
+    .video-panel .note { padding: 5px 10px; font-size: 9px; }
+    .diag-rows .row { padding: 4px 0; }
+    .diag-panel .note { padding: 6px 12px; font-size: 9px; }
+    .readout { padding: 5px 4px; }
+    .readout output { font-size: 13px; }
+    .topbar { padding: 8px 12px; }
+    .footbar { padding: 5px 12px; }
+    .alert { margin: 0 10px 6px; padding: 7px 10px; }
+    .field input, .field select { width: 96px; }
+    .field-note { max-width: 96px; }
+  }
   /* .note e .link vêm de style.css (componentes compartilhados com a página de codec) */
 </style>
 </head>
@@ -135,6 +189,29 @@
         <input id="path" name="path" type="text" value="phone" autocomplete="off"
                spellcheck="false" aria-describedby="path-help">
       </div>
+      <!-- Câmera: traseira por padrão (é a que aponta para a cena). A escolha
+           só vale no início da captura — trocar no meio exigiria renegociar o
+           track com o MediaMTX, que não é caminho suportado. -->
+      <div class="field">
+        <label for="facing">câmera</label>
+        <select id="facing" name="facing" aria-describedby="facing-note">
+          <option value="environment">traseira</option>
+          <option value="user">frontal</option>
+        </select>
+        <span class="field-note hidden" id="facing-note">encerre para trocar de câmera</span>
+      </div>
+      <!-- Dispositivo físico. A lista nasce só com "automática" e é preenchida
+           pelo `capture.js` depois que a permissão é concedida — antes disso o
+           Chrome esconde os rótulos. É o caminho garantido quando o `facingMode`
+           é aceito e o aparelho entrega a câmera errada: `deviceId` não tem
+           ambiguidade. Vale só para o próximo início, como o seletor acima. -->
+      <div class="field">
+        <label for="device">dispositivo</label>
+        <select id="device" name="device" aria-describedby="device-note">
+          <option value="">automática (traseira/frontal)</option>
+        </select>
+        <span class="field-note hidden" id="device-note">encerre para trocar de câmera</span>
+      </div>
       <button id="btn-start" class="btn" type="button">Iniciar captura</button>
       <button id="btn-stop" class="btn" type="button" disabled>Encerrar</button>
     </div>
@@ -157,6 +234,9 @@
     <div class="state-rows diag-rows">
       <div class="row"><span>pedido (ideal)</span><output id="r-req">—</output></div>
       <div class="row"><span>câmera (getSettings)</span><output id="r-cam">—</output></div>
+      <div class="row"><span>aparelho</span><output id="r-device">—</output></div>
+      <div class="row"><span>câmera pedida</span><output id="r-facing">—</output></div>
+      <div class="row"><span>orientação</span><output id="r-orient">—</output></div>
       <div class="row"><span>limitação do encoder</span><output id="r-limit">—</output></div>
       <div class="row"><span>teto de banda</span><output id="r-cap">não tentado</output></div>
       <div class="row"><span>H.264 no aparelho</span><output id="r-caps">—</output></div>
@@ -169,7 +249,17 @@
       <strong>resolução enviada</strong> e <strong>fps enviado</strong> saem de
       <code>outbound-rtp</code> (o que o servidor recebe). <strong>câmera</strong> é
       <code>getSettings()</code> e descreve o sensor, não a transmissão: ele costuma
-      mentir para cima. <code>qualityLimitationReason</code> separa rede
+      mentir para cima. <strong>câmera pedida</strong> é o candidato que o
+      <code>getUserMedia</code> aceitou: se ele não diz <code>(exact)</code>, o
+      aparelho não entregou a câmera pedida de cara e a página caiu para
+      <code>ideal</code> ou para "qualquer câmera".
+      <strong>aparelho</strong> é o <code>deviceId</code> efetivo, com o rótulo
+      que o Chrome informa: se você escolheu no seletor um aparelho com
+      <code>facing back</code> e esta linha mostra outro, quem ignorou o pedido
+      foi o sensor/Chrome, não a página.
+      <strong>orientação</strong> em <strong>retrato</strong> significa frame
+      esticado no <code>nvstreammux</code> (1280×720 fixo, sem padding): gire o
+      aparelho. <code>qualityLimitationReason</code> separa rede
       (<code>bandwidth</code>) de CPU (<code>cpu</code>).
     </p>
   </aside>
@@ -181,6 +271,10 @@
   <!-- Host derivado de `location.hostname` no `capture.js` (M6): a página vale
        por IP da LAN e por `vsl.local`, que está no SAN do certificado. -->
   <span id="origin-line">https://&lt;host&gt;:8443 · whip em :8889</span>
+  <!-- Escrito pelo `capture.js` (`CAPTURE_VERSION`): é a prova, no celular, de
+       qual arquivo o aparelho carregou. Fixo no HTML mentiria justamente no caso
+       que importa (cópia antiga em cache ou de outro host). -->
+  <span id="build-line">capture.js —</span>
 </footer>
 
 <script src="/codec-gate.js"></script>

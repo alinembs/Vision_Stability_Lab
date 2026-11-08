@@ -50,6 +50,52 @@
   var DEFAULT_PATH = "phone";
 
   /**
+   * Câmera escolhida pelo operador (`environment` = traseira).
+   *
+   * Mesma convenção das outras preferências locais da página (`vsl-theme`):
+   * `localStorage`, sem backend. O padrão é a **traseira** porque é a câmera
+   * que aponta para a cena que o pipeline mede — a frontal do Chrome Android
+   * abria por padrão e enquadrava o operador, não o ambiente.
+   */
+  var FACING_STORAGE_KEY = "vsl-facing";
+  var DEFAULT_FACING = "environment";
+
+  /**
+   * Selo de versão deste arquivo, impresso no rodapé e no console.
+   *
+   * A página é servida por bind mount, mas o celular pode ter carregado um
+   * `capture.js` antigo do cache (ou de outro host). Sem um selo visível não há
+   * como provar, em campo, qual JS o aparelho executou — e a investigação da
+   * câmera traseira travou justamente nessa dúvida. Suba esta data a cada
+   * mudança neste arquivo.
+   */
+  var CAPTURE_VERSION = "2026-11-08c";
+
+  /**
+   * Dispositivo físico escolhido pelo operador (`deviceId`).
+   *
+   * `facingMode` não é garantia: o Chrome Android pode aceitar
+   * `exact environment` e entregar a frontal mesmo assim. O `deviceId` é o
+   * único pedido que amarra a câmera física. Vazio = cadeia de `facingMode`,
+   * que é o comportamento anterior.
+   */
+  var DEVICE_STORAGE_KEY = "vsl-facing-device";
+
+  /**
+   * Aviso de retrato (não bloqueia a publicação: é aviso, não gate).
+   *
+   * O `nvstreammux` do pipeline é fixo em 1280×720 (`deepstream/pipeline_real.py`)
+   * e roda **sem** `enable-padding`: um frame retrato chega 720 de altura e ~404
+   * de largura, e o mux estica para 16:9. A imagem sai deformada, então o custo
+   * de girar o aparelho é menor que o de gravar evidência esticada.
+   */
+  var PORTRAIT_MESSAGE =
+    "A câmera está entregando retrato. Gire o aparelho para paisagem: em " +
+    "retrato o teto de 720p reduz a captura (ex.: 404×720) e o pipeline " +
+    "reescala para 1280×720 sem preservar o aspecto, então a imagem sai " +
+    "esticada. A publicação continua — o aviso é de enquadramento.";
+
+  /**
    * Formato de path aceito na URL do WHIP.
    *
    * Sem validação, `phone/whip` (ou um path colado de outro lugar) vira
@@ -72,6 +118,12 @@
   var lastSample = null;
   var bitrateCap = null;
   var published = false;
+  /** Qual candidato de `facingMode` o `getUserMedia` aceitou (diagnóstico). */
+  var lastFacingAttempt = null;
+  /** Rótulo cru de cada `deviceId`, preenchido por `enumerateDevices`. */
+  var deviceLabels = Object.create(null);
+  /** Se os controles de câmera estão travados (publicação em andamento). */
+  var controlsLocked = false;
 
   var el = {};
 
@@ -92,12 +144,31 @@
   function showError(message, detail) {
     if (!el.error) return;
     el.error.textContent = detail ? message + " (" + detail + ")" : message;
+    // O banner é compartilhado com o aviso de retrato; a classe de aviso não
+    // pode sobreviver a um erro de verdade.
+    el.error.classList.remove("alert-warn");
+    el.error.classList.remove("hidden");
+  }
+
+  /**
+   * Aviso que não interrompe o fluxo (hoje: captura em retrato).
+   *
+   * Reaproveita o banner `#error` em vez de criar componente novo, mas com a
+   * cor de `warn`: pintar de vermelho algo que a captura segue fazendo ensina o
+   * operador a ignorar vermelho. `showError` limpa a classe para o próximo erro
+   * voltar a ser vermelho.
+   */
+  function showWarning(message) {
+    if (!el.error) return;
+    el.error.textContent = message;
+    el.error.classList.add("alert-warn");
     el.error.classList.remove("hidden");
   }
 
   function clearError() {
     if (!el.error) return;
     el.error.textContent = "";
+    el.error.classList.remove("alert-warn");
     el.error.classList.add("hidden");
   }
 
@@ -372,6 +443,347 @@
    * Publish
    * ---------------------------------------------------------------- */
 
+  /* ---------------------------------------------------------------- *
+   * Câmera: traseira por padrão, paisagem como alvo
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Câmera escolhida, lida de `localStorage`.
+   *
+   * `try/catch` porque em navegação privada o `localStorage` existe mas lança em
+   * `getItem`; preferência de câmera não pode ser motivo para a captura não
+   * abrir. Valor desconhecido (versão antiga, storage editado) volta ao padrão.
+   */
+  function readFacing() {
+    try {
+      var stored = localStorage.getItem(FACING_STORAGE_KEY);
+      if (stored === "environment" || stored === "user") return stored;
+    } catch (error) {
+      /* sem storage: fica o padrão */
+    }
+    return DEFAULT_FACING;
+  }
+
+  function saveFacing(value) {
+    try {
+      localStorage.setItem(FACING_STORAGE_KEY, value);
+    } catch (error) {
+      /* sem storage: a escolha vale só para esta aba */
+    }
+  }
+
+  /** Nome da câmera como o operador lê na tela. */
+  function facingLabel(mode) {
+    if (mode === "environment") return "traseira";
+    if (mode === "user") return "frontal";
+    return "—";
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Dispositivo: o caminho garantido quando `facingMode` não basta
+   * ---------------------------------------------------------------- */
+
+  /**
+   * `deviceId` gravado pelo operador, lido de `localStorage`.
+   *
+   * Mesmo `try/catch` de `readFacing`: navegação privada pode lançar em
+   * `getItem`, e preferência de câmera não pode ser motivo para a captura não
+   * abrir. Valor vazio = usar a cadeia de `facingMode`.
+   */
+  function readStoredDevice() {
+    try {
+      var stored = localStorage.getItem(DEVICE_STORAGE_KEY);
+      if (stored) return stored;
+    } catch (error) {
+      /* sem storage: fica a cadeia de facingMode */
+    }
+    return "";
+  }
+
+  function saveStoredDevice(value) {
+    try {
+      if (value) localStorage.setItem(DEVICE_STORAGE_KEY, value);
+      else localStorage.removeItem(DEVICE_STORAGE_KEY);
+    } catch (error) {
+      /* sem storage: a escolha vale só para esta aba */
+    }
+  }
+
+  /** `deviceId` completo não cabe na tela; o prefixo basta para comparar. */
+  function shortDeviceId(value) {
+    if (!value) return "";
+    return value.length > 8 ? value.slice(0, 8) + "…" : value;
+  }
+
+  /**
+   * Nome do aparelho para a linha "aparelho" do diagnóstico.
+   *
+   * O rótulo cru vem de `enumerateDevices` (ex.: "camera2 0, facing back") e só
+   * existe depois da permissão. Sem rótulo sobra o `deviceId` truncado — é o
+   * que dá para comparar com a lista do seletor.
+   */
+  function describeDevice(deviceId) {
+    if (!deviceId) return "—";
+    var label = deviceLabels[deviceId];
+    if (label) return label;
+    return "deviceId " + shortDeviceId(deviceId);
+  }
+
+  function deviceOptionExists(deviceId) {
+    if (!deviceId || !el.device) return false;
+    var options = el.device.options || [];
+    for (var i = 0; i < options.length; i++) {
+      if (options[i].value === deviceId) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Remonta a lista de dispositivos, já com a trilha ativa selecionada.
+   *
+   * Antes do primeiro `getUserMedia` o Chrome devolve rótulos vazios; por isso a
+   * enumeração roda **depois** do sucesso. Falha de enumeração (API ausente,
+   * aparelho estranho) não muda nada: sem lista, a página continua na cadeia de
+   * `facingMode`, que é o comportamento anterior.
+   *
+   * O valor escrito aqui é **estado**, não preferência: com o controle travado o
+   * `change` é ignorado, então o resultado de um fallback nunca vira a escolha
+   * da próxima captura.
+   */
+  function refreshDeviceList(activeDeviceId) {
+    if (!el.device || !navigator.mediaDevices ||
+        typeof navigator.mediaDevices.enumerateDevices !== "function") {
+      return Promise.resolve(false);
+    }
+    return navigator.mediaDevices.enumerateDevices().then(function (devices) {
+      var videos = [];
+      devices.forEach(function (device) {
+        if (device && device.kind === "videoinput") videos.push(device);
+      });
+      if (videos.length === 0) return false;
+
+      while (el.device.firstChild) el.device.removeChild(el.device.firstChild);
+
+      // A primeira opção é o caminho de sempre: sem `deviceId`, a página pede a
+      // traseira por `facingMode` e deixa o aparelho decidir.
+      var auto = document.createElement("option");
+      auto.value = "";
+      auto.textContent = "automática (traseira/frontal)";
+      el.device.appendChild(auto);
+
+      deviceLabels = Object.create(null);
+      videos.forEach(function (device, index) {
+        var label = (device.label || "").trim();
+        var option = document.createElement("option");
+        option.value = device.deviceId || "";
+        // Rótulo vazio é comum em aparelho que não informa o nome: um índice
+        // legível ("câmera 2") vale mais que uma opção em branco.
+        option.textContent = label || "câmera " + (index + 1);
+        // Guarda o texto que o operador vê, não o rótulo cru: assim a linha
+        // "aparelho" do diagnóstico fala a mesma língua do seletor.
+        deviceLabels[device.deviceId || ""] = option.textContent;
+        el.device.appendChild(option);
+      });
+
+      var wanted = activeDeviceId || readStoredDevice();
+      el.device.value = deviceOptionExists(wanted) ? wanted : "";
+      // A lista só existe depois da permissão: se a captura já está publicando,
+      // o seletor recém-preenchido nasce travado.
+      el.device.disabled = controlsLocked;
+      // Reforça a linha "aparelho" agora que o rótulo existe: na primeira
+      // captura a enumeração termina depois do `setText` de `start`, e sem isto
+      // o operador só veria o `deviceId` truncado.
+      if (activeDeviceId) setText("r-device", describeDevice(activeDeviceId));
+      return true;
+    }).catch(function () {
+      /* sem enumeração: tudo funciona como antes (facingMode) */
+      return false;
+    });
+  }
+
+  /**
+   * Cadeia de pedidos de câmera, do mais específico ao mais permissivo.
+   *
+   * `exact` é o único que **garante** a câmera certa: com `ideal` o Chrome pode
+   * aceitar a traseira e entregar a frontal sem erro nenhum — foi o que
+   * aconteceu antes, com a frontal abrindo por padrão. Mas `exact` derruba o
+   * aparelho que não tem a câmera pedida (`OverconstrainedError`), e nesse caso
+   * um fallback honesto vale mais que a tela de erro: aparelho só com frontal
+   * publica pela frontal (o diagnóstico mostra "frontal" mesmo tendo pedido
+   * "traseira"). O último candidato nem manda `facingMode` — é a saída para
+   * sensor que não se identifica.
+   */
+  function facingChain(facing) {
+    return [
+      {
+        facing: facing,
+        constraint: { exact: facing },
+        label: facingLabel(facing) + " (exact)",
+      },
+      {
+        facing: facing,
+        constraint: { ideal: facing },
+        label: facingLabel(facing) + " (ideal)",
+      },
+      {
+        facing: null,
+        constraint: null,
+        label: "qualquer câmera (sem facingMode)",
+      },
+    ];
+  }
+
+  /**
+   * Tetos de captura comuns aos dois caminhos (facingMode e deviceId).
+   *
+   * `ideal` sozinho não é teto: o aparelho podia entregar 1080p e o encoder
+   * gastar banda à toa (o pedido tem de ser cumprido como limite). `max` fecha o
+   * teto sem exigir o valor exato — `exact` derrubaria aparelhos que não têm
+   * 720p. `aspectRatio` é `ideal` de propósito: com `exact` um aparelho que só
+   * entrega retrato ficaria sem câmera — e retrato aqui é aviso, não bloqueio.
+   */
+  function baseVideoConstraints() {
+    return {
+      width: { ideal: TARGET_WIDTH, max: TARGET_WIDTH },
+      height: { ideal: TARGET_HEIGHT, max: TARGET_HEIGHT },
+      frameRate: { ideal: TARGET_FPS },
+      // Paisagem é o alvo do pipeline (16:9 em 1280×720).
+      aspectRatio: { ideal: 16 / 9 },
+    };
+  }
+
+  /** Câmera ocupada é erro fatal: trocar calado publicaria a imagem errada. */
+  function cameraBusyError(facing) {
+    // `facing === null` é o candidato "qualquer câmera": não existe rótulo para
+    // citar, e "A câmera — está em uso" não se lê.
+    var alvo = facing ? "A câmera " + facingLabel(facing) : "A câmera escolhida";
+    return new Error(
+      alvo + " está em uso por outro aplicativo (ou por outra aba publicando). " +
+      "Feche-o e tente de novo.");
+  }
+
+  /** `NotReadableError` e primos: câmera ocupada, não constraint inválida. */
+  function isCameraBusy(name) {
+    return name === "NotReadableError" || name === "TrackStartError" ||
+      name === "AbortError";
+  }
+
+  /**
+   * Tenta o candidato `index`; `OverconstrainedError`/`NotFoundError` só fazem
+   * cair para o próximo. Erro de permissão (`NotAllowedError`), câmera ocupada
+   * (`NotReadableError`) e falta de `mediaDevices` continuam fatais: insistir
+   * neles só repetiria o mesmo erro — e, no caso da câmera ocupada, trocar de
+   * câmera calada publicaria a imagem errada.
+   */
+  function tryFacingCandidate(chain, index, lastError) {
+    if (index >= chain.length) {
+      // Nenhum candidato resolveu: o erro do último (o mais permissivo) é o que
+      // descreve o aparelho — pedir a câmera "errada" não é o problema.
+      return Promise.reject(lastError || new Error("Nenhuma câmera disponível."));
+    }
+    var candidate = chain[index];
+    var video = baseVideoConstraints();
+    if (candidate.constraint) video.facingMode = candidate.constraint;
+    return navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: video,
+    }).then(function (mediaStream) {
+      lastFacingAttempt = candidate.label;
+      return mediaStream;
+    }).catch(function (error) {
+      var name = error && error.name;
+      if (isCameraBusy(name)) {
+        // Câmera ocupada por outro app ou por outra aba publicando. Cair para a
+        // outra câmera aqui publicaria a imagem errada **sem o operador
+        // perceber** — pior que falhar. Erro fatal, com a causa em português.
+        throw cameraBusyError(candidate.facing);
+      }
+      var retriable = name === "OverconstrainedError" ||
+        name === "ConstraintNotSatisfiedError" || name === "NotFoundError";
+      if (!retriable) throw error;
+      return tryFacingCandidate(chain, index + 1, error);
+    });
+  }
+
+  /**
+   * Pedido por `deviceId`: o único que amarra a câmera física.
+   *
+   * Duas tentativas de propósito. A primeira mantém os tetos do caminho normal
+   * (escolher o dispositivo não muda a qualidade pedida). Se ela falhar com
+   * `OverconstrainedError`, **não dá para concluir que o id morreu**: o conflito
+   * pode ser do teto de 720p/16:9 com o que aquele sensor oferece. A segunda
+   * tentativa pede o mesmo dispositivo com resolução só `ideal` — sem `max`, sem
+   * `aspectRatio` — e, se essa também falhar, aí sim a preferência é descartada
+   * e a página volta para a cadeia de `facingMode`.
+   */
+  function tryDeviceCandidate(deviceId, facing) {
+    var video = baseVideoConstraints();
+    video.deviceId = { exact: deviceId };
+    return navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: video,
+    }).then(function (mediaStream) {
+      lastFacingAttempt = deviceAttemptLabel(deviceId, "");
+      return mediaStream;
+    }).catch(function (error) {
+      var name = error && error.name;
+      if (isCameraBusy(name)) throw cameraBusyError(facing);
+      if (name === "NotFoundError") {
+        return discardDevicePreference(name, facing, error);
+      }
+      if (name !== "OverconstrainedError" &&
+          name !== "ConstraintNotSatisfiedError") {
+        throw error;
+      }
+      // Segunda chance: mesmo aparelho, resolução sem teto rígido. `ideal`
+      // ainda pede 720p — o aparelho que não aceita entrega o que tem, e o
+      // encoder do celular (2,5 Mbps) e o `nvstreammux` (1280×720) fecham a
+      // conta adiante.
+      return navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          deviceId: { exact: deviceId },
+          width: { ideal: TARGET_WIDTH },
+          height: { ideal: TARGET_HEIGHT },
+          frameRate: { ideal: TARGET_FPS },
+        },
+      }).then(function (mediaStream) {
+        lastFacingAttempt = deviceAttemptLabel(deviceId, " sem teto rígido");
+        return mediaStream;
+      }).catch(function (secondError) {
+        var secondName = secondError && secondError.name;
+        if (isCameraBusy(secondName)) throw cameraBusyError(facing);
+        if (secondName === "OverconstrainedError" ||
+            secondName === "ConstraintNotSatisfiedError" ||
+            secondName === "NotFoundError") {
+          return discardDevicePreference(secondName, facing, error);
+        }
+        throw secondError;
+      });
+    });
+  }
+
+  /** Texto da linha "câmera pedida" para o caminho por `deviceId`. */
+  function deviceAttemptLabel(deviceId, sufixo) {
+    var label = deviceLabels[deviceId];
+    return "deviceId " + shortDeviceId(deviceId) +
+      (label ? " (" + label + ")" : "") + (sufixo || "");
+  }
+
+  /**
+   * Id que não serve mais: limpa a preferência e volta para `facingMode`.
+   *
+   * Descartar é melhor que falhar: um `deviceId` de outra sessão/aparelho não
+   * pode impedir a captura. O diagnóstico diz que descartou e por quê — se
+   * acontecer sempre, o problema é do sensor, não da página.
+   */
+  function discardDevicePreference(name, facing, originalError) {
+    saveStoredDevice("");
+    if (el.device) el.device.value = "";
+    setText("r-device", "preferência descartada (" + (name || "erro") + ")");
+    return tryFacingCandidate(facingChain(facing), 0, originalError);
+  }
+
   function requestDevice() {
     if (!window.isSecureContext) {
       return Promise.reject(new Error(
@@ -383,25 +795,71 @@
         "Este navegador não expõe navigator.mediaDevices. Use o Chrome do Android " +
         "em contexto seguro (HTTPS)."));
     }
-    return navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: {
-        // `ideal` sozinho não é teto: o aparelho podia entregar 1080p e o
-        // encoder gastar banda à toa (o pedido tem de ser cumprido como
-        // limite). `max` fecha o teto sem exigir o valor exato — `exact`
-        // derrubaria aparelhos que não têm 720p.
-        width: { ideal: TARGET_WIDTH, max: TARGET_WIDTH },
-        height: { ideal: TARGET_HEIGHT, max: TARGET_HEIGHT },
-        frameRate: { ideal: TARGET_FPS },
-      },
-    });
+    var facing = chosenFacing();
+    var deviceId = readStoredDevice();
+    if (!deviceId) return tryFacingCandidate(facingChain(facing), 0, null);
+    // Lista já carregada e o id não está nela: preferência morta. Não vale
+    // gastar um `getUserMedia` que só pode terminar em `OverconstrainedError`.
+    if (el.device && el.device.options.length > 1 &&
+        !deviceOptionExists(deviceId)) {
+      saveStoredDevice("");
+      el.device.value = "";
+      setText("r-device", "preferência descartada (aparelho não está na lista)");
+      return tryFacingCandidate(facingChain(facing), 0, null);
+    }
+    return tryDeviceCandidate(deviceId, facing);
+  }
+
+  /**
+   * Câmera a pedir agora: o seletor manda, o `localStorage` é o fallback.
+   *
+   * O seletor é **preferência do operador**, e nunca é escrito pelo código: se
+   * o `getUserMedia` cair para outra câmera, quem conta a verdade são as linhas
+   * "câmera pedida" e "câmera (getSettings)" do diagnóstico. Reescrever o
+   * controle com o resultado faria a próxima captura pedir a câmera do fallback
+   * como se o operador tivesse escolhido ela.
+   */
+  function chosenFacing() {
+    if (el.facing) {
+      var value = el.facing.value;
+      if (value === "user" || value === "environment") return value;
+    }
+    return readFacing();
+  }
+
+  /**
+   * Retrato = o frame que vai ser publicado tem altura maior que largura.
+   *
+   * A fonte é `getSettings()` da trilha, não `screen.orientation`: com o
+   * aparelho deitado o navegador pode continuar entregando o frame girado, e
+   * quem sofre o reescalonamento é o frame, não a tela.
+   */
+  function isPortrait(settings) {
+    return !!(settings && settings.width && settings.height &&
+      settings.height > settings.width);
+  }
+
+  /** Trava/destrava os seletores de câmera (troca só entre capturas). */
+  function setFacingLocked(locked) {
+    controlsLocked = !!locked;
+    if (el.facing) el.facing.disabled = controlsLocked;
+    if (el.facingNote) el.facingNote.classList.toggle("hidden", !controlsLocked);
+    // O seletor de dispositivo segue a mesma regra: a escolha só vale no próximo
+    // início. Antes da primeira permissão ele tem só "automática", que é
+    // exatamente o comportamento antigo — por isso não precisa nascer travado.
+    if (el.device) el.device.disabled = controlsLocked;
+    if (el.deviceNote) el.deviceNote.classList.toggle("hidden", !controlsLocked);
   }
 
   function start() {
     clearError();
     setStatus("abrindo a câmera…", "busy");
     el.btnStart.disabled = true;
+    // Trava antes do `getUserMedia`: trocar o seletor no meio do pedido abriria
+    // uma câmera diferente da que o operador acha que escolheu.
+    setFacingLocked(true);
     bitrateCap = null;
+    lastFacingAttempt = null;
     setText("r-cap", "não tentado");
 
     requestDevice().then(function (mediaStream) {
@@ -419,8 +877,26 @@
         throw new Error("A câmera não entregou nenhuma trilha de vídeo.");
       }
       var settings = track.getSettings ? track.getSettings() : {};
+      // "aparelho" é o `deviceId` efetivo: se o operador escolheu um aparelho
+      // com `facing back` e esta linha mostra outro, o pedido não foi cumprido
+      // (sensor/Chrome) — não é a página.
+      setText("r-device", describeDevice(settings.deviceId));
+      // A lista de dispositivos só fica completa depois da permissão: remonta
+      // aqui, já com a trilha ativa selecionada. Sem `enumerateDevices` a
+      // promise resolve `false` e nada muda.
+      refreshDeviceList(settings.deviceId);
+      // "câmera (getSettings)" agora diz também **qual** câmera o aparelho
+      // escolheu: a linha existe para separar pedido de realidade.
       setText("r-cam", formatRes(settings.width, settings.height) + " · " +
-        formatFps(settings.frameRate));
+        formatFps(settings.frameRate) + " · " + facingLabel(settings.facingMode));
+      setText("r-facing", lastFacingAttempt || "—");
+      setText("r-orient", isPortrait(settings) ? "retrato" : "paisagem");
+      if (isPortrait(settings)) {
+        // Aviso, não gate: o pipeline recebe a imagem esticada, e é melhor
+        // gravar assim do que não gravar. O banner (e não `setStatus`) porque o
+        // estado é sobrescrito por `connectionstatechange` em segundos.
+        showWarning(PORTRAIT_MESSAGE);
+      }
 
       pc = new RTCPeerConnection({ iceServers: [] });
       pc.addTrack(track, mediaStream);
@@ -545,6 +1021,8 @@
     setStatus("falhou", "bad");
     el.btnStart.disabled = false;
     el.btnStop.disabled = true;
+    // Falhou: não há captura para trocar, o seletor volta a valer.
+    setFacingLocked(false);
     published = false;
     stopStats();
     var openResource = resourceUrl;
@@ -580,6 +1058,10 @@
     stopStats();
     el.btnStart.disabled = false;
     el.btnStop.disabled = true;
+    setFacingLocked(false);
+    // O aviso de retrato é sobre a captura que acabou: deixá-lo na tela depois
+    // de "Encerrar" faria o operador procurar um problema que já não existe.
+    clearError();
     setText("r-out-res", "—");
     setText("r-out-fps", "—");
     setText("r-bitrate", "—");
@@ -613,6 +1095,9 @@
     stream = null;
     if (el.preview) el.preview.srcObject = null;
     setText("r-cam", "—");
+    setText("r-device", "—");
+    setText("r-facing", "—");
+    setText("r-orient", "—");
   }
 
   /* ---------------------------------------------------------------- *
@@ -625,6 +1110,41 @@
     el.btnStart = $("btn-start");
     el.btnStop = $("btn-stop");
     el.preview = $("preview");
+    el.facing = $("facing");
+    el.facingNote = $("facing-note");
+    el.device = $("device");
+    el.deviceNote = $("device-note");
+
+    // Selo de versão: é o que prova, no celular, qual `capture.js` o aparelho
+    // carregou (bind mount + cache do Chrome tornam a dúvida real). Também no
+    // console, para quando o rodapé está apertado em paisagem.
+    setText("build-line", "capture.js " + CAPTURE_VERSION);
+    console.info("capture.js " + CAPTURE_VERSION);
+
+    // Seletor de câmera: o valor gravado volta antes de qualquer captura; a
+    // gravação acontece só na escolha do operador (troca programática não é
+    // preferência dele).
+    if (el.facing) {
+      el.facing.value = readFacing();
+      el.facing.addEventListener("change", function () {
+        // `change` com o controle travado não é escolha do operador (é o
+        // código escrevendo): gravar aqui transformaria o fallback de uma
+        // captura na preferência da próxima.
+        if (el.facing.disabled) return;
+        saveFacing(el.facing.value === "user" ? "user" : "environment");
+      });
+    }
+    // Seletor de dispositivo: a escolha gravada vale já no próximo start. A
+    // lista nasce vazia (o Chrome só revela os aparelhos depois da permissão) e
+    // é remontada em `refreshDeviceList`. Mesma regra do `facing`: programático
+    // não grava.
+    if (el.device) {
+      el.device.addEventListener("change", function () {
+        if (el.device.disabled) return;
+        saveStoredDevice(el.device.value || "");
+      });
+    }
+    setFacingLocked(false);
 
     setText("r-whip", whipUrl() || "path inválido — verifique o campo");
     // Host derivado da origem (M6): a página vale por IP da LAN e por
@@ -648,7 +1168,7 @@
         "com a CA instalada no aparelho.");
     }
     setText("r-req", formatRes(TARGET_WIDTH, TARGET_HEIGHT) + " · " +
-      formatFps(TARGET_FPS) + " (ideal, com teto)");
+      formatFps(TARGET_FPS) + " · paisagem 16:9 (ideal, com teto)");
 
     var capabilities = window.CodecGate.defaultGetCapabilities();
     if (!capabilities) {
@@ -683,6 +1203,7 @@
   // Exposto para inspeção no console do aparelho e para o autoteste da página
   // irmã não duplicar a lógica de estatística.
   window.CapturePage = {
+    version: CAPTURE_VERSION,
     streamStatsFrom: streamStatsFrom,
     resolveResourceUrl: resolveResourceUrl,
     whipUrl: whipUrl,
