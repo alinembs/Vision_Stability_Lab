@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent / "backend"
@@ -293,6 +295,151 @@ class StateTest(unittest.TestCase):
             with self._env(SOURCES_CONFIG=missing), self._routes():
                 ids = {entry["id"] for entry in asyncio.run(backend.api_sources())}
                 self.assertEqual(ids, {"camera", "legacy"})
+
+
+@unittest.skipIf(backend is None,
+                 "fastapi não instalado no host; rode no container vision-dashboard")
+class ObserverStateTest(unittest.TestCase):
+    """`observer_state.json` no snapshot e sonda por fonte em `/api/sources`.
+
+    O arquivo é do watchdog e o dashboard só lê (mount `:ro`). Nenhum caso
+    pode virar erro de rota: observador ausente é informação, não falha.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state_path = Path(self.tmp.name) / "observer_state.json"
+        self.config = Path(self.tmp.name) / "sources.yaml"
+        self.config.write_text(YAML_TEXT, encoding="utf-8")
+
+        self._prev_file = backend.OBSERVER_STATE_FILE
+        self._prev_age = backend.OBSERVER_STATE_MAX_AGE_S
+        backend.OBSERVER_STATE_FILE = self.state_path
+        backend.OBSERVER_STATE_MAX_AGE_S = 120.0
+        backend._observer_cache.update({"key": None, "payload": None})
+        self.addCleanup(self._restore_observer)
+
+        self._env = {key: os.environ.get(key)
+                     for key in ("SOURCES_CONFIG", "MTX_HOST", "RTSP_URI")}
+        self.addCleanup(self._restore_env)
+        os.environ["SOURCES_CONFIG"] = str(self.config)
+
+        self.state = backend.DashboardState()
+
+    def _restore_observer(self) -> None:
+        backend.OBSERVER_STATE_FILE = self._prev_file
+        backend.OBSERVER_STATE_MAX_AGE_S = self._prev_age
+        backend._observer_cache.update({"key": None, "payload": None})
+
+    def _restore_env(self) -> None:
+        for key, value in self._env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def _write_state(self, **overrides) -> None:
+        payload = {
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "mode": "watching",
+            "mode_reason": "fontes_ok",
+            "last_action": "none",
+            "last_action_ts": None,
+            "sources_probe": {
+                "camera": {"alive": True, "level": 0, "reason": "ok",
+                           "checked_at": "2026-11-07T12:00:00+00:00"},
+            },
+        }
+        payload.update(overrides)
+        self.state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    @contextlib.contextmanager
+    def _routes(self):
+        previous = backend.state
+        backend.state = self.state
+        try:
+            yield
+        finally:
+            backend.state = previous
+
+    def test_snapshot_sem_observador_nao_quebra(self) -> None:
+        observer = self.state.snapshot()["observer"]
+
+        self.assertFalse(observer["available"])
+        self.assertIsNotNone(observer["reason"])
+        self.assertEqual(observer["sources_probe"], {})
+        self.assertIsNone(observer["mode"])
+
+    def test_snapshot_com_observador_valido(self) -> None:
+        self._write_state()
+
+        observer = self.state.snapshot()["observer"]
+
+        self.assertTrue(observer["available"])
+        self.assertEqual(observer["mode"], "watching")
+        self.assertEqual(observer["mode_reason"], "fontes_ok")
+        self.assertEqual(observer["last_action"], "none")
+        self.assertIsNone(observer["reason"])
+        self.assertLess(observer["age_s"], 120)
+        self.assertTrue(observer["sources_probe"]["camera"]["alive"])
+
+    def test_estado_velho_nao_e_confiavel(self) -> None:
+        velho = datetime.now(timezone.utc) - timedelta(minutes=10)
+        self._write_state(ts=velho.isoformat(timespec="seconds"))
+
+        observer = self.state.snapshot()["observer"]
+
+        self.assertFalse(observer["available"])
+        self.assertIn("velho", observer["reason"])
+        self.assertGreater(observer["age_s"], 120)
+
+    def test_json_parcial_nao_e_observador(self) -> None:
+        self._write_state(sources_probe={})
+        self.state_path.write_text(json.dumps({
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }), encoding="utf-8")
+
+        observer = self.state.snapshot()["observer"]
+        self.assertFalse(observer["available"])
+        self.assertIn("mode", observer["reason"])
+
+    def test_json_corrompido_nao_levanta(self) -> None:
+        self.state_path.write_text("{nao-json", encoding="utf-8")
+
+        observer = self.state.snapshot()["observer"]
+        self.assertFalse(observer["available"])
+        self.assertIn("ilegível", observer["reason"])
+
+    def test_api_sources_usa_probe_do_observador(self) -> None:
+        self._write_state()
+        self.state.apply(metric("camera", "E1", "2026-11-01T10:00:00+00:00"))
+
+        with self._routes():
+            payload = asyncio.run(backend.api_sources())
+
+        by_id = {entry["id"]: entry for entry in payload}
+        self.assertEqual(by_id["camera"]["observer_probe"], {
+            "status": "measured",
+            "alive": True,
+            "level": 0,
+            "reason": "ok",
+            "checked_at": "2026-11-07T12:00:00+00:00",
+        })
+        # observador vivo, mas sem sonda desta fonte: não é "morta"
+        self.assertEqual(by_id["drone"]["observer_probe"],
+                         {"status": "nao_sondada"})
+
+    def test_api_sources_sem_observador_nao_afirma_fonte_morta(self) -> None:
+        self.state.apply(metric("camera", "E1", "2026-11-01T10:00:00+00:00"))
+
+        with self._routes():
+            payload = asyncio.run(backend.api_sources())
+
+        for entry in payload:
+            self.assertEqual(entry["observer_probe"],
+                             {"status": "sem observador"})
+            self.assertNotIn("alive", entry["observer_probe"])
 
 
 if __name__ == "__main__":

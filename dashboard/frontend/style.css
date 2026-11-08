@@ -541,7 +541,7 @@ a { color: var(--accent); }
   /* Só duas linhas são elásticas: a do vídeo (que cede espaço primeiro) e a do
      log. Com o frame em 16/9 fixo, o painel de vídeo empurrava o log para
      fora da tela em 1440×900 — a página tem de caber sem rolagem. */
-  grid-template-rows: auto minmax(210px, 1.35fr) auto minmax(140px, 1fr);
+  grid-template-rows: auto minmax(210px, 1.35fr) auto auto minmax(140px, 1fr);
   gap: 14px;
   padding: 16px 22px 14px;
   overflow-y: auto;
@@ -572,7 +572,8 @@ a { color: var(--accent); }
 .health-card { grid-column: 10 / span 3; grid-row: 2; }
 .chart-fps-panel { grid-column: 1 / span 6; grid-row: 3; }
 .chart-rss-panel { grid-column: 7 / span 6; grid-row: 3; }
-.events-panel { grid-column: 1 / -1; grid-row: 4; min-height: 140px; }
+.observer-panel { grid-column: 1 / -1; grid-row: 4; }
+.events-panel { grid-column: 1 / -1; grid-row: 5; min-height: 140px; }
 
 .panel-head {
   display: flex;
@@ -771,6 +772,58 @@ a { color: var(--accent); }
   color: var(--dim);
 }
 
+/* ---------- observador de fontes ---------- */
+
+/* Sem `min-height`: cartão curto para conteúdo curto. O painel é uma linha
+   full-width (grid-row 4) e não disputa altura com os cartões de cima. */
+.observer-probe-row { align-items: center; flex-wrap: wrap; }
+.observer-probes {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: 0;
+}
+.observer-probes .observer-probe {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--panel-2);
+  color: var(--dim);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.observer-probes .observer-probe-name { color: inherit; }
+.observer-probes .observer-probe-state {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: .02em;
+  color: inherit;
+}
+.observer-probes .observer-probe.alive {
+  background: var(--accent-soft);
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+.observer-probes .observer-probe.dead {
+  background: var(--bad-soft);
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.observer-probes .observer-probe.unknown {
+  background: var(--panel-2);
+  border-color: var(--line);
+  color: var(--dim);
+}
+.observer-probes .observer-probe-empty {
+  color: var(--faint);
+  font-size: 11px;
+}
+
 /* ---------- eventos ---------- */
 
 .events {
@@ -962,8 +1015,9 @@ li.ev-error::before { background: var(--bad); }
   .health-card { grid-column: 4 / span 3; grid-row: 3; }
   .chart-fps-panel { grid-column: 1 / span 3; grid-row: 4; }
   .chart-rss-panel { grid-column: 4 / span 3; grid-row: 4; }
-  .events-panel { grid-row: 5; }
-  .content { grid-template-rows: auto auto auto auto minmax(140px, 1fr); }
+  .observer-panel { grid-column: 1 / -1; grid-row: 5; }
+  .events-panel { grid-row: 6; }
+  .content { grid-template-rows: auto auto auto auto auto minmax(140px, 1fr); }
 }
 
 @media (max-width: 980px) {
@@ -989,7 +1043,8 @@ li.ev-error::before { background: var(--bad); }
   .state-card,
   .health-card,
   .chart-fps-panel,
-  .chart-rss-panel { grid-column: 1 / -1; grid-row: auto; }
+  .chart-rss-panel,
+  .observer-panel { grid-column: 1 / -1; grid-row: auto; }
   .events-panel { grid-row: auto; min-height: 240px; }
 }
 
@@ -1001,8 +1056,8 @@ li.ev-error::before { background: var(--bad); }
   .side-status { flex-direction: column; align-items: flex-start; }
 }
 
-/* Só o layout de 12 colunas tem 4 linhas: abaixo de 1180px o conteúdo empilha
-   em 5 linhas e este template de 4 reinaria sobre ele (o vídeo invadia a linha
+/* Só o layout de 12 colunas tem 5 linhas: abaixo de 1180px o conteúdo empilha
+   em 6 linhas e este template reinaria sobre ele (o vídeo invadia a linha
    de estado). Por isso o piso de 1181px. */
 @media (max-height: 920px) and (min-width: 1181px) {
   .content {
@@ -1010,7 +1065,7 @@ li.ev-error::before { background: var(--bad); }
     padding: 12px 18px 10px;
     /* piso na linha do vídeo: em 768 px de altura o frame não pode virar uma
        faixa de 150 px — aí a página rola alguns pixels em vez de achatar */
-    grid-template-rows: auto minmax(268px, 1.3fr) auto minmax(120px, 1fr);
+    grid-template-rows: auto minmax(268px, 1.3fr) auto auto minmax(120px, 1fr);
   }
   .stats { gap: 10px; }
   .stat { padding: 10px 12px; }

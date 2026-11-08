@@ -14,7 +14,10 @@
  * O que ele cobre (28 verificações): render dos cartões, "ativar" só em fonte
  * trocável, token em `sessionStorage` e fora do DOM, confirmação antes do
  * `POST`, header `X-Switch-Token`, banner de andamento, polling até concluir,
- * confirmação negada sem `POST` e 401 limpando o token.
+ * confirmação negada sem `POST` e 401 limpando o token. Depois disso, o painel
+ * do observador de fontes (E7): "sem observador", lâmpadas de
+ * `standby_no_sources`/`watching`, chips da sonda e o nível escondido no
+ * `title` (D2/D3 de `docs/plans/2026-11-08-frontend-observador-vsl.md`).
  */
 "use strict";
 
@@ -67,7 +70,15 @@ const { window } = dom;
 const ctx = new Proxy({}, { get: () => () => {} });
 window.HTMLCanvasElement.prototype.getContext = () => ctx;
 window.confirm = (msg) => { calls.push(["confirm", msg]); return window.__confirmAnswer ?? true; };
-window.WebSocket = class { constructor() { this.readyState = 0; } send() {} close() {} };
+// O app abre `new WebSocket(...)` no boot. Guardar a instância é como este
+// teste entrega um snapshot: o `app.js` roda em eval estrito, então as funções
+// dele NÃO ficam globais (`window.renderSnapshot` é `undefined`).
+const sockets = [];
+window.WebSocket = class {
+  constructor() { this.readyState = 0; sockets.push(this); }
+  send() {}
+  close() {}
+};
 window.fetch = async (url, options = {}) => {
   const method = options.method || "GET";
   calls.push([method, url, options.headers || null, options.body || null]);
@@ -109,6 +120,11 @@ const check = (name, condition, detail = "") => results.push([name, !!condition,
 const cards = () => [...window.document.querySelectorAll(".source-card")];
 const activators = () => [...window.document.querySelectorAll(".source-activate")];
 const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
+// Snapshot entra pela mesma porta do backend: o `onmessage` do WebSocket.
+const pushSnapshot = (snap) => {
+  const ws = sockets[sockets.length - 1];
+  ws.onmessage({ data: JSON.stringify({ type: "snapshot", data: snap }) });
+};
 
 (async () => {
   await tick(20);
@@ -179,7 +195,131 @@ const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
   check("lista de fontes recarregada após concluir",
         calls.filter(([m, u]) => m === "GET" && u.startsWith("/api/sources")).length >= 2);
 
-  // 5) confirmação negada não dispara POST
+  // 5) painel do observador de fontes (E7)
+  const modeEl = window.document.getElementById("observer-mode");
+  const observerLamp = window.document.getElementById("lamp-observer");
+  const reasonEl = window.document.getElementById("observer-reason");
+  const actionEl = window.document.getElementById("observer-action");
+  const ageEl = window.document.getElementById("observer-age");
+  const probesEl = window.document.getElementById("observer-probes");
+  const probeChips = () => [...probesEl.querySelectorAll(".observer-probe")];
+
+  const observerSnap = (observer) => ({
+    server_time: "2026-11-08T12:00:00Z",
+    health: { status: "healthy" },
+    source: { id: "camera" },
+    latest_metrics: null,
+    pipeline_started_at: null,
+    preview_transport: null,
+    error_count: 0,
+    last_error: null,
+    events_recent: [],
+    observer,
+  });
+
+  // 5a) sem observador: informa o motivo, amarelo, sem inventar valores
+  const semObservador = {
+    available: false, mode: null, mode_reason: null, last_action: null,
+    last_action_ts: null, ts: null, age_s: null, sources_probe: {},
+    reason: "observer_state.json indisponível (FileNotFoundError)",
+  };
+  pushSnapshot(observerSnap(semObservador));
+  await tick(5);
+  check("observador: painel e lâmpada existem no HTML",
+        !!modeEl && !!observerLamp && !!probesEl);
+  check("observador: available=false diz 'sem observador'",
+        modeEl.textContent.includes("sem observador"), modeEl.textContent);
+  check("observador: motivo do available=false vai no cartão",
+        reasonEl.textContent.includes("indisponível"), reasonEl.textContent);
+  check("observador: available=false -> lâmpada warn (nunca off)",
+        observerLamp.classList.contains("warn") &&
+        !observerLamp.classList.contains("on") &&
+        !observerLamp.classList.contains("off"), observerLamp.className);
+  check("observador: title da lâmpada carrega o motivo",
+        observerLamp.title.includes("indisponível"), observerLamp.title);
+
+  // 5b) standby com available=true é estado esperado: lâmpada VERDE (D3)
+  pushSnapshot(observerSnap({
+    available: true, mode: "standby_no_sources", mode_reason: "nenhuma fonte ativa",
+    last_action: "none", last_action_ts: null, ts: "2026-11-08T12:00:00Z",
+    age_s: 3.2, sources_probe: {}, reason: null,
+  }));
+  await tick(5);
+  check("observador: standby_no_sources -> lâmpada on (D3)",
+        observerLamp.classList.contains("on"), observerLamp.className);
+  check("observador: standby traduzido",
+        modeEl.textContent === "standby — sem fonte ativa", modeEl.textContent);
+  check("observador: last_action 'none' -> '— nenhuma'",
+        actionEl.textContent === "— nenhuma", actionEl.textContent);
+  check("observador: retrato mostra a idade",
+        ageEl.textContent === "há 3s", ageEl.textContent);
+
+  // 5c) watching também é verde
+  pushSnapshot(observerSnap({
+    available: true, mode: "watching", mode_reason: "câmera viva há 12s",
+    last_action: "switch_completed", last_action_ts: "2026-11-08T11:59:00Z",
+    ts: "2026-11-08T12:00:00Z", age_s: 1.4, sources_probe: {}, reason: null,
+  }));
+  await tick(5);
+  check("observador: watching -> lâmpada on",
+        observerLamp.classList.contains("on"), observerLamp.className);
+  check("observador: motivo do modo no cartão",
+        reasonEl.textContent === "câmera viva há 12s", reasonEl.textContent);
+
+  // 5d) sonda por fonte: 1 vivo, 1 morto, 1 não sondada
+  const probesSnap = observerSnap({
+    available: true, mode: "watching", mode_reason: "acompanhando fontes",
+    last_action: "switch_completed", last_action_ts: "2026-11-08T12:00:00Z",
+    ts: "2026-11-08T12:00:00Z", age_s: 2, reason: null,
+    sources_probe: {
+      phone: { alive: null, level: null, reason: null, checked_at: null },
+      camera: { alive: true, level: 2, reason: null, checked_at: null },
+      drone: { alive: false, level: 1, reason: "timeout no DESCRIBE",
+               checked_at: null },
+    },
+  });
+  pushSnapshot(probesSnap);
+  await tick(5);
+  check("observador: um chip por fonte sondada", probeChips().length === 3,
+        `chips=${probeChips().length}`);
+  check("observador: chips ordenados por id",
+        probeChips().map((c) => c.dataset.probe).join(",") === "camera,drone,phone",
+        probeChips().map((c) => c.dataset.probe).join(","));
+  check("observador: 1 vivo, 1 morto, 1 não sondada",
+        probeChips().filter((c) => c.classList.contains("alive")).length === 1 &&
+        probeChips().filter((c) => c.classList.contains("dead")).length === 1 &&
+        probeChips().filter((c) => c.classList.contains("unknown")).length === 1,
+        probeChips().map((c) => c.className).join(" | "));
+  check("observador: chip usa o nome da fonte e o estado em português",
+        probeChips()[0].textContent.includes("câmera fixa") &&
+        probeChips()[0].textContent.includes("vivo") &&
+        probeChips()[2].textContent.includes("não sondada"),
+        probeChips()[0].textContent);
+  const probeText = probeChips().map((c) => c.textContent).join(" ");
+  check("observador: nível 1/2 não aparece no texto visível (D2)",
+        !/n[íi]vel/i.test(probeText), probeText);
+  check("observador: level vai no title do chip (D2)",
+        probeChips()[0].title.includes("nível 2") &&
+        probeChips()[1].title.includes("nível 1") &&
+        probeChips()[1].title.includes("timeout no DESCRIBE"),
+        probeChips()[1].title);
+
+  // 5e) mesmo payload não reescreve o painel (aria-live não tagarela)
+  const chipBefore = probeChips()[0];
+  pushSnapshot(probesSnap);
+  await tick(5);
+  check("observador: snapshot idêntico não reescreve os chips",
+        probeChips()[0] === chipBefore);
+
+  // 5f) sem observador não apaga o resto da tela
+  const cardsBefore = cards().length;
+  pushSnapshot(observerSnap(semObservador));
+  await tick(5);
+  check("observador: available=false preserva os cartões de fonte",
+        cardsBefore === 4 && cards().length === 4,
+        `antes=${cardsBefore} depois=${cards().length}`);
+
+  // 6) confirmação negada não dispara POST
   calls.length = 0;
   window.__confirmAnswer = false;
   activators().find((b) => b.dataset.activate === "drone")?.click();
@@ -187,7 +327,7 @@ const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
   check("confirmação negada não faz POST",
         !calls.some(([m, u]) => m === "POST" && u.includes("/api/source/switch")));
 
-  // 6) token recusado limpa a sessão e reabre o formulário
+  // 7) token recusado limpa a sessão e reabre o formulário
   calls.length = 0;
   window.fetch = async (url, options = {}) => {
     const method = options.method || "GET";

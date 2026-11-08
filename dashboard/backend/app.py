@@ -54,6 +54,139 @@ EVENTS_HISTORY_MAX = int(os.environ.get("EVENTS_HISTORY_MAX", "500"))
 POLL_INTERVAL_S = float(os.environ.get("TAIL_POLL_S", "0.5"))
 STALE_AFTER_S = float(os.environ.get("STALE_AFTER_S", "90"))
 
+# Retrato do observador de fontes (E7). O Compose monta `../data` como `:ro`
+# no dashboard: daqui só se lê, nunca se escreve. O caminho é configurável
+# para o host/teste, onde `data/` está no checkout e não em `/app`.
+OBSERVER_STATE_FILE = Path(os.environ.get(
+    "OBSERVER_STATE_FILE", "/app/data/config/observer_state.json"))
+# O watchdog reescreve o arquivo a cada ciclo (~10 s). 120 s tolera alguns
+# ciclos perdidos (Docker lento, host sob carga) sem desconfiar de um
+# observador vivo; acima disso o retrato é velho demais para afirmar "fonte
+# viva" ou "fonte morta" — melhor dizer que não há observador confiável.
+OBSERVER_STATE_MAX_AGE_S = float(
+    os.environ.get("OBSERVER_STATE_MAX_AGE_S", "120"))
+
+# Cache do último retrato lido: indexado por (caminho, mtime, tamanho), então
+# uma escrita nova do watchdog é vista na hora e o arquivo não é relido em
+# cada requisição (o `/ws` e a tela pedem snapshot com frequência).
+_observer_cache: Dict[str, Any] = {"key": None, "payload": None}
+
+
+def _observer_unavailable(reason: str, age_s: Optional[float] = None,
+                          ts: Optional[str] = None) -> Dict[str, object]:
+    """Retrato neutro de "sem observador": mesmas chaves, nada inventado.
+
+    `available: false` existe para a tela poder dizer "sem observador" em vez
+    de mostrar valores de ontem como se fossem atuais.
+    """
+    return {
+        "available": False,
+        "mode": None,
+        "mode_reason": None,
+        "last_action": None,
+        "last_action_ts": None,
+        "ts": ts,
+        "age_s": age_s,
+        "sources_probe": {},
+        "reason": reason,
+    }
+
+
+def read_observer_state() -> Dict[str, object]:
+    """Lê `observer_state.json` sem nunca levantar (HTTP 200 sempre).
+
+    Arquivo ausente, ilegível, JSON parcial ou `ts` velho viram
+    `available: false` com o motivo em `reason`. O observador é informação
+    **aditiva**: se ele quebrar, o snapshot de telemetria continua valendo.
+    """
+    try:
+        info = OBSERVER_STATE_FILE.stat()
+        key = (str(OBSERVER_STATE_FILE), info.st_mtime_ns, info.st_size)
+    except OSError as exc:
+        _observer_cache["key"] = None
+        return _observer_unavailable(
+            f"observer_state.json indisponível ({exc.__class__.__name__})")
+
+    if _observer_cache["key"] == key and _observer_cache["payload"] is not None:
+        return dict(_observer_cache["payload"])
+
+    def _remember(payload: Dict[str, object]) -> Dict[str, object]:
+        _observer_cache["key"] = key
+        _observer_cache["payload"] = payload
+        return dict(payload)
+
+    try:
+        with open(OBSERVER_STATE_FILE, encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        return _remember(_observer_unavailable(
+            f"observer_state.json ilegível ({exc.__class__.__name__})"))
+    if not isinstance(raw, dict):
+        return _remember(_observer_unavailable(
+            "observer_state.json não é um objeto JSON"))
+
+    ts = raw.get("ts")
+    age: Optional[float] = None
+    if isinstance(ts, str):
+        try:
+            parsed = datetime.fromisoformat(ts)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            age = round(
+                (datetime.now(timezone.utc) - parsed).total_seconds(), 1)
+        except ValueError:
+            ts = None
+    if age is None:
+        return _remember(_observer_unavailable(
+            "observer_state.json sem `ts` utilizável"))
+    if age > OBSERVER_STATE_MAX_AGE_S:
+        return _remember(_observer_unavailable(
+            f"estado do observador velho (há {int(age)}s)", age_s=age, ts=ts))
+    # JSON parcial (sem `mode`) não descreve modo nenhum: não dá para dizer
+    # "observador disponível" sem ele.
+    if not isinstance(raw.get("mode"), str) or not raw.get("mode"):
+        return _remember(_observer_unavailable(
+            "observer_state.json sem `mode`", age_s=age, ts=ts))
+
+    probes = raw.get("sources_probe")
+    return _remember({
+        "available": True,
+        "mode": raw.get("mode"),
+        "mode_reason": raw.get("mode_reason"),
+        "last_action": raw.get("last_action"),
+        "last_action_ts": raw.get("last_action_ts"),
+        "ts": ts,
+        "age_s": age,
+        "sources_probe": probes if isinstance(probes, dict) else {},
+        "reason": None,
+    })
+
+
+def observer_probe(source_id: str,
+                   observer: Optional[Dict[str, object]] = None
+                   ) -> Dict[str, object]:
+    """Sonda de uma fonte para `/api/sources`.
+
+    Sem observador disponível (arquivo ausente/velho) o status é
+    `"sem observador"` e **não** há `alive`: `alive: false` afirmaria "fonte
+    morta" sem ninguém ter medido. Com observador vivo mas sem sonda desta
+    fonte, `"nao_sondada"` — de novo, ausência de medição não é morte.
+    """
+    if observer is None:
+        observer = read_observer_state()
+    if not observer.get("available"):
+        return {"status": "sem observador"}
+    probe = (observer.get("sources_probe") or {}).get(source_id)
+    if not isinstance(probe, dict):
+        return {"status": "nao_sondada"}
+    return {
+        "status": "measured",
+        "alive": probe.get("alive"),
+        "level": probe.get("level"),
+        "reason": probe.get("reason"),
+        "checked_at": probe.get("checked_at"),
+    }
+
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 
@@ -247,6 +380,10 @@ class DashboardState:
             # lista de eventos também restrita à execução atual
             "events_recent": [e for e in self.events
                               if e.get("run") == self.current_run][-50:],
+            # Observador de fontes (E7): campo aditivo — clientes antigos
+            # ignoram; se o arquivo do watchdog faltar, vem `available: false`
+            # em vez de erro, porque telemetria e observador são independentes.
+            "observer": read_observer_state(),
         }
 
 
@@ -337,6 +474,8 @@ async def api_sources():
     """
     catalog = load_catalog()
     known = {str(entry["id"]) for entry in catalog}
+    # Uma leitura por requisição (com cache interno) para todas as fontes.
+    observer = read_observer_state()
     payload = []
     for entry in catalog:
         session = state.sessions.get(str(entry["id"]))
@@ -345,6 +484,7 @@ async def api_sources():
             "in_catalog": True,
             "active": entry["id"] == state.active_source_id,
             "session": session.summary() if session else None,
+            "observer_probe": observer_probe(str(entry["id"]), observer),
         })
     for source_id, session in state.sessions.items():
         if source_id in known:
@@ -367,6 +507,7 @@ async def api_sources():
             "in_catalog": False,
             "active": source_id == state.active_source_id,
             "session": session.summary(),
+            "observer_probe": observer_probe(source_id, observer),
         })
     return payload
 

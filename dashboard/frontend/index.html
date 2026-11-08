@@ -61,6 +61,7 @@
       <a href="#panel-estado">estado da área</a>
       <a href="#panel-saude">saúde do sistema</a>
       <a href="#panel-estabilidade">estabilidade</a>
+      <a href="#panel-observador">observador</a>
       <a href="#panel-eventos">log de eventos</a>
     </nav>
 
@@ -70,6 +71,7 @@
         <div class="lamp"><span class="bulb" id="lamp-video"></span><span class="tag">vídeo</span></div>
         <div class="lamp"><span class="bulb" id="lamp-mem"></span><span class="tag">memória</span></div>
         <div class="lamp"><span class="bulb" id="lamp-ws"></span><span class="tag">telemetria</span></div>
+        <div class="lamp"><span class="bulb" id="lamp-observer"></span><span class="tag">observador</span></div>
       </div>
       <p id="conn-note" aria-live="polite">conectando…</p>
     </section>
@@ -181,6 +183,23 @@
           <span class="chart-max" id="rss-max"></span>
         </div>
         <canvas id="chart-rss" role="img" aria-label="Gráfico de memória RSS em megabytes nos últimos 30 minutos"></canvas>
+      </section>
+
+      <section class="card observer-panel" id="panel-observador"
+               aria-labelledby="observer-eyebrow">
+        <div class="panel-head">
+          <span class="eyebrow" id="observer-eyebrow">observador de fontes</span>
+          <span class="chart-max" id="observer-mode">—</span>
+        </div>
+        <div class="state-rows">
+          <div class="row"><span>motivo</span><output id="observer-reason">—</output></div>
+          <div class="row"><span>última ação</span><output id="observer-action">—</output></div>
+          <div class="row"><span>retrato</span><output id="observer-age">—</output></div>
+          <div class="row observer-probe-row">
+            <span>sonda por fonte</span>
+            <div class="observer-probes" id="observer-probes" aria-live="polite"></div>
+          </div>
+        </div>
       </section>
 
       <section class="card events-panel" id="panel-eventos">

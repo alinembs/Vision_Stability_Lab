@@ -66,6 +66,10 @@ const state = {
   sources: [],
   selectedSource: null,
   activeSource: null,
+  // E7: painel do observador de fontes. `observerKey` evita reescrever o
+  // painel (com `aria-live`) a cada snapshot de ~1 s quando nada mudou.
+  observerKey: null,
+  lastObserver: null,
   // E4-T3: troca da fonte ativa pela tela. `token` vive só em `sessionStorage`
   // (aba atual, sem persistir no disco) e nunca é renderizado.
   sw: {
@@ -536,6 +540,9 @@ async function refreshSources() {
   state.activeSource = active ? active.id : null;
   renderSources();
   updateChartTitles();
+  // os nomes de fonte podem chegar depois do 1º snapshot: a chave inclui os
+  // nomes, então aqui só re-renderiza quando de fato muda algo
+  if (state.observerKey !== null) renderObserver(state.lastObserver);
 }
 
 function selectSource(id) {
@@ -968,6 +975,150 @@ function updateDerived(snap) {
     snap.health?.status === "down" ? "off blink" : "warn");
   const growth = state.lastMetrics ? rssGrowthMb(state.lastMetrics) : null;
   setLamp("lamp-mem", growth !== null && !rssGrowthBad(growth) ? "on" : "warn");
+  renderObserver(snap.observer);
+}
+
+/* ---------------- observador de fontes (E7) ----------------
+ *
+ * O snapshot traz `observer` (ainda que vazio) lido de
+ * `data/config/observer_state.json` pelo backend. O painel só mostra o que o
+ * contrato publica: modo, motivo, última ação, idade do retrato e a sonda por
+ * fonte. `available: false` é informação, não erro: a tela diz "sem
+ * observador", pinta a lâmpada de amarelo e não apaga telemetria nem fontes.
+ */
+
+const OBSERVER_MODE_LABELS = {
+  watching: "vigiando",
+  standby_no_sources: "standby — sem fonte ativa",
+  switching: "troca em andamento",
+};
+
+/** Modo desconhecido cai no literal cru (nunca vira "—" quando há valor). */
+function observerModeLabel(mode) {
+  if (!mode) return "—";
+  return OBSERVER_MODE_LABELS[mode] || String(mode);
+}
+
+function observerActionText(observer) {
+  const action = observer.last_action;
+  if (!action || action === "none") return "— nenhuma";
+  const ts = observer.last_action_ts;
+  const when = ts ? new Date(ts) : null;
+  return when && !Number.isNaN(when.getTime())
+    ? `${action} · ${fmtClock(ts)}`
+    : String(action);
+}
+
+function observerAgeText(age) {
+  return typeof age === "number" && Number.isFinite(age) ? `há ${fmtAgo(age)}` : "—";
+}
+
+/**
+ * Chip de uma fonte sondada.
+ *
+ * D2: o nível 1/2 da sonda é detalhe de implementação (nível 1 é só DESCRIBE,
+ * não prova vídeo) — fica no `title`, nunca no texto visível.
+ */
+function observerProbeChip(sourceId, probe) {
+  const el = document.createElement("span");
+  el.className = "observer-probe";
+  el.dataset.probe = sourceId;
+  const alive = probe && typeof probe === "object" ? probe.alive : undefined;
+  const kind = alive === true ? "alive" : alive === false ? "dead" : "unknown";
+  el.classList.add(kind);
+  el.dataset.state = kind;
+
+  const name = document.createElement("span");
+  name.className = "observer-probe-name";
+  name.textContent = sourceById(sourceId)?.name || sourceId;
+  const state = document.createElement("span");
+  state.className = "observer-probe-state";
+  state.textContent = alive === true ? "vivo" :
+    alive === false ? "morto" : "não sondada";
+  el.append(name, state);
+
+  const detail = [];
+  if (probe && probe.reason) detail.push(String(probe.reason));
+  if (probe && probe.level !== null && probe.level !== undefined) {
+    detail.push(`nível ${probe.level}`);
+  }
+  if (detail.length) el.title = detail.join(" · ");
+  return el;
+}
+
+/**
+ * Chave de "nada mudou". Os nomes das fontes entram nela porque
+ * `/api/sources` pode chegar depois do primeiro snapshot: sem isso os chips
+ * ficariam com o id no lugar do nome até o observador publicar algo novo.
+ */
+function observerKey(observer) {
+  const names = state.sources.map((s) => `${s.id}:${s.name}`).join("|");
+  return `${JSON.stringify(observer ?? null)}#${names}`;
+}
+
+function observerEmptyProbe() {
+  const empty = document.createElement("span");
+  empty.className = "observer-probe-empty";
+  empty.textContent = "—";
+  return empty;
+}
+
+function renderObserver(observer) {
+  const modeEl = $("observer-mode");
+  if (!modeEl) return;
+  state.lastObserver = observer;
+  const key = observerKey(observer);
+  if (state.observerKey === key) return;  // aria-live não pode tagarelar
+  state.observerKey = key;
+
+  const ob = observer && typeof observer === "object" ? observer : {};
+  const reasonEl = $("observer-reason");
+  const actionEl = $("observer-action");
+  const ageEl = $("observer-age");
+  const probesEl = $("observer-probes");
+  const lamp = $("lamp-observer");
+
+  // Sem observador confiável (arquivo ausente/velho): nenhum valor inventado,
+  // nenhuma fonte pintada de morta — a ausência de medição não é morte.
+  if (ob.available !== true) {
+    modeEl.textContent = "sem observador";
+    reasonEl.textContent = ob.reason || "—";
+    actionEl.textContent = "— nenhuma";
+    ageEl.textContent = observerAgeText(ob.age_s);
+    if (lamp) {
+      setLamp("lamp-observer", "warn");
+      lamp.title = ob.reason || "sem observador de fontes";
+    }
+    probesEl.textContent = "";
+    probesEl.appendChild(observerEmptyProbe());
+    return;
+  }
+
+  const mode = typeof ob.mode === "string" ? ob.mode : "";
+  modeEl.textContent = observerModeLabel(mode);
+  reasonEl.textContent = ob.mode_reason || "—";
+  actionEl.textContent = observerActionText(ob);
+  ageEl.textContent = observerAgeText(ob.age_s);
+
+  // D3: standby é estado esperado (verde); só troca em andamento é amarela e
+  // "sem observador" também — nunca vermelho, que aqui significa falha.
+  if (lamp) {
+    setLamp("lamp-observer",
+      mode === "watching" || mode === "standby_no_sources" ? "on" : "warn");
+    lamp.title = ob.mode_reason || "";
+  }
+
+  const probes = ob.sources_probe && typeof ob.sources_probe === "object"
+    ? ob.sources_probe : {};
+  const ids = Object.keys(probes).sort();
+  probesEl.textContent = "";
+  if (!ids.length) {
+    probesEl.appendChild(observerEmptyProbe());
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  for (const id of ids) frag.appendChild(observerProbeChip(id, probes[id]));
+  probesEl.appendChild(frag);
 }
 
 let uptimeTimer = null;
