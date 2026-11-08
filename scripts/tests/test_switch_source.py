@@ -243,8 +243,12 @@ class PrecheckUrlTest(unittest.TestCase):
         self.assertIn("***@192.168.59.108:5543", relatorio["masked_uri"])
 
     def test_porta_e_path_preservados(self) -> None:
-        uri = lib.precheck_url("rtsps://mediamtx:8322/phone?x=1", {})
-        self.assertEqual(uri, "rtsps://192.168.59.102:8322/phone?x=1")
+        # IP fixado no mock: o alvo aqui é porta/query preservados na troca de
+        # host, não o IP da LAN de quem roda o teste.
+        with mock.patch.object(lib, "_default_lan_ip",
+                               return_value="172.20.0.9"):
+            uri = lib.precheck_url("rtsps://mediamtx:8322/phone?x=1", {})
+        self.assertEqual(uri, "rtsps://172.20.0.9:8322/phone?x=1")
 
     def test_uri_logada_e_a_que_a_sonda_abriu(self) -> None:
         """F5: o log citava `mediamtx` e a sonda abria o host da LAN.
