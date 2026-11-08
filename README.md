@@ -1,8 +1,8 @@
 # Vision Stability Lab
 
-Laboratório de estabilidade de visão contínua sobre DeepStream, rodando em Jetson. O pipeline processa **uma fonte por vez** — câmera IP por RTSP, drone por RTMP ou celular Android por WHIP (ADR-0006, `docs/adr/adr-0006-troca-de-fonte.md`) —, detecta pessoas com um modelo TensorRT `.engine`, acompanha os objetos com tracker, publica o vídeo anotado e expõe métricas operacionais em um dashboard.
+Laboratório de estabilidade de visão contínua sobre DeepStream, rodando em Jetson. O pipeline processa **uma fonte por vez** : câmera IP por RTSP, drone por RTMP ou celular Android por WHIP, detecta pessoas com um modelo TensorRT `.engine`, acompanha os objetos com tracker, publica o vídeo anotado e expõe métricas operacionais em um dashboard.
 
-O alvo é **estabilidade por horas**: memória que entra em platô, filas que não crescem, latência previsível, recuperação automática quando a fonte cai e encerramento limpo. Detectar pessoas é o caminho para exercitar isso, não o objetivo em si. O mesmo stack roda em dois Jetsons — Orin NX e Orin Nano —, cada host com seu `deploy/.env` e sua base de imagem.
+O alvo é **estabilidade por horas**: memória que entra em platô, filas que não crescem, latência previsível, recuperação automática quando a fonte cai e encerramento limpo. Detectar pessoas é o caminho para exercitar isso, não o objetivo em si. O mesmo stack roda em dois Jetsons: Orin NX e Orin Nano , cada host com seu `deploy/.env` e sua base de imagem.
 
 ## Ambientes de teste: Orin NX e Orin Nano
 
@@ -13,52 +13,11 @@ imagem, que o `make doctor` valida contra a plataforma.
 | Ambiente | IP na LAN | Papel | Plataforma | Base do stack |
 |---|---|---|---|---|
 | **Orin NX** | DHCP — `make ip` | produção e referência dos gates | L4T R36.4.7 · JetPack 6 · DeepStream **7.1** · Python 3.10 no container | `deploy/Dockerfile` padrão (DS 7.1, wheel `pyds` cp310) |
-| **Orin Nano** (`pr3via-jetson`) | DHCP — `make ip` | validação de portabilidade | L4T R39.2.1 · JetPack 7.2.1 · DeepStream **9.1** · CUDA 13 · TRT 10.16.2.10 · Ubuntu 24.04 · Python 3.12.3 · GStreamer 1.24.2 | `DS_BASE_IMAGE=nvcr.io/nvidia/deepstream:9.1-triton-multiarch` + wheel `pyds` cp312 |
-
-Estado em 2026-11-01: o **NX** é o ambiente de produção do VSL e onde os gates
-são fechados (E4 PASS). O **Nano** sobe o stack completo com `make up` e serve
-dashboard, telemetria e preview — medido no `/api/snapshot` às 20:12 UTC:
-`healthy`, `fps_in=20`, `fps_preview=20`, sessão `camera` iniciada às 19:44 UTC.
-O gate de portabilidade (P4) e as pendências de plataforma estão em
-[`docs/plans/2026-11-01-portabilidade-orin-nano.md`](docs/plans/2026-11-01-portabilidade-orin-nano.md).
-
-Cada host é um **stack independente** — não é cluster nem distribuição:
-
-- **Um** container DeepStream por host (regra global do projeto). Os dois
-  Jetsons podem rodar ao mesmo tempo porque são hosts distintos; dois
-  containers do projeto no **mesmo** host continuam proibidos.
-- `deploy/.env` é por host: `RTSP_URI`, `DASHBOARD_PORT` e, opcionalmente,
-  `LAN_IP`. O IP **não** é mais fixo no repositório nem obrigatório no `.env`:
-  `make up` detecta o endereço atual (`scripts/host_ip.sh`: rota default e,
-  depois, `hostname -I`) e exporta `LAN_IP` para o compose — é ele que amarra a
-  publicação das portas do MediaMTX e alimenta o `MTX_WEBRTCADDITIONALHOSTS` (o
-  IP que o SDP anuncia ao navegador). Se o roteador trocar o IP, basta
-  `make up`; nada de editar arquivo.
-- O dashboard é sempre `http://<IP atual do host>:8081`. Use `make ip` para ver
-  o endereço do momento (e as URLs de captura). `localhost` não serve: as portas
-  do MediaMTX são publicadas no IP da LAN e o frontend negocia o WHEP contra
-  `${location.hostname}:8889`, então em `127.0.0.1` o player bate numa porta
-  fechada (DIV-003 em `docs/incident-log.md`).
-- O certificado é **por host**: `deploy/certs/generate-certs.sh` monta o SAN a
-  partir dos IPv4 atuais do host + `<hostname>.local` + `vsl.local`. Quando o
-  IP muda, `make up` reemite **só o certificado do servidor**, preservando a
-  CA: quem já instalou o `ca.crt` continua confiando, sem reinstalar nada.
-  A pasta é gitignored: nunca copie o par `server.crt`/`server.key` de um host
-  para o outro.
-- As duas CAs têm o **mesmo CN** (`Vision Stability Lab Internal CA`), mas
-  chaves diferentes. Uma máquina que abre os dois dashboards precisa das duas
-  instaladas; regenerar (`--force`) num host invalida **só** aquela CA para os
-  clientes. O SAN tem de conter o IP usado pelo navegador, senão o WHEP falha na
-  verificação — ver `deploy/certs/generate-certs.sh` e
-  [`docs/plans/2026-11-01-portabilidade-orin-nano.md`](docs/plans/2026-11-01-portabilidade-orin-nano.md).
-- As portas são as mesmas nos dois hosts (`8081`, `8554`, `1935`, `8888`,
-  `8889`, `8189`, `8443`, além de `8890/udp` do SRT), cada uma publicada no IP
-  do seu host — por isso os dois coexistem na mesma LAN sem conflito.
+| **Orin Nano**| DHCP — `make ip` | validação de portabilidade | L4T R39.2.1 · JetPack 7.2.1 · DeepStream **9.1** · CUDA 13 · TRT 10.16.2.10 · Ubuntu 24.04 · Python 3.12.3 · GStreamer 1.24.2 | `DS_BASE_IMAGE=nvcr.io/nvidia/deepstream:9.1-triton-multiarch` + wheel `pyds` cp312 |
 
 ## Fontes disponíveis: uma ativa por vez
 
-O laboratório aceita **três entradas alternativas**, nunca simultâneas
-(ADR-0006). O catálogo é declarativo, em `deepstream/config/sources.yaml`:
+O laboratório aceita **três entradas alternativas**, nunca simultâneas. O catálogo é declarativo, em `deepstream/config/sources.yaml`:
 
 | id | nome | entrada | codec | gate |
 |---|---|---|---|---|
@@ -108,12 +67,11 @@ make switch SOURCE=drone       # pré-check → active_source → restart → p�
 O script não deixa a troca "meio feita": se o pós-check não confirmar
 `interval_metrics` com `fps_in > 0` na fonte nova, ele **restaura** a anterior e
 sai `1`. Cada execução deixa uma linha em `data/logs/switch.jsonl`; contratos de
-exit code e diagnóstico estão em
-[`docs/runbooks/troca-de-fonte.md`](docs/runbooks/troca-de-fonte.md).
+exit code.
 
 Adicionar uma fonte nova é editar o catálogo (id, `uri`/`uri_env`, `codec`,
 `target_fps`, `enabled`, `gate`) e reiniciar — não é mexer no Python. URI com
-credencial fica em `deploy/.env` via `uri_env`, nunca no YAML (DIV-001).
+credencial fica em `deploy/.env` via `uri_env`, nunca no YAML.
 
 ## 1. Problema do projeto
 
@@ -388,7 +346,7 @@ Não publique um evento de “área ocupada” em todos os frames.
 
 ## 5. Critérios de sucesso
 
-O projeto é considerado estável quando atende aos critérios abaixo. Os números vêm de `data/logs/phase5/*-report.md` e dos baselines de campo em `docs/baselines/`.
+O projeto é considerado estável quando atende aos critérios abaixo. 
 
 ### Estabilidade
 
