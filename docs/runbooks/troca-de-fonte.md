@@ -59,6 +59,17 @@ tratada como crash-loop nem como fonte morta (`switch_in_progress_observed` no
 Marcador expirado (`kill -9` no meio da troca) ou corrompido é ignorado — e o
 corrompido é registrado como `switch_marker_invalid`.
 
+## Troca a partir do standby
+
+O observador pode ter **parado** o container (`docker stop`) por falta de fonte.
+A troca funciona igual: a guarda de precedência só falha o `docker exec` e
+segue, e o `up -d --force-recreate` do passo 5 **inicia** o container de volta —
+sempre depois do pré-check, nunca antes. Se o marcador em curso for de outro
+dono (observador ou dashboard), o script sai 3 `troca_em_andamento` sem apagar
+o marcador alheio enquanto ele está válido; **expirado** vira órfão e é
+liberado, para que a queda de quem o criou não bloqueie a troca para sempre.
+Nos dois casos: repita quando ele liberar.
+
 ## Antes de trocar: a fonte pedida está publicando?
 
 | Fonte | Como publicar | Observação |
