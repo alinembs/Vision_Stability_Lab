@@ -1,0 +1,40 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "coder-orchestrator",
+  "lsp": true,
+  "permissions": [
+    { "action": "*", "resource": "*", "effect": "deny" },
+    { "action": "read", "resource": "*", "effect": "allow" },
+    { "action": "grep", "resource": "*", "effect": "allow" },
+    { "action": "glob", "resource": "*", "effect": "allow" },
+    { "action": "list", "resource": "*", "effect": "allow" },
+    { "action": "skill", "resource": "*", "effect": "allow" },
+    { "action": "subagent", "resource": "*", "effect": "deny" },
+    { "action": "subagent", "resource": "planner", "effect": "allow" },
+    { "action": "subagent", "resource": "developer", "effect": "allow" },
+    { "action": "subagent", "resource": "reviewer", "effect": "allow" },
+    { "action": "subagent", "resource": "architect", "effect": "allow" },
+    { "action": "bash", "resource": "*", "effect": "allow" },
+    { "action": "bash", "resource": "git commit*", "effect": "deny" },
+    { "action": "bash", "resource": "git push*", "effect": "deny" },
+    { "action": "bash", "resource": "git reset*", "effect": "ask" },
+    { "action": "bash", "resource": "git clean*", "effect": "ask" },
+    { "action": "bash", "resource": "rm -rf*", "effect": "ask" },
+    { "action": "bash", "resource": "*deploy*", "effect": "deny" },
+    { "action": "bash", "resource": "sudo *", "effect": "deny" }
+  ],
+  "experimental": {
+    "subagent_depth": 1
+  },
+  "watcher": {
+    "ignore": [
+      "**/node_modules/**",
+      "**/.venv/**",
+      "**/__pycache__/**",
+      "**/dist/**",
+      "**/build/**",
+      "**/coverage/**",
+      "**/graphify-out/**"
+    ]
+  }
+}
