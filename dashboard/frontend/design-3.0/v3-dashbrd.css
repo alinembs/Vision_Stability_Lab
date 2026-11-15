@@ -1,0 +1,175 @@
+/* V3 — sistema "Dashbrd X" (DESIGN_3.0/DESIGN-dashbrdtemplate-webflow-io.md)
+ *
+ * Azul-noite (#050811) com superfícies em dois níveis, azul como acento e
+ * raio de 16px. A leitura começa pelo resumo da execução: a faixa de KPIs
+ * vem antes do vídeo, separada por fios internos em vez de quatro caixas.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --bg: #050811;
+  --surface: #0a0e1a;
+  --surface-2: #151b2d;
+  --line: #131a2b;
+  --line-strong: #2b3757;
+  --divider: #17203a;
+
+  --text: #dfe6f5;
+  --dim: #9aa8c8;
+
+  --accent: #146ef5;
+  --accent-hover: #3a89ff;
+  --accent-text: #4a92ff;
+  --on-accent: #ffffff;
+  --accent-wash: #0c1a33;
+
+  --ok: #4ad9a4;
+  --ok-line: #1d5b48;
+  --warn: #f2bd66;
+  --bad: #ff7d8c;
+  --info: #7fb2ff;
+
+  --video: #03060d;
+  --video-veil: rgba(3, 6, 13, .78);
+  --on-video: #e8eefb;
+
+  --chart-line: #3a89ff;
+  --chart-fill: rgba(58, 137, 255, .10);
+  --chart-grid: #18203a;
+  --chart-axis: #8fa0c2;
+
+  --focus: #4a92ff;
+  --select: #146ef5;
+  --select-ink: #ffffff;
+  --skeleton-ink: #212b45;
+
+  --font-sans: "Inter Tight", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Inter Tight", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", Menlo, Consolas, monospace;
+
+  --fs-body: 14.5px;
+  --fs-caption: 12px;
+  --fs-micro: 10px;
+  --fs-section: 14px;
+  --fs-title: 24px;
+  --fs-num: 14px;
+  --fs-brand: 15px;
+
+  --page-max: 1480px;
+  --page-pad: 18px 26px 24px;
+  --page-gap: 16px;
+  --gap-l: 14px;
+  --gap-s: 10px;
+  --gap-xs: 8px;
+
+  --stage-cols: minmax(0, 2.05fr) minmax(272px, .82fr);
+  --charts-cols: minmax(0, 1fr) minmax(0, 1fr);
+  --lower-cols: minmax(0, 1fr) minmax(0, 1fr);
+
+  --card-pad: 16px;
+  --r-card: 16px;
+  --r-inner: 8px;
+  --r-source: 12px;
+  --r-btn: 100px;
+  --r-filter: 100px;
+  --r-probe: 100px;
+  --r-mark: 12px;
+
+  --stat-size: 36px;
+  --stat-weight: 500;
+  --stat-tracking: -.03em;
+  --area-size: 46px;
+  --area-weight: 500;
+  --area-tracking: -.035em;
+  --title-weight: 500;
+  --title-tracking: -.025em;
+  --brand-weight: 500;
+  --brand-tracking: -.015em;
+  --section-weight: 500;
+  --section-tracking: -.01em;
+  --label-weight: 500;
+  --label-tracking: .09em;
+  --row-pad: 7px 0;
+  --btn-pad: 9px 17px;
+  --chart-h: 152px;
+  --video-max: 52vh;
+  --events-max: 198px;
+  --card-shadow: none;
+}
+
+/* o resumo vem primeiro: a pergunta da tela é "está saudável?" */
+.content { display: flex; flex-direction: column; }
+.kpis { order: -1; }
+
+.strip-head h2 { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--dim); }
+.strip-head p { font-size: 11px; }
+.strip { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+
+.source-btn { background: var(--surface-2); border-color: var(--line); }
+.source.selected .source-btn { background: var(--accent-wash); }
+.source-name { font-size: 13px; }
+
+/* uma faixa, quatro leituras: fio interno no lugar de quatro molduras */
+.kpis {
+  align-items: stretch;
+  gap: 0;
+  padding: 15px 0 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  box-shadow: none;
+}
+.kpi {
+  padding: 0 22px;
+  border-left: 1px solid var(--divider);
+}
+.kpi:first-child { border-left: 0; padding-left: 24px; }
+.kpi h3 { color: var(--dim); }
+.stat-value { color: #f2f6ff; }
+.kpi .hint { font-size: 11.5px; }
+
+.video-title h1 {
+  font-size: var(--fs-title);
+  font-weight: 500;
+  letter-spacing: -.025em;
+  line-height: 1.15;
+}
+.video-title > span { color: var(--dim); font-size: 11.5px; }
+.video-frame { border: 1px solid #10182a; }
+
+.area {
+  padding: 18px 18px 16px;
+}
+.area-word { margin-top: 12px; }
+.area.occupied .area-word { color: #ffffff; }
+.area-enum { padding-bottom: 6px; }
+.area .rows { margin-top: 16px; }
+
+.chart { padding: 15px 18px 12px; }
+.chart-head h3 { font-size: 13px; }
+.chart-head .now { font-size: 10px; }
+.chart-foot { font-size: 10px; }
+
+.lower .card { padding: 16px 18px; }
+.card-title { font-size: 13px; }
+
+.probe { font-size: 10px; padding: 2px 9px; }
+
+.events { padding: 16px 18px 12px; }
+.events-head h2 { font-size: 14px; }
+.ev { padding: 6px 2px; }
+.ev-name { width: 104px; }
+
+@media (max-width: 1180px) {
+  :root { --stage-cols: minmax(0, 1fr); --lower-cols: minmax(0, 1fr); }
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 0; }
+  .kpi:nth-child(3) { border-left: 0; padding-left: 24px; }
+}
+
+@media (max-width: 900px) {
+  :root { --page-pad: 16px 18px 20px; --stat-size: 30px; --area-size: 38px; }
+  .kpis { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .kpi { border-left: 0; padding: 0 20px; }
+  .kpi + .kpi { border-top: 1px solid var(--divider); padding-top: 14px; }
+}
