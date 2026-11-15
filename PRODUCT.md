@@ -28,8 +28,8 @@ relatórios).
 O produto não vende detecção de pessoas; ele torna **verificável a estabilidade
 de longa duração** de um pipeline de visão embarcado. O mecanismo é
 observabilidade derivada do próprio pipeline — telemetria JSONL por fonte e por
-sessão, ring buffers, replay na partida, evidência versionada em `docs/baselines/`
-e `data/logs/` — acoplada ao stack real na Jetson. Todo número exibido vem de
+sessão, ring buffers, replay na partida — acoplada ao stack real na Jetson. Todo
+número exibido vem de
 uma execução medida, não de estimativa ou demonstração sintética.
 
 ## Operating Context
@@ -47,8 +47,8 @@ uma execução medida, não de estimativa ou demonstração sintética.
   `make switch`.
 - **Fontes reais:** câmera fixa RTSP, drone (RTMP → MediaMTX) e celular. Cada
   troca abre sessão nova (epoch novo); nunca há reconfiguração a quente.
-- **Evidência:** `docs/baselines/`, `docs/phase*-evaluation.md`,
-  `data/logs/` e `docs/incident-log.md`.
+- **Evidência:** ADRs em `docs/adr/` e procedimentos em `docs/runbooks/`; os
+  números medidos são os registrados neste documento.
 
 ## Capabilities and Constraints
 
@@ -82,14 +82,11 @@ uma execução medida, não de estimativa ou demonstração sintética.
 
 ## Evidence on Hand
 
-- Relatórios medidos em execução real: `docs/phase-{1,2,3}-evaluation.md`,
-  `docs/phase5-progress.md`, `data/logs/phase5/*-report.md` — por exemplo
+- Números medidos em execução real, registrados neste documento — por exemplo
   baseline de 30 min com 19,83 fps médio e RSS 782 → 891 MB, e longa duração de
   6 h com platô de ~947 MB e zero erros CUDA/GStreamer.
-- Gates e baselines datados em `docs/baselines/`, incluindo o Gate E4 com
-  evidência literal de troca de fonte, rollback e isolamento de séries.
-- `docs/incident-log.md` (INC-001…INC-007, DIV-001/003/004) e ADRs em
-  `docs/adr/`; planos em `docs/plans/`.
+- Decisões em `docs/adr/` e procedimentos em `docs/runbooks/` (captura pelo
+  celular, drone em campo, troca de fonte).
 - **Ausências deliberadas:** não há screenshots, fotos do sistema, depoimentos,
   clientes, benchmarks de terceiros nem promessas de SLA. Nada disso deve ser
   inventado.

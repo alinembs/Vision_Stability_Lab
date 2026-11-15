@@ -10,18 +10,26 @@ __pycache__/
 # Ferramentas locais
 .superpowers/
 .openclaude/
+.impeccable/
+opencode.json
 # Grafo de conhecimento local (graphify): regenerável, fica fora do git
 graphify-out/
 
 # Sistema
 .DS_Store
 
-# Telemetria em runtime (não versionar)
-data/logs/*.jsonl
+# Telemetria em runtime (não versionar). A pasta precisa existir para o bind
+# mount de `deploy/docker-compose.yml`, por isso o `.gitkeep`.
+data/logs/*
+!data/logs/.gitkeep
 
 # Estado local da fonte ativa (E2-T1). Valor de bancada, não configuração:
 # o exemplo versionado é data/config/active_source.example.
 data/config/active_source
+
+# Retrato do observador de fontes (E7), reescrito pelo watchdog a cada ciclo:
+# estado de runtime, não configuração.
+data/config/observer_state.json
 
 # Marcador de troca de fonte em andamento (E2-T3): existe só durante
 # scripts/switch_source.sh; o trap do script o remove, mas um kill -9
