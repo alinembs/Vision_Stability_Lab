@@ -8,7 +8,7 @@
 <!--
   Página de captura do E0-T4: publica o vídeo do celular por WHIP no MediaMTX.
 
-  **Por que ela é servida em HTTPS próprio (8443) e não pela 8889:** o navegador
+  **Por que ela é servida em HTTPS próprio (8444 no host) e não pela 8889:** o navegador
   decide `isSecureContext` pela origem que serviu o documento. Uma página em
   `http://<ip>` não ganha contexto seguro só porque o `fetch` de destino é
   HTTPS, e sem contexto seguro o Chrome nem expõe `navigator.mediaDevices`.
@@ -270,7 +270,7 @@
   <span>fase 0 · E0-T4 · android apenas (D6: iOS fora de escopo)</span>
   <!-- Host derivado de `location.hostname` no `capture.js` (M6): a página vale
        por IP da LAN e por `vsl.local`, que está no SAN do certificado. -->
-  <span id="origin-line">https://&lt;host&gt;:8443 · whip em :8889</span>
+  <span id="origin-line">https://&lt;host&gt;:8444 · whip em :8889</span>
   <!-- Escrito pelo `capture.js` (`CAPTURE_VERSION`): é a prova, no celular, de
        qual arquivo o aparelho carregou. Fixo no HTML mentiria justamente no caso
        que importa (cópia antiga em cache ou de outro host). -->

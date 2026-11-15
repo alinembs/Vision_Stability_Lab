@@ -57,6 +57,9 @@ ENV_SELECTION = "VSL_SOURCE_SELECTION"  # "off" => caminho legado (rollback)
 ENV_URI = "RTSP_URI"                   # URI da fonte legada (DIV-001)
 ENV_CODEC = "RTSP_CODEC"               # codec da fonte legada
 ENV_LEGACY_TARGET_FPS = "RTSP_TARGET_FPS"
+ENV_MUX_WIDTH = "MUX_WIDTH"            # override explícito do mux (operador)
+ENV_MUX_HEIGHT = "MUX_HEIGHT"
+ENV_MUX_SW_MAX = "MUX_SW_MAX"          # teto quando o preview é software
 
 # D1: câmera, drone e celular são alternativas — nunca mais que três.
 MAX_SOURCES = 3
@@ -73,6 +76,15 @@ DEFAULT_LATENCY_MS = 200     # mesmo valor que o rtspsrc já usava
 DEFAULT_TARGET_FPS = 20.0
 LEGACY_SOURCE_ID = "camera"
 MASKED_USERINFO = "***"
+
+# Resolução do `nvstreammux` (= resolução do OSD e do preview anotado).
+# Sem `mux` na fonte e sem override, vale o valor de antes desta mudança.
+DEFAULT_MUX = (1280, 720)
+# Sem NVENC (Orin Nano) o preview sai em VP8 por software e a CPU paga cada
+# pixel: a resolução da fonte é reduzida para caber neste teto, mantendo a
+# proporção. Medido em 2026-11-01: 720p é o regime estável do Nano.
+DEFAULT_MUX_SW_MAX = (1280, 720)
+MUX_RE = re.compile(r"^\s*(\d+)\s*[xX]\s*(\d+)\s*$")
 
 # `id` vai virar nome de arquivo/argumento de script: alfabeto restrito.
 SOURCE_ID_RE = re.compile(r"^[a-z0-9_-]+$")
@@ -105,6 +117,9 @@ class SourceConfig:
     # Gate de qualidade por fonte (D3): a latência do drone é reportada, não
     # gated. Forma livre: `{"latency_p95_ms": 300}`, `{"report_only": true}`.
     gate: Optional[Dict[str, Any]] = None
+    # Resolução nativa da fonte para o `nvstreammux` (`mux: 2560x1440` no
+    # YAML). `None` = `DEFAULT_MUX`. Ver `resolve_mux_resolution()`.
+    mux: Optional[Tuple[int, int]] = None
 
     @property
     def protocols(self) -> int:
@@ -311,6 +326,91 @@ def _as_float(value: Any, source_id: str, field_name: str) -> float:
     return number
 
 
+def parse_resolution(value: Any, where: str) -> Tuple[int, int]:
+    """`"1920x1080"` -> `(1920, 1080)`; dimensões positivas e pares.
+
+    Pares porque o mux entrega NV12 (croma 4:2:0): valor ímpar vira falha de
+    negociação de caps no meio do pipeline, não erro legível no boot.
+    """
+    match = MUX_RE.match(str(value))
+    if not match:
+        raise SourceConfigError(
+            f"{where}: resolução {value!r} inválida — use LARGURAxALTURA, "
+            "ex. 1920x1080")
+    width, height = int(match.group(1)), int(match.group(2))
+    if width <= 0 or height <= 0 or width % 2 or height % 2:
+        raise SourceConfigError(
+            f"{where}: resolução {width}x{height} inválida — largura e altura "
+            "precisam ser positivas e pares (NV12)")
+    return width, height
+
+
+def fit_within(size: Tuple[int, int],
+               box: Tuple[int, int]) -> Tuple[int, int]:
+    """Reduz `size` para caber em `box`, mantendo a proporção; nunca amplia.
+
+    A caixa acompanha a orientação da fonte (1280x720 vira 720x1280 para uma
+    fonte em retrato), e o resultado é arredondado para baixo em pares.
+    """
+    width, height = size
+    box_w, box_h = box
+    if (width < height) != (box_w < box_h):
+        box_w, box_h = box_h, box_w
+    scale = min(1.0, box_w / width, box_h / height)
+    if scale >= 1.0:
+        return width, height
+    return (max(2, int(width * scale) // 2 * 2),
+            max(2, int(height * scale) // 2 * 2))
+
+
+def resolve_mux_resolution(source: "SourceConfig",
+                           env: Optional[Mapping[str, str]] = None,
+                           hw_encoder: bool = True
+                           ) -> Tuple[int, int, str]:
+    """Resolução do `nvstreammux` para esta fonte, e de onde ela veio.
+
+    Precedência:
+      1. `MUX_WIDTH` + `MUX_HEIGHT` no ambiente (override do operador, sem teto);
+      2. `mux` da fonte no `sources.yaml` (resolução nativa);
+      3. `DEFAULT_MUX` (1280x720).
+    Em 2 e 3, sem encoder de hardware o valor é reduzido para caber em
+    `MUX_SW_MAX` (default 1280x720): o mesmo YAML serve o Orin NX (NVENC, Full
+    HD ou mais) e o Orin Nano (VP8 em software) sem editar nada por placa.
+
+    Resolução fixa por execução: o processo reinicia a cada troca de fonte
+    (D4), e o mux legado redimensiona variações no meio do fluxo (o WebRTC do
+    celular muda de resolução sozinho) em vez de renegociar o pipeline.
+
+    Returns:
+        `(largura, altura, origem)`; origem é `env`, `source` ou `default`,
+        com sufixo `+sw_cap` quando o teto de software reduziu o valor.
+    """
+    environ = os.environ if env is None else env
+    raw_w = (environ.get(ENV_MUX_WIDTH) or "").strip()
+    raw_h = (environ.get(ENV_MUX_HEIGHT) or "").strip()
+    if raw_w or raw_h:
+        if not (raw_w and raw_h):
+            raise SourceConfigError(
+                f"{ENV_MUX_WIDTH} e {ENV_MUX_HEIGHT} vão juntos — defina os "
+                f"dois ou nenhum (recebido {raw_w or '∅'}x{raw_h or '∅'})")
+        width, height = parse_resolution(f"{raw_w}x{raw_h}",
+                                         f"{ENV_MUX_WIDTH}/{ENV_MUX_HEIGHT}")
+        return width, height, "env"
+
+    if source.mux is not None:
+        size, origin = source.mux, "source"
+    else:
+        size, origin = DEFAULT_MUX, "default"
+    if not hw_encoder:
+        raw_cap = (environ.get(ENV_MUX_SW_MAX) or "").strip()
+        cap = (parse_resolution(raw_cap, ENV_MUX_SW_MAX) if raw_cap
+               else DEFAULT_MUX_SW_MAX)
+        capped = fit_within(size, cap)
+        if capped != tuple(size):
+            return capped[0], capped[1], origin + "+sw_cap"
+    return size[0], size[1], origin
+
+
 def _build_source(entry: Mapping[str, Any], index: int,
                   env: Mapping[str, str]) -> SourceConfig:
     """Valida uma entrada do YAML e devolve o `SourceConfig` correspondente."""
@@ -402,11 +502,16 @@ def _build_source(entry: Mapping[str, Any], index: int,
             f"{where}: `gate` precisa ser um mapeamento (recebido "
             f"{type(gate).__name__})")
 
+    mux_field = entry.get("mux")
+    mux = (parse_resolution(mux_field, f"{where}: `mux`")
+           if mux_field is not None else None)
+
     name = str(entry.get("name") or raw_id).strip()
     return SourceConfig(id=raw_id, name=name, uri=uri, codec=codec,
                         transport=transport, latency_ms=latency_ms,
                         target_fps=target_fps, enabled=enabled,
-                        gate=dict(gate) if gate is not None else None)
+                        gate=dict(gate) if gate is not None else None,
+                        mux=mux)
 
 
 def _legacy_source(env: Mapping[str, str],

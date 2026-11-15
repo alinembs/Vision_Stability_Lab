@@ -28,6 +28,10 @@ DASHBOARD_URL ?= http://localhost:8081
 DASHBOARD_BIND ?= 0.0.0.0
 SWITCH_BIND ?= 127.0.0.1
 PYTHON ?= python3
+# Porta da página de captura do celular no host (o compose lê a mesma variável).
+# 8444 porque a 8443 é do outro projeto de captura deste Jetson.
+CAPTURE_PORT ?= 8444
+export CAPTURE_PORT
 
 # -- IP da LAN ----------------------------------------------------------------
 # Detectado **a cada execução** (`scripts/host_ip.sh`): em campo o roteador
@@ -143,9 +147,10 @@ certs: ## Garante o certificado do servidor para o IP atual (preserva a CA)
 ip url: ## Mostra o IP detectado e as URLs para abrir no navegador
 	@echo "IP da LAN:      $(LAN_IP)"
 	@echo "painel:         http://$(LAN_IP):8081"
-	@echo "captura:        https://$(LAN_IP):8443/capture.html"
+	@echo "captura:        https://$(LAN_IP):$(CAPTURE_PORT)/capture.html"
+	@echo "CA (download):  https://$(LAN_IP):$(CAPTURE_PORT)/ca.crt"
 	@echo "WHIP (celular): https://$(LAN_IP):8889/<path>/whip"
-	@echo "nome estável:   https://$$(hostname).local:8443/capture.html  (se houver mDNS na rede)"
+	@echo "nome estável:   https://$$(hostname).local:$(CAPTURE_PORT)/capture.html  (se houver mDNS na rede)"
 
 up: doctor certs ## Sobe o stack (use `make up-build` quando mudou imagem/Dockerfile)
 	cd $(COMPOSE_DIR) && $(COMPOSE) up -d

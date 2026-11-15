@@ -98,7 +98,7 @@ from source_reconnect import (  # noqa: E402  (puro: sem gi/pyds)
 from source_state import SessionState, with_namespace  # noqa: E402  (puro)
 from sources import (  # noqa: E402  (puro: sem gi/pyds)
     depay_factory, endpoint_parts, load_sources, mask_uri,
-    resolve_active_source)
+    resolve_active_source, resolve_mux_resolution)
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("VisionPipelineReal")
@@ -151,6 +151,9 @@ PREVIEW_HOST = os.environ.get("PREVIEW_HOST", "127.0.0.1")
 PREVIEW_PORT = int(os.environ.get("PREVIEW_PORT", "5600"))
 PREVIEW_BITRATE = int(os.environ.get("PREVIEW_BITRATE", "4000000"))  # bps
 PREVIEW_IDR_INTERVAL = int(os.environ.get("PREVIEW_IDR_GOP", "30"))
+# Device do NVENC: sem ele (Orin Nano) o `nvv4l2h264enc` falha no PLAYING e o
+# preview sai em software — o que também limita a resolução do mux.
+NVENC_DEVICE = "/dev/v4l2-nvenc"
 # Telemetria: além do stdout, grava JSONL estável consumido pelo dashboard
 TELEMETRY_FILE = os.environ.get(
     "TELEMETRY_FILE",
@@ -345,6 +348,14 @@ class VisionPipeline:
         # H.264. `RTSP_CODEC` continua existindo só no fallback legado.
         self.codec = self.source.codec
         self.depay_factory, self.parser_factory = depay_factory(self.codec)
+        # Resolução do `nvstreammux` — a que nvtracker, nvdsosd e o preview
+        # herdam (o nvinfer redimensiona só a cópia interna para 640x640 e
+        # devolve as caixas nesta escala). Vem da fonte (`mux` no YAML), com
+        # override `MUX_WIDTH`/`MUX_HEIGHT` e teto quando não há NVENC. Fixa
+        # por execução: trocar de fonte já reinicia o processo (D4).
+        self.mux_width, self.mux_height, self.mux_origin = (
+            resolve_mux_resolution(
+                self.source, hw_encoder=os.path.exists(NVENC_DEVICE)))
         # `startup` sai aqui — fonte e codec resolvidos, antes de qualquer outro
         # evento desta execução (o `preview_branch_ready` é emitido no fim
         # deste `__init__`). O dashboard abre uma "run" a cada `startup`
@@ -422,7 +433,11 @@ class VisionPipeline:
         self.parser = self._make(self.parser_factory)
         self.decoder = self._make("nvv4l2decoder")
 
-        self.mux = self._make("nvstreammux", batch_size=1, width=1280, height=720,
+        # `enable_padding`: fonte com outra proporção (drone 4:3, celular em
+        # retrato) entra com faixas pretas em vez de esticada.
+        self.mux = self._make("nvstreammux", batch_size=1,
+                              width=self.mux_width, height=self.mux_height,
+                              enable_padding=True,
                               batched_push_timeout=40000, live_source=True)
 
         infer_config = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -761,7 +776,7 @@ class VisionPipeline:
         """
         for factory, props, caps, codec in PREVIEW_ENCODERS:
             if factory == "nvv4l2h264enc" and not os.path.exists(
-                    "/dev/v4l2-nvenc"):
+                    NVENC_DEVICE):
                 # Sem o device de NVENC (Orin Nano) o elemento até é criado,
                 # mas falha no PLAYING e queima tentativa de retomada à toa.
                 continue
@@ -775,7 +790,8 @@ class VisionPipeline:
                 logger.exception("encoder %s recusou as propriedades", factory)
                 continue
             log_event("preview_encoder_selected", factory=factory, caps=caps,
-                      codec=codec, bitrate_preview=PREVIEW_BITRATE)
+                      codec=codec, bitrate_preview=PREVIEW_BITRATE,
+                      resolution=f"{self.mux_width}x{self.mux_height}")
             return element, caps, codec
         raise RuntimeError(
             "nenhum encoder de preview disponível "
@@ -1271,6 +1287,8 @@ class VisionPipeline:
                   depay=self.depay_factory,
                   parser=self.parser_factory,
                   transport=self.source.transport,
+                  mux_resolution=f"{self.mux_width}x{self.mux_height}",
+                  mux_origin=self.mux_origin,
                   target_fps=self.source.target_fps,
                   session_epoch=self.session.epoch,
                   uri=mask_uri(self.rtsp_uri),

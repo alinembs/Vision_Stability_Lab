@@ -10,7 +10,7 @@
 > **Estado da validação (2026-10-30, Orin `192.168.59.102`):**
 > - **provado nesta máquina:** CA + certificado com SAN de IP validados por
 >   `curl --cacert` e `openssl s_client` (`Verify return code: 0`) nas **duas**
->   portas (8889 do WHIP e 8443 da página), WHIP aceitando offer H.264 sintético
+>   portas (8889 do WHIP e 8444 da página), WHIP aceitando offer H.264 sintético
 >   com candidatos **só** no IP da LAN (`201` + `DELETE 200`), binds em
 >   `192.168.59.102` e nada em `0.0.0.0`;
 > - **NÃO provado nesta máquina:** celular real publicando (não há Android nesta
@@ -22,7 +22,7 @@
 
 ```
 celular (Chrome Android)
-  └─ https://192.168.59.102:8443/capture.html   nginx  → contexto seguro + getUserMedia
+  └─ https://192.168.59.102:8444/capture.html   nginx  → contexto seguro + getUserMedia
        └─ POST https://192.168.59.102:8889/phone/whip   MediaMTX (TLS, SDP)
             └─ rtsp://192.168.59.102:8554/phone        pipeline (DeepStream)
 ```
@@ -39,9 +39,9 @@ codec roda no navegador antes do `POST`.
 > captura nem o preview do dashboard sobem:
 > `open /certs/server.crt: no such file or directory` (MediaMTX, que por isso
 > não republica o `live` e derruba o `rtspclientsink` do pipeline) e
-> `cannot load certificate "/certs/server.crt"` (nginx da 8443). O sintoma
+> `cannot load certificate "/certs/server.crt"` (nginx da 8444). O sintoma
 > engana porque o resto do stack fica `healthy`; desde 2026-10-30 o
-> `capture-web` tem `healthcheck` que bate na própria 8443, justamente para
+> `capture-web` tem `healthcheck` que bate na própria 8444, justamente para
 > não repetir "tudo saudável, nada funcionando".
 > Rode este script **antes** do primeiro `docker compose up`.
 
@@ -52,7 +52,7 @@ VSL_LAN_IP=<ip-do-campo> deploy/certs/generate-certs.sh   # força um IP extra n
 
 Saída em `deploy/certs/`: `ca.crt` (vai para o celular) e `server.crt` /
 `server.key` (montados em `/certs`, read-only, no **MediaMTX** e no **nginx da
-8443**). **Nada disso entra no Git** — a pasta é ignorada por inteiro, exceto o
+8444**). **Nada disso entra no Git** — a pasta é ignorada por inteiro, exceto o
 `.gitignore` dela.
 
 O modo padrão é `--ensure`: o script reaproveita a CA existente e só reemite o
@@ -90,9 +90,9 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d mediamt
 docker ps --filter name=vision- --format '{{.Names}}\t{{.Status}}'
 ```
 
-A 8443 publica **só** a página de captura e o que ela carrega
+A 8444 publica **só** a página de captura e o que ela carrega
 (`capture.html`, `capture.js`, `codec-gate.js`, `codec-gate-selftest.html`,
-`style.css`). `https://<ip>:8443/` e `…/index.html` respondem **404** de
+`style.css`). `https://<ip>:8444/` e `…/index.html` respondem **404** de
 propósito: o dashboard (SPA do FastAPI, com `/ws` e `/api/history`) não existe
 nesta origem, e servi-lo aqui abria uma cópia quebrada em silêncio. O dashboard
 continua em `http://<ip>:8081`.
@@ -114,8 +114,11 @@ Sem `ca.crt` instalado, o Chrome do celular recusa o certificado do Jetson e —
 pior — **não** considera a página em contexto seguro, então `getUserMedia` nem
 aparece.
 
-1. Copie `deploy/certs/ca.crt` para o aparelho (cabo, `adb push`, e-mail, cartão).
-   No host: `adb push deploy/certs/ca.crt /sdcard/Download/`
+1. Baixe a CA pelo navegador do aparelho: `https://<ip-do-jetson>:8444/ca.crt`
+   (`make url` mostra o IP). O Chrome avisa que a conexão não é particular —
+   esperado, a CA ainda não está instalada: **Avançado → Continuar** e o
+   `vsl-ca.crt` vai para Downloads. A integridade é conferida no passo 4.
+   Alternativa sem rede: `adb push deploy/certs/ca.crt /sdcard/Download/`.
 2. **Configurações → Segurança → Criptografia e credenciais → Instalar um
    certificado → Certificado de CA** (em Android 10/11 o rótulo é "Certificado
    de CA"; em versões antigas, "Credencial de VPN e app").
@@ -128,9 +131,9 @@ aparece.
 
 ## 4. Capturar (no celular)
 
-1. Abra **`https://<ip-do-host>:8443/capture.html`** — HTTPS, porta **8443**.
+1. Abra **`https://<ip-do-host>:8444/capture.html`** — HTTPS, porta **8444**.
    Rode `make ip` no host para ver o endereço do momento; com mDNS na rede,
-   `https://<hostname>.local:8443/capture.html` sobrevive à troca de DHCP.
+   `https://<hostname>.local:8444/capture.html` sobrevive à troca de DHCP.
    O cadeado tem de estar presente, sem aviso.
 2. Confira a linha **contexto seguro**: `sim (...)`. Se estiver `NÃO`, o Chrome
    não vai liberar a câmera (ver a seção 6).
@@ -183,7 +186,7 @@ host. Para provar o que o aparelho executou:
 1. no celular, leia o rodapé — tem de dizer a mesma versão que está no arquivo
    do host: `grep CAPTURE_VERSION dashboard/frontend/capture.js`;
 2. no host, confirme o que o nginx está entregando:
-   `curl -sk https://<ip>:8443/capture.js | grep CAPTURE_VERSION`;
+   `curl -sk https://<ip>:8444/capture.js | grep CAPTURE_VERSION`;
 3. se o rodapé mostrar versão antiga, o aparelho está com cache. `?v=<algo>` na
    URL **não** invalida `/capture.js` (o script é carregado por `src` fixo):
    recarregue forçado no celular (Chrome → ⋮ → Recarregar, ou feche a aba e
@@ -255,13 +258,15 @@ docker logs -f vision-mediamtx | grep -E '\[path phone\]|\[WebRTC\]'
 ```bash
 # 1) TLS das duas portas com a CA interna
 curl --cacert deploy/certs/ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.102:8889/   # 404 = serviço no ar
-curl --cacert deploy/certs/ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.102:8443/capture.html  # 200
-curl --cacert deploy/certs/ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.102:8443/index.html    # 404 (whitelist)
-curl --cacert deploy/certs/ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.102:8443/             # 404 (whitelist)
-curl --cacert deploy/certs/ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.102:8443/certs/server.key  # 404
+curl --cacert deploy/certs/ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.102:8444/capture.html  # 200
+curl --cacert deploy/certs/ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.102:8444/index.html    # 404 (whitelist)
+curl --cacert deploy/certs/ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.102:8444/             # 404 (whitelist)
+curl --cacert deploy/certs/ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.102:8444/certs/server.key  # 404
+curl --cacert deploy/certs/ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.102:8444/ca.crt       # 200 (download da CA)
+curl --cacert deploy/certs/ca.crt -s -o /dev/null -w '%{http_code}\n' https://192.168.59.102:8444/ca.key       # 404
 openssl s_client -connect 192.168.59.102:8889 -CAfile deploy/certs/ca.crt -servername vsl.local \
   </dev/null 2>/dev/null | grep 'Verify return code'   # 0 (ok)
-openssl s_client -connect 192.168.59.102:8443 -CAfile deploy/certs/ca.crt \
+openssl s_client -connect 192.168.59.102:8444 -CAfile deploy/certs/ca.crt \
   </dev/null 2>/dev/null | grep 'Verify return code'   # 0 (ok)
 
 # 2) WHIP: candidatos ICE e codec negociado
@@ -280,7 +285,7 @@ O relatório tem de trazer:
 - `answer_codecs: ["96 H264/90000"]`.
 
 Autoteste do gate de codec (executável, 13 casos): abra
-`https://192.168.59.102:8443/codec-gate-selftest.html` no navegador do aparelho
+`https://192.168.59.102:8444/codec-gate-selftest.html` no navegador do aparelho
 — deve mostrar **PASS 13/13**. No host, dá para rodar os mesmos fixtures sem
 navegador:
 
@@ -292,7 +297,7 @@ process.exit(r.every(x=>x.pass)?0:1)"
 
 ## 6. Duas perguntas que sempre voltam
 
-**Por que `http://192.168.59.102:8443` não funciona?**
+**Por que `http://192.168.59.102:8444` não funciona?**
 Porque `getUserMedia` exige **contexto seguro**, e o navegador decide isso pela
 origem que serviu o **documento** — não pelo destino do `fetch`. Em HTTP na LAN,
 `window.isSecureContext` é `false` e o Chrome **nem expõe**
@@ -304,7 +309,7 @@ resolva isso no aparelho do operador.
 Porque ele autentica o **servidor de mídia**, não a página. Uma página servida em
 `http://` continua insegura mesmo fazendo `POST` para `https://` — e o
 `POST` de uma origem HTTP para uma HTTPS é bloqueado como mixed content. Daí o
-nginx em **8443** (`deploy/nginx/capture-web.conf`) servindo o mesmo diretório
+nginx em **8444** (`deploy/nginx/capture-web.conf`) servindo o mesmo diretório
 `dashboard/frontend/` com o **mesmo** certificado: um `ca.crt` no celular
 cobre as duas portas.
 
@@ -313,7 +318,7 @@ cobre as duas portas.
 | Sintoma | Causa mais provável | O que medir |
 |---|---|---|
 | **Página abre com aviso de certificado / `ERR_CERT_AUTHORITY_INVALID`** | a CA não está instalada no Android (ou é a antiga: `--force` regerou) | `openssl x509 -in deploy/certs/ca.crt -noout -fingerprint -sha256` contra o que aparece na tela do aparelho; reinstalar em Configurações → Segurança → CA |
-| **"contexto seguro: NÃO" / câmera não abre** | a página foi aberta em `http://` ou pela porta errada | barra de endereço: tem de ser `https://…:8443/capture.html`. `chrome://flags` não resolve — precisa da CA + HTTPS |
+| **"contexto seguro: NÃO" / câmera não abre** | a página foi aberta em `http://` ou pela porta errada | barra de endereço: tem de ser `https://…:8444/capture.html`. `chrome://flags` não resolve — precisa da CA + HTTPS |
 | **WHIP conecta e não há vídeo** | candidato ICE apontando para `127.0.0.1` ou para IP de bridge (`172.x`) | `candidate_hosts` do `whip_probe.py --cacert …`: só pode aparecer o **IP da LAN atual** (`make ip`). Config: `MTX_WEBRTCADDITIONALHOSTS=${LAN_IP}`, injetado pelo compose, + `webrtcIPsFromInterfaces: no` (`mediamtx/mediamtx.yml`) |
 | **Vídeo em VP8/VP9** | aparelho sem H.264, ou navegador ignorou a preferência | a tela mostra "sem H.264" e a captura **não** começa (é o gate, não um bug). `ffprobe rtsp://192.168.59.102:8554/phone` confirma o codec no path. Não há conversão no servidor (D-2) |
 | **`POST` responde `404` e o log do MediaMTX fica vazio** | endpoint sem o `/whip` final | a linha "endpoint WHIP" na tela tem de terminar em `/phone/whip`. `POST /phone` é rota inexistente |

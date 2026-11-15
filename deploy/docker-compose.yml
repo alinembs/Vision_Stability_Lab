@@ -47,18 +47,24 @@ services:
     ports:
       # Amarrado ao IP da LAN, como as portas do MediaMTX (DIV-003): a página
       # entrega a câmera de quem a abrir, não é serviço para a internet.
-      - "${LAN_IP:?defina LAN_IP (rode make up)}:8443:8443"
+      # Porta do host 8444 (era 8443): a 8443 é do outro projeto de captura
+      # deste Jetson. Dentro do container o nginx segue em 8443 (healthcheck).
+      - "${LAN_IP:?defina LAN_IP (rode make up)}:${CAPTURE_PORT:-8444}:8443"
     volumes:
       - ../deploy/nginx/capture-web.conf:/etc/nginx/conf.d/default.conf:ro
       # Mesmo diretório que o backend do dashboard serve em /static.
       - ../dashboard/frontend:/usr/share/nginx/html:ro
       # O MESMO certificado do WHIP — um `ca.crt` no celular cobre as duas portas.
       - ../deploy/certs:/certs:ro
+      # Só o certificado público da CA, para o download em `/ca.crt`. Montado
+      # como arquivo porque `deploy/certs/` é 700 e o worker do nginx (não
+      # root) não lê através dele. `make up` gera o `ca.crt` antes de subir.
+      - ../deploy/certs/ca.crt:/ca/ca.crt:ro
     healthcheck:
       # Sem `deploy/certs/server.crt` o nginx não sobe ("cannot load
       # certificate"), e a página de captura fica indisponível com o
       # `docker ps` parecendo saudável (I3): por isso o healthcheck bate na
-      # 8443 de verdade, e não em `nginx -t`.
+      # 8443 do container de verdade, e não em `nginx -t`.
       test: ["CMD-SHELL", "wget -q --no-check-certificate -O /dev/null https://127.0.0.1:8443/capture.html || exit 1"]
       interval: 60s
       timeout: 5s
@@ -113,6 +119,13 @@ services:
       - PREVIEW_PORT=${PREVIEW_PORT:-5600}
       - PREVIEW_BITRATE=${PREVIEW_BITRATE:-4000000}
       - PREVIEW_IDR_GOP=${PREVIEW_IDR_GOP:-30}
+      # Resolução do nvstreammux = resolução do OSD e do preview. Vem de `mux`
+      # da fonte no sources.yaml; sem NVENC (Orin Nano) é reduzida para caber
+      # em MUX_SW_MAX (default 1280x720). MUX_WIDTH + MUX_HEIGHT forçam um
+      # valor (sem teto). Vazio = não definido: o YAML decide.
+      - MUX_WIDTH=${MUX_WIDTH:-}
+      - MUX_HEIGHT=${MUX_HEIGHT:-}
+      - MUX_SW_MAX=${MUX_SW_MAX:-}
       # Reconexão da fonte (E2). Ficam aqui porque são o que o operador
       # ajusta em campo: sem elas no compose, mudar o comportamento exigiria
       # editar o Python dentro do container. Defaults iguais aos do

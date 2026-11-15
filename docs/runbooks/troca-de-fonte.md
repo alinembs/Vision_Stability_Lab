@@ -84,7 +84,7 @@ Nenhuma ação do operador é necessária para "voltar ao standby".
 |---|---|---|
 | `camera` | já é a fonte do lab (RTSP fixo em `RTSP_URI`) | H.265, com áudio PCMA — os pads de áudio são ignorados |
 | `drone` | `./scripts/probe/rtmp_publisher.sh --path drone` (sintético) ou o drone real por RTMP | H.264; o MediaMTX reexpõe em `rtsp://<lan>:8554/drone` |
-| `phone` | página de captura (`https://<lan>:8443/capture.html`, `docs/runbooks/captura-celular.md`) | H.264 por WHIP em `<lan>:8889/phone` |
+| `phone` | página de captura (`https://<lan>:8444/capture.html`, `docs/runbooks/captura-celular.md`) | H.264 por WHIP em `<lan>:8889/phone` |
 
 `mediamtx` no `sources.yaml` é o DNS do serviço **dentro** do compose; no host
 o pré-check troca por `MTX_HOST`, `LAN_IP` ou `192.168.59.102` (as portas do

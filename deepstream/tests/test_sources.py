@@ -638,5 +638,101 @@ class IntegracaoLeveTest(unittest.TestCase):
         self.assertNotIn("import pyds", codigo)
 
 
+class MuxResolutionTest(SourcesTestCase):
+    """Resolução do `nvstreammux` por fonte (preview anotado na nativa)."""
+
+    def fonte(self, mux=None) -> "sources.SourceConfig":
+        return sources.SourceConfig(id="camera", name="câmera",
+                                    uri=URI_CAMERA, mux=mux)
+
+    def test_mux_do_yaml_e_parseado(self) -> None:
+        caminho = self.escrever(
+            f"sources:\n  - id: camera\n    uri: {URI_CAMERA}\n"
+            "    codec: h265\n    mux: 2560x1440\n")
+        self.assertEqual(sources.load_sources(caminho, env={})[0].mux,
+                         (2560, 1440))
+
+    def test_sem_mux_no_yaml_fica_none(self) -> None:
+        self.assertIsNone(self.carregar()[0].mux)
+
+    def test_mux_invalido_no_yaml_e_erro_legivel(self) -> None:
+        for valor in ("1920", "1921x1080", "0x720", "full-hd"):
+            with self.subTest(valor=valor):
+                caminho = self.escrever(
+                    f"sources:\n  - id: camera\n    uri: {URI_CAMERA}\n"
+                    f"    codec: h265\n    mux: \"{valor}\"\n")
+                with self.assertRaises(sources.SourceConfigError) as ctx:
+                    sources.load_sources(caminho, env={})
+                self.assertIn("camera", str(ctx.exception))
+
+    def test_yaml_versionado_declara_o_mux_de_cada_fonte(self) -> None:
+        # Câmera: nativa 2560x1440, mux em 1080p por estabilidade do preview.
+        fontes = sources.load_sources(
+            sources.DEFAULT_CONFIG_PATH, env={"RTSP_URI": URI_CAMERA})
+        self.assertEqual({f.id: f.mux for f in fontes},
+                         {"camera": (1920, 1080), "drone": (960, 720),
+                          "phone": (1280, 720)})
+
+    def test_com_nvenc_usa_a_resolucao_da_fonte(self) -> None:
+        self.assertEqual(
+            sources.resolve_mux_resolution(self.fonte((2560, 1440)), env={}),
+            (2560, 1440, "source"))
+
+    def test_sem_mux_cai_no_default_de_antes(self) -> None:
+        self.assertEqual(
+            sources.resolve_mux_resolution(self.fonte(), env={}),
+            (1280, 720, "default"))
+
+    def test_sem_nvenc_reduz_para_o_teto_mantendo_a_proporcao(self) -> None:
+        casos = {(2560, 1440): (1280, 720),   # câmera 16:9
+                 (1440, 1080): (960, 720),    # drone 4:3
+                 (1080, 1920): (720, 1280)}   # celular em retrato
+        for nativa, esperado in casos.items():
+            with self.subTest(nativa=nativa):
+                w, h, origem = sources.resolve_mux_resolution(
+                    self.fonte(nativa), env={}, hw_encoder=False)
+                self.assertEqual((w, h), esperado)
+                self.assertEqual(origem, "source+sw_cap")
+
+    def test_sem_nvenc_nao_amplia_fonte_pequena(self) -> None:
+        self.assertEqual(
+            sources.resolve_mux_resolution(self.fonte((640, 480)), env={},
+                                           hw_encoder=False),
+            (640, 480, "source"))
+
+    def test_teto_de_software_configuravel(self) -> None:
+        self.assertEqual(
+            sources.resolve_mux_resolution(
+                self.fonte((2560, 1440)), env={"MUX_SW_MAX": "1920x1080"},
+                hw_encoder=False),
+            (1920, 1080, "source+sw_cap"))
+
+    def test_override_do_ambiente_vence_e_ignora_o_teto(self) -> None:
+        self.assertEqual(
+            sources.resolve_mux_resolution(
+                self.fonte((2560, 1440)),
+                env={"MUX_WIDTH": "1920", "MUX_HEIGHT": "1080"},
+                hw_encoder=False),
+            (1920, 1080, "env"))
+
+    def test_override_vazio_e_como_nao_definido(self) -> None:
+        # O compose repassa `MUX_WIDTH=` vazio quando o .env não define.
+        self.assertEqual(
+            sources.resolve_mux_resolution(
+                self.fonte((2560, 1440)),
+                env={"MUX_WIDTH": "", "MUX_HEIGHT": " ", "MUX_SW_MAX": ""}),
+            (2560, 1440, "source"))
+
+    def test_override_pela_metade_e_erro(self) -> None:
+        with self.assertRaises(sources.SourceConfigError):
+            sources.resolve_mux_resolution(self.fonte(),
+                                           env={"MUX_WIDTH": "1920"})
+
+    def test_override_impar_e_erro(self) -> None:
+        with self.assertRaises(sources.SourceConfigError):
+            sources.resolve_mux_resolution(
+                self.fonte(), env={"MUX_WIDTH": "1921", "MUX_HEIGHT": "1080"})
+
+
 if __name__ == "__main__":
     unittest.main()

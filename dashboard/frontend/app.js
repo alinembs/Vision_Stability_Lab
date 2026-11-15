@@ -214,7 +214,8 @@ const player = {
       if (diag === "tls") {
         setVideoStatus(
           "certificado do MediaMTX não é confiável neste navegador — " +
-          "instale deploy/certs/ca.crt na máquina que abre o dashboard " +
+          "baixe a CA em https://" + location.hostname + ":8444/ca.crt e " +
+          "instale na máquina que abre o dashboard " +
           "(README, seção do dashboard)");
       } else if (diag === "reachable") {
         setVideoStatus(
