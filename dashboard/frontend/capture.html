@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#f4f1ea">
+<meta name="theme-color" content="#000000">
 <title>Captura pelo celular · Vision Stability Lab</title>
 <!--
   Página de captura do E0-T4: publica o vídeo do celular por WHIP no MediaMTX.
@@ -24,7 +24,7 @@
   (function () {
     try {
       document.documentElement.dataset.theme =
-        localStorage.getItem("vsl-theme") === "dark" ? "dark" : "light";
+        localStorage.getItem("vsl-theme") === "light" ? "light" : "dark";
     } catch (e) {
       document.documentElement.dataset.theme = "light";
     }
@@ -32,7 +32,7 @@
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/style.css">
 <style>
   /* Só o que esta página acrescenta ao estilo do dashboard: formulário,
@@ -79,8 +79,7 @@
   .field { display: flex; flex-direction: column; gap: 4px; }
   .field label {
     font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: .12em;
+    letter-spacing: .02em;
     color: var(--dim);
   }
   .field input {
@@ -110,7 +109,7 @@
   .field input:focus-visible,
   .field select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .btn[disabled] { cursor: not-allowed; }
-  #status { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--dim); }
+  #status { font-size: 11px; letter-spacing: .04em; color: var(--dim); }
   #status.status-ok { color: var(--accent); }
   #status.status-warn { color: var(--warn); }
   #status.status-bad { color: var(--bad); }
@@ -133,12 +132,12 @@
     .video-panel .video-frame {
       flex: none;
       aspect-ratio: auto;
-      height: clamp(120px, 34vh, 220px);
+      height: clamp(110px, 30vh, 200px);
       min-height: 0;
     }
     .controls { padding: 8px 10px; gap: 8px; }
     .video-panel .note { padding: 5px 10px; font-size: 9px; }
-    .diag-rows .row { padding: 4px 0; }
+    .diag-rows .row { padding: 2px 0; }
     .diag-panel .note { padding: 6px 12px; font-size: 9px; }
     .readout { padding: 5px 4px; }
     .readout output { font-size: 13px; }
@@ -157,13 +156,13 @@
   <div class="brand">
     <span class="brand-mark" aria-hidden="true"></span>
     <div>
-      <h1>CAPTURA PELO CELULAR</h1>
-      <span class="brand-sub">whip → mediamtx → rtsp · path phone</span>
+      <h1>Captura pelo Celular</h1>
+      <span class="brand-sub">WHIP → MediaMTX → RTSP · path phone</span>
     </div>
   </div>
   <div class="clock">
-    <span id="status" role="status" aria-live="polite">parado</span>
-    <span class="tag">estado</span>
+    <span id="status" role="status" aria-live="polite">Parado</span>
+    <span class="tag">Estado</span>
   </div>
 </header>
 
@@ -175,8 +174,8 @@
 
   <section class="panel video-panel">
     <div class="panel-head">
-      <span class="eyebrow">prévia local · o que a câmera entrega</span>
-      <a class="link" href="/codec-gate-selftest.html">autoteste do gate</a>
+      <span class="eyebrow">Prévia local · o que a câmera entrega</span>
+      <a class="link" href="/codec-gate-selftest.html">Autoteste do gate</a>
     </div>
     <div class="video-frame">
       <!-- `muted` + `playsinline` são obrigatórios no Chrome Android: sem eles a
@@ -185,7 +184,7 @@
     </div>
     <div class="controls">
       <div class="field">
-        <label for="path">path no MediaMTX</label>
+        <label for="path">Path no MediaMTX</label>
         <input id="path" name="path" type="text" value="phone" autocomplete="off"
                spellcheck="false" aria-describedby="path-help">
       </div>
@@ -193,12 +192,12 @@
            só vale no início da captura — trocar no meio exigiria renegociar o
            track com o MediaMTX, que não é caminho suportado. -->
       <div class="field">
-        <label for="facing">câmera</label>
+        <label for="facing">Câmera</label>
         <select id="facing" name="facing" aria-describedby="facing-note">
-          <option value="environment">traseira</option>
-          <option value="user">frontal</option>
+          <option value="environment">Traseira</option>
+          <option value="user">Frontal</option>
         </select>
-        <span class="field-note hidden" id="facing-note">encerre para trocar de câmera</span>
+        <span class="field-note hidden" id="facing-note">Encerre para trocar de câmera</span>
       </div>
       <!-- Dispositivo físico. A lista nasce só com "automática" e é preenchida
            pelo `capture.js` depois que a permissão é concedida — antes disso o
@@ -206,13 +205,13 @@
            é aceito e o aparelho entrega a câmera errada: `deviceId` não tem
            ambiguidade. Vale só para o próximo início, como o seletor acima. -->
       <div class="field">
-        <label for="device">dispositivo</label>
+        <label for="device">Dispositivo</label>
         <select id="device" name="device" aria-describedby="device-note">
-          <option value="">automática (traseira/frontal)</option>
+          <option value="">Automática (traseira/frontal)</option>
         </select>
-        <span class="field-note hidden" id="device-note">encerre para trocar de câmera</span>
+        <span class="field-note hidden" id="device-note">Encerre para trocar de câmera</span>
       </div>
-      <button id="btn-start" class="btn" type="button">Iniciar captura</button>
+      <button id="btn-start" class="btn" type="button">Iniciar Captura</button>
       <button id="btn-stop" class="btn" type="button" disabled>Encerrar</button>
     </div>
     <p class="note" id="path-help">
@@ -220,29 +219,29 @@
       Encerrar aqui faz <code>DELETE</code> na sessão — é o que libera o path.
     </p>
     <div class="video-strip">
-      <div class="readout"><output id="r-out-res">—</output><span class="tag">resolução enviada</span></div>
-      <div class="readout"><output id="r-out-fps">—</output><span class="tag">fps enviado</span></div>
-      <div class="readout"><output id="r-bitrate">—</output><span class="tag">banda</span></div>
-      <div class="readout"><output id="r-nack">—</output><span class="tag">nack</span></div>
+      <div class="readout"><output id="r-out-res">—</output><span class="tag">Resolução enviada</span></div>
+      <div class="readout"><output id="r-out-fps">—</output><span class="tag">Fps enviado</span></div>
+      <div class="readout"><output id="r-bitrate">—</output><span class="tag">Banda</span></div>
+      <div class="readout"><output id="r-nack">—</output><span class="tag">NACK</span></div>
     </div>
   </section>
 
   <aside class="panel diag-panel">
     <div class="panel-head">
-      <span class="eyebrow">diagnóstico</span>
+      <span class="eyebrow">Diagnóstico</span>
     </div>
     <div class="state-rows diag-rows">
-      <div class="row"><span>pedido (ideal)</span><output id="r-req">—</output></div>
-      <div class="row"><span>câmera (getSettings)</span><output id="r-cam">—</output></div>
-      <div class="row"><span>aparelho</span><output id="r-device">—</output></div>
-      <div class="row"><span>câmera pedida</span><output id="r-facing">—</output></div>
-      <div class="row"><span>orientação</span><output id="r-orient">—</output></div>
-      <div class="row"><span>limitação do encoder</span><output id="r-limit">—</output></div>
-      <div class="row"><span>teto de banda</span><output id="r-cap">não tentado</output></div>
+      <div class="row"><span>Pedido (ideal)</span><output id="r-req">—</output></div>
+      <div class="row"><span>Câmera (getSettings)</span><output id="r-cam">—</output></div>
+      <div class="row"><span>Aparelho</span><output id="r-device">—</output></div>
+      <div class="row"><span>Câmera pedida</span><output id="r-facing">—</output></div>
+      <div class="row"><span>Orientação</span><output id="r-orient">—</output></div>
+      <div class="row"><span>Limitação do encoder</span><output id="r-limit">—</output></div>
+      <div class="row"><span>Teto de banda</span><output id="r-cap">não tentado</output></div>
       <div class="row"><span>H.264 no aparelho</span><output id="r-caps">—</output></div>
-      <div class="row"><span>codec fixado</span><output id="r-codec">—</output></div>
-      <div class="row"><span>contexto seguro</span><output id="r-secure">—</output></div>
-      <div class="row"><span>sessão</span><output id="r-session">—</output></div>
+      <div class="row"><span>Codec fixado</span><output id="r-codec">—</output></div>
+      <div class="row"><span>Contexto seguro</span><output id="r-secure">—</output></div>
+      <div class="row"><span>Sessão</span><output id="r-session">—</output></div>
       <div class="row"><span>endpoint WHIP</span><output id="r-whip">—</output></div>
     </div>
     <p class="note">
@@ -267,7 +266,7 @@
 </main>
 
 <footer class="footbar">
-  <span>fase 0 · E0-T4 · android apenas (D6: iOS fora de escopo)</span>
+  <span>Fase 0 · E0-T4 · Android apenas (D6: iOS fora de escopo)</span>
   <!-- Host derivado de `location.hostname` no `capture.js` (M6): a página vale
        por IP da LAN e por `vsl.local`, que está no SAN do certificado. -->
   <span id="origin-line">https://&lt;host&gt;:8444 · whip em :8889</span>

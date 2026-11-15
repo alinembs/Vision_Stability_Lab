@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#f4f1ea">
+<meta name="theme-color" content="#000000">
 <title>Vision Stability Lab</title>
 <script>
   // Tema antes do primeiro paint: sem isso a página pisca no claro antes de
@@ -11,7 +11,7 @@
   (function () {
     try {
       document.documentElement.dataset.theme =
-        localStorage.getItem("vsl-theme") === "dark" ? "dark" : "light";
+        localStorage.getItem("vsl-theme") === "light" ? "light" : "dark";
     } catch (e) {
       document.documentElement.dataset.theme = "light";
     }
@@ -19,7 +19,7 @@
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -29,57 +29,57 @@
   <aside class="sidebar">
 
     <a class="brand" href="/" aria-label="Vision Stability Lab — início">
-      <span class="mark" aria-hidden="true">VS</span>
+      <span class="mark" aria-hidden="true">VSL</span>
       <span>
-        <h1>VISION STABILITY LAB</h1>
-        <span class="brand-sub">jetson-orin · occupancy-v1</span>
+        <h1>Vision Stability Lab</h1>
+        <span class="brand-sub">Jetson Orin · Occupancy v1</span>
       </span>
     </a>
 
     <section class="side-section" aria-labelledby="side-sources-title">
       <div class="side-head">
-        <h2 class="side-title" id="side-sources-title">fontes</h2>
-        <span class="side-note">path somente leitura</span>
+        <h2 class="side-title" id="side-sources-title">Fontes</h2>
+        <span class="side-note">Path somente leitura</span>
       </div>
       <div class="sources" id="sources" role="group" aria-label="fontes — ver e ativar"></div>
       <div class="side-tools">
-        <button id="btn-follow" class="chip" hidden aria-pressed="false">seguir ativa</button>
-        <button id="btn-token" class="chip" hidden>destravar troca</button>
+        <button id="btn-follow" class="chip" hidden aria-pressed="false">Seguir Ativa</button>
+        <button id="btn-token" class="chip" hidden>Destravar Troca</button>
       </div>
       <form id="switch-token-form" class="switch-token" hidden>
         <label class="sr-only" for="switch-token">token da troca de fonte</label>
         <input id="switch-token" type="password" autocomplete="off" spellcheck="false"
                placeholder="SWITCH_TOKEN (só nesta aba)">
-        <button type="submit" class="chip">ok</button>
+        <button type="submit" class="chip">Ok</button>
         <button type="button" class="chip" id="switch-token-cancel" aria-label="cancelar">×</button>
       </form>
       <p id="switch-banner" class="switch-banner" role="status" aria-live="polite" hidden></p>
     </section>
 
     <nav class="side-nav" aria-label="seções do dashboard">
-      <a href="#panel-video">vídeo anotado</a>
-      <a href="#panel-estado">estado da área</a>
-      <a href="#panel-saude">saúde do sistema</a>
-      <a href="#panel-estabilidade">estabilidade</a>
-      <a href="#panel-observador">observador</a>
-      <a href="#panel-eventos">log de eventos</a>
+      <a href="#panel-video">Vídeo Anotado</a>
+      <a href="#panel-estado">Estado da Área</a>
+      <a href="#panel-saude">Saúde do Sistema</a>
+      <a href="#panel-estabilidade">Estabilidade</a>
+      <a href="#panel-observador">Observador</a>
+      <a href="#panel-eventos">Log de Eventos</a>
     </nav>
 
     <section class="side-status" aria-label="resumo de saúde">
       <div class="lamps" id="lamps">
-        <div class="lamp"><span class="bulb" id="lamp-pipeline"></span><span class="tag">pipeline</span></div>
-        <div class="lamp"><span class="bulb" id="lamp-video"></span><span class="tag">vídeo</span></div>
-        <div class="lamp"><span class="bulb" id="lamp-mem"></span><span class="tag">memória</span></div>
-        <div class="lamp"><span class="bulb" id="lamp-ws"></span><span class="tag">telemetria</span></div>
-        <div class="lamp"><span class="bulb" id="lamp-observer"></span><span class="tag">observador</span></div>
+        <div class="lamp"><span class="bulb" id="lamp-pipeline"></span><span class="tag">Pipeline</span></div>
+        <div class="lamp"><span class="bulb" id="lamp-video"></span><span class="tag">Vídeo</span></div>
+        <div class="lamp"><span class="bulb" id="lamp-mem"></span><span class="tag">Memória</span></div>
+        <div class="lamp"><span class="bulb" id="lamp-ws"></span><span class="tag">Telemetria</span></div>
+        <div class="lamp"><span class="bulb" id="lamp-observer"></span><span class="tag">Observador</span></div>
       </div>
       <p id="conn-note" aria-live="polite">conectando…</p>
     </section>
 
     <div class="side-foot">
-      <a class="side-link" href="/capture.html">captura pelo celular</a>
-      <a class="side-link" href="/codec-gate-selftest.html">autoteste do codec</a>
-      <button id="btn-theme" class="ghost" type="button" aria-pressed="false">tema escuro</button>
+      <a class="side-link" href="/capture.html">Captura pelo Celular</a>
+      <a class="side-link" href="/codec-gate-selftest.html">Autoteste do Codec</a>
+      <button id="btn-theme" class="ghost" type="button" aria-pressed="true">Tema Claro</button>
     </div>
 
   </aside>
@@ -88,13 +88,13 @@
 
     <header class="topbar">
       <div>
-        <h2>Ocupação ao vivo</h2>
-        <p class="sub"><span id="top-source">fonte ativa</span> · telemetria ao vivo</p>
+        <h2>Ocupação ao Vivo</h2>
+        <p class="sub"><span id="top-source">Fonte Ativa</span> · Telemetria ao Vivo</p>
       </div>
       <div class="spacer"></div>
       <div class="clock">
         <span id="uptime">--:--:--</span>
-        <span class="tag">uptime</span>
+        <span class="tag">Uptime</span>
       </div>
     </header>
 
@@ -102,76 +102,77 @@
 
       <section class="stats" aria-label="resumo da execução">
         <article class="card stat">
-          <h3 class="stat-label">fps processado</h3>
+          <h3 class="stat-label">Fps Processado</h3>
           <output class="stat-value" id="r-fps-proc">0.0</output>
-          <div class="stat-hint">preview <output id="r-fps-prev">0.0</output> · drop <output id="r-drop">0.00</output></div>
+          <div class="stat-hint">Preview <output id="r-fps-prev">0.0</output> · Drop <output id="r-drop">0.00</output></div>
         </article>
         <article class="card stat">
-          <h3 class="stat-label">rss atual</h3>
+          <h3 class="stat-label">Rss Atual</h3>
           <output class="stat-value" id="h-rss">— mb</output>
-          <div class="stat-hint">crescimento <output id="h-growth">— mb</output> vs baseline</div>
+          <div class="stat-hint">Crescimento <output id="h-growth">— mb</output> vs baseline</div>
         </article>
         <article class="card stat">
-          <h3 class="stat-label">tracks ativos</h3>
+          <h3 class="stat-label">Tracks Ativos</h3>
           <output class="stat-value" id="s-tracks">0</output>
-          <div class="stat-hint">pessoas na cena agora</div>
+          <div class="stat-hint">Pessoas na cena agora</div>
         </article>
         <article class="card stat">
-          <h3 class="stat-label">erros de pipeline</h3>
+          <h3 class="stat-label">Erros de Pipeline</h3>
           <output class="stat-value" id="h-errors">0</output>
-          <div class="stat-hint">nesta execução do pipeline</div>
+          <div class="stat-hint">Nesta execução do pipeline</div>
         </article>
       </section>
 
       <section class="card video-card" id="panel-video">
         <div class="panel-head">
-          <span class="eyebrow">vídeo anotado · rtsp → mediamtx → webrtc</span>
+          <span class="eyebrow">Vídeo Anotado · RTSP → MediaMTX → WebRTC</span>
           <div class="panel-actions">
             <button id="btn-full" class="ghost" type="button" aria-pressed="false"
-                    title="tela cheia (F)">tela cheia</button>
+                    title="Tela cheia (F)">Tela Cheia</button>
             <button id="btn-play" class="btn" type="button">Conectar</button>
           </div>
         </div>
         <div class="video-frame">
           <video id="video" autoplay muted playsinline></video>
           <div class="video-overlay" id="video-status">
-            <p id="video-status-text">stream não conectado</p>
+            <p id="video-status-text">Stream não conectado</p>
           </div>
         </div>
       </section>
 
       <section class="card state-card" id="panel-estado">
         <div class="panel-head">
-          <span class="eyebrow">estado da área</span>
+          <span class="eyebrow">Estado da Área</span>
         </div>
         <div class="area-state" id="area-state">
           <span class="area-word" id="area-word">—</span>
+          <span class="area-enum" id="area-enum">Sem amostra</span>
           <span class="area-since" id="area-since"></span>
         </div>
         <div class="state-rows">
-          <div class="row"><span>entradas (total)</span><output id="s-entries">0</output></div>
-          <div class="row"><span>saídas (total)</span><output id="s-exits">0</output></div>
-          <div class="row"><span>dwell médio</span><output id="s-dwell">0.0 s</output></div>
-          <div class="row"><span>pico simultâneo</span><output id="s-peak">0</output></div>
+          <div class="row"><span>Entradas (total)</span><output id="s-entries">0</output></div>
+          <div class="row"><span>Saídas (total)</span><output id="s-exits">0</output></div>
+          <div class="row"><span>Dwell Médio</span><output id="s-dwell">0.0 s</output></div>
+          <div class="row"><span>Pico Simultâneo</span><output id="s-peak">0</output></div>
         </div>
       </section>
 
       <section class="card health-card" id="panel-saude">
         <div class="panel-head">
-          <span class="eyebrow">saúde do sistema</span>
+          <span class="eyebrow">Saúde do Sistema</span>
         </div>
         <div class="state-rows">
-          <div class="row"><span>status geral</span><output id="h-status">—</output></div>
-          <div class="row"><span>threads / fds</span><output id="h-proc">—</output></div>
-          <div class="row"><span>frames processados</span><output id="h-frames">0</output></div>
-          <div class="row"><span>última telemetria</span><output id="h-age">—</output></div>
+          <div class="row"><span>Status Geral</span><output id="h-status">—</output></div>
+          <div class="row"><span>Threads / Fds</span><output id="h-proc">—</output></div>
+          <div class="row"><span>Frames Processados</span><output id="h-frames">0</output></div>
+          <div class="row"><span>Última Telemetria</span><output id="h-age">—</output></div>
         </div>
         <p class="footnote">crescimento de RSS comparado ao baseline pós warm-up desta execução.</p>
       </section>
 
       <section class="card chart-panel chart-fps-panel" id="panel-estabilidade">
         <div class="panel-head">
-          <span class="eyebrow" id="chart-fps-title">fps · últimos 30 min</span>
+          <span class="eyebrow" id="chart-fps-title">Fps · Últimos 30 min</span>
           <span class="chart-max" id="fps-max"></span>
         </div>
         <canvas id="chart-fps" role="img" aria-label="Gráfico de FPS processado nos últimos 30 minutos"></canvas>
@@ -179,7 +180,7 @@
 
       <section class="card chart-panel chart-rss-panel">
         <div class="panel-head">
-          <span class="eyebrow" id="chart-rss-title">rss mb · últimos 30 min</span>
+          <span class="eyebrow" id="chart-rss-title">Rss (MB) · Últimos 30 min</span>
           <span class="chart-max" id="rss-max"></span>
         </div>
         <canvas id="chart-rss" role="img" aria-label="Gráfico de memória RSS em megabytes nos últimos 30 minutos"></canvas>
@@ -188,15 +189,15 @@
       <section class="card observer-panel" id="panel-observador"
                aria-labelledby="observer-eyebrow">
         <div class="panel-head">
-          <span class="eyebrow" id="observer-eyebrow">observador de fontes</span>
+          <span class="eyebrow" id="observer-eyebrow">Observador de Fontes</span>
           <span class="chart-max" id="observer-mode">—</span>
         </div>
         <div class="state-rows">
-          <div class="row"><span>motivo</span><output id="observer-reason">—</output></div>
-          <div class="row"><span>última ação</span><output id="observer-action">—</output></div>
-          <div class="row"><span>retrato</span><output id="observer-age">—</output></div>
+          <div class="row"><span>Motivo</span><output id="observer-reason">—</output></div>
+          <div class="row"><span>Última Ação</span><output id="observer-action">—</output></div>
+          <div class="row"><span>Retrato</span><output id="observer-age">—</output></div>
           <div class="row observer-probe-row">
-            <span>sonda por fonte</span>
+            <span>Sonda por Fonte</span>
             <div class="observer-probes" id="observer-probes" aria-live="polite"></div>
           </div>
         </div>
@@ -204,11 +205,11 @@
 
       <section class="card events-panel" id="panel-eventos">
         <div class="panel-head">
-          <span class="eyebrow">log de eventos</span>
+          <span class="eyebrow">Log de Eventos</span>
           <span class="event-filter">
-            <button class="chip active" data-filter="all" aria-pressed="true">tudo</button>
-            <button class="chip" data-filter="tracks" aria-pressed="false">tracks</button>
-            <button class="chip" data-filter="errors" aria-pressed="false">erros</button>
+            <button class="chip active" data-filter="all" aria-pressed="true">Tudo</button>
+            <button class="chip" data-filter="tracks" aria-pressed="false">Tracks</button>
+            <button class="chip" data-filter="errors" aria-pressed="false">Erros</button>
           </span>
         </div>
         <ol class="events" id="events"></ol>
@@ -217,8 +218,8 @@
     </main>
 
     <footer class="footbar">
-      <span>fase 4 · mediamtx + dashboard</span>
-      <span>dados: telemetria jsonl · janela de 30 min</span>
+      <span>Fase 4 · MediaMTX + Dashboard</span>
+      <span>Dados: telemetria JSONL · janela de 30 min</span>
     </footer>
 
   </div>

@@ -138,9 +138,9 @@ const pushSnapshot = (snap) => {
         !activators().some((b) => b.dataset.activate === "camera"));
   check("fonte desabilitada não oferece 'ativar'",
         !activators().some((b) => b.dataset.activate === "velha"));
-  check("selo 'ativa' no cartão da câmera",
+  check("selo 'Ativa' no cartão da câmera",
         cards()[0].classList.contains("is-active") &&
-        cards()[0].textContent.includes("ativa"));
+        cards()[0].textContent.includes("Ativa"));
   check("path da câmera vem da env, sem valor",
         cards()[0].textContent.includes("RTSP_URI (deploy/.env)"));
   check("botão de token visível (nada destravado ainda)",
@@ -182,7 +182,7 @@ const pushSnapshot = (snap) => {
   // 3) banner acompanha o status
   await tick(20);
   const banner = window.document.getElementById("switch-banner");
-  check("banner em andamento", banner.textContent.includes("trocando para drone"),
+  check("banner em andamento", banner.textContent.includes("Trocando para drone"),
         banner.textContent);
   check("botões de ativar desabilitados durante a troca",
         activators().every((b) => b.disabled));
@@ -227,8 +227,8 @@ const pushSnapshot = (snap) => {
   await tick(5);
   check("observador: painel e lâmpada existem no HTML",
         !!modeEl && !!observerLamp && !!probesEl);
-  check("observador: available=false diz 'sem observador'",
-        modeEl.textContent.includes("sem observador"), modeEl.textContent);
+  check("observador: available=false diz 'Sem observador'",
+        modeEl.textContent.includes("Sem observador"), modeEl.textContent);
   check("observador: motivo do available=false vai no cartão",
         reasonEl.textContent.includes("indisponível"), reasonEl.textContent);
   check("observador: available=false -> lâmpada warn (nunca off)",
@@ -248,9 +248,9 @@ const pushSnapshot = (snap) => {
   check("observador: standby_no_sources -> lâmpada on (D3)",
         observerLamp.classList.contains("on"), observerLamp.className);
   check("observador: standby traduzido",
-        modeEl.textContent === "standby — sem fonte ativa", modeEl.textContent);
-  check("observador: last_action 'none' -> '— nenhuma'",
-        actionEl.textContent === "— nenhuma", actionEl.textContent);
+        modeEl.textContent === "Standby — sem fonte ativa", modeEl.textContent);
+  check("observador: last_action 'none' -> '— Nenhuma'",
+        actionEl.textContent === "— Nenhuma", actionEl.textContent);
   check("observador: retrato mostra a idade",
         ageEl.textContent === "há 3s", ageEl.textContent);
 
@@ -291,9 +291,9 @@ const pushSnapshot = (snap) => {
         probeChips().filter((c) => c.classList.contains("unknown")).length === 1,
         probeChips().map((c) => c.className).join(" | "));
   check("observador: chip usa o nome da fonte e o estado em português",
-        probeChips()[0].textContent.includes("câmera fixa") &&
-        probeChips()[0].textContent.includes("vivo") &&
-        probeChips()[2].textContent.includes("não sondada"),
+        probeChips()[0].textContent.includes("Câmera fixa") &&
+        probeChips()[0].textContent.includes("Vivo") &&
+        probeChips()[2].textContent.includes("Não sondada"),
         probeChips()[0].textContent);
   const probeText = probeChips().map((c) => c.textContent).join(" ");
   check("observador: nível 1/2 não aparece no texto visível (D2)",

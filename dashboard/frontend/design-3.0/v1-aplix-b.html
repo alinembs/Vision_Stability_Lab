@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>V1-B · Aplix — Vision Stability Lab</title>
+<title>Vision Stability Lab</title>
 <meta name="color-scheme" content="dark">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,7 +22,7 @@
       <span class="mark" aria-hidden="true">VSL</span>
       <span class="brand-text">
         <span class="brand-name">Vision Stability Lab</span>
-        <span class="brand-sub">Monitoramento contínuo de ocupação · jetson orin · DeepStream 9.1</span>
+        <span class="brand-sub">Monitoramento Contínuo de Ocupação · Jetson Orin · DeepStream 9.1</span>
       </span>
     </div>
     <div class="top-meta">
@@ -33,7 +33,7 @@
 
   <section class="strip" aria-label="fontes de vídeo">
     <div class="strip-head">
-      <h2>Fonte de vídeo · uma ativa por vez</h2>
+      <h2>Fonte de vídeo · Uma ativa por vez</h2>
       <p>Catálogo com path somente leitura · troca não reconfigura o pipeline a quente</p>
     </div>
     <ul class="source-list" id="sources"></ul>
@@ -49,7 +49,7 @@
             <h1 id="active-source-name">—</h1>
             <span id="active-source-meta">—</span>
           </span>
-          <button class="btn-primary" id="btn-preview" type="button" aria-pressed="false">Conectar preview</button>
+          <button class="btn-primary" id="btn-preview" type="button" aria-pressed="false">Conectar Preview</button>
         </figcaption>
 
         <div class="video-frame" id="video-frame" data-state="idle" data-tracks="0" data-area="UNKNOWN">
@@ -89,18 +89,18 @@
         <aside class="card area area-block" id="area-block" aria-label="estado da área monitorada">
           <p class="label">Estado da área</p>
           <p class="area-word" id="area-word">—</p>
-          <p class="area-enum" id="area-enum">Sem amostra</p>
+          <p class="area-enum" id="area-enum">Sem Amostra</p>
           <p class="area-since" id="area-since">—</p>
           <dl class="rows">
             <div class="row"><dt>Entradas</dt><dd id="area-entries">—</dd></div>
             <div class="row"><dt>Saídas</dt><dd id="area-exits">—</dd></div>
-            <div class="row"><dt>Dwell médio</dt><dd id="area-dwell">—</dd></div>
-            <div class="row"><dt>Pico simultâneo</dt><dd id="area-peak">—</dd></div>
+            <div class="row"><dt>Dwell Médio</dt><dd id="area-dwell">—</dd></div>
+            <div class="row"><dt>Pico Simultâneo</dt><dd id="area-peak">—</dd></div>
           </dl>
         </aside>
 
         <aside class="card session" aria-label="detalhes da sessão da fonte">
-          <p class="label">Sessão da fonte</p>
+          <p class="label">Sessão da Fonte</p>
           <dl class="rows">
             <div class="row"><dt>Path</dt><dd id="session-path">—</dd></div>
             <div class="row"><dt>Codec / mux</dt><dd id="session-codec">—</dd></div>
@@ -116,24 +116,24 @@
 
     <section class="kpis" aria-label="resumo da execução atual">
       <article class="kpi">
-        <h3>Fps processado</h3>
+        <h3>Fps Processado</h3>
         <p class="stat-value" id="stat-fps">—</p>
-        <p class="hint" id="stat-fps-hint">Aguardando telemetria</p>
+        <p class="hint" id="stat-fps-hint">Aguardando Telemetria</p>
       </article>
       <article class="kpi">
-        <h3>Rss do pipeline</h3>
+        <h3>Rss do Pipeline</h3>
         <p class="stat-value" id="stat-rss">—</p>
-        <p class="hint" id="stat-rss-hint">Aguardando telemetria</p>
+        <p class="hint" id="stat-rss-hint">Aguardando Telemetria</p>
       </article>
       <article class="kpi">
-        <h3>Tracks ativos</h3>
+        <h3>Tracks Ativos</h3>
         <p class="stat-value" id="stat-tracks">—</p>
-        <p class="hint" id="stat-tracks-hint">Aguardando telemetria</p>
+        <p class="hint" id="stat-tracks-hint">Aguardando Telemetria</p>
       </article>
       <article class="kpi">
-        <h3>Erros do pipeline</h3>
+        <h3>Erros do Pipeline</h3>
         <p class="stat-value" id="stat-errors">—</p>
-        <p class="hint" id="stat-errors-hint">Aguardando telemetria</p>
+        <p class="hint" id="stat-errors-hint">Aguardando Telemetria</p>
       </article>
     </section>
 
@@ -145,7 +145,7 @@
         </header>
         <div class="chart-box"><svg id="chart-fps" role="img" aria-label="Série de fps processado nos últimos 30 minutos"></svg></div>
         <p class="chart-empty" id="chart-fps-empty" hidden>Sem amostras nesta sessão — a série começa na primeira telemetria publicada pelo pipeline</p>
-        <p class="chart-foot" id="series-note">Carregando séries…</p>
+        <p class="chart-foot" id="series-note">Carregando Séries…</p>
       </article>
 
       <article class="card chart">
@@ -161,18 +161,18 @@
 
     <section class="lower" aria-label="saúde do sistema e observador de fontes">
       <article class="card health">
-        <h3 class="card-title">Saúde do sistema</h3>
+        <h3 class="card-title">Saúde do Sistema</h3>
         <dl class="rows">
-          <div class="row"><dt>Status geral</dt><dd id="health-status">—</dd></div>
-          <div class="row"><dt>Threads / fds</dt><dd id="health-proc">—</dd></div>
-          <div class="row"><dt>Frames processados</dt><dd id="health-frames">—</dd></div>
-          <div class="row"><dt>Última telemetria</dt><dd id="health-age">—</dd></div>
-          <div class="row"><dt>Ram do sistema</dt><dd id="health-ram">—</dd></div>
+          <div class="row"><dt>Status Geral</dt><dd id="health-status">—</dd></div>
+          <div class="row"><dt>Threads / Fds</dt><dd id="health-proc">—</dd></div>
+          <div class="row"><dt>Frames Processados</dt><dd id="health-frames">—</dd></div>
+          <div class="row"><dt>Última Telemetria</dt><dd id="health-age">—</dd></div>
+          <div class="row"><dt>Ram do Sistema</dt><dd id="health-ram">—</dd></div>
         </dl>
       </article>
 
       <article class="card observer">
-        <h3 class="card-title">Observador de fontes</h3>
+        <h3 class="card-title">Observador de Fontes</h3>
         <dl class="rows">
           <div class="row"><dt>Modo</dt><dd id="observer-mode">—</dd></div>
           <div class="row"><dt>Motivo</dt><dd id="observer-reason">—</dd></div>
@@ -188,13 +188,13 @@
         <div class="filters" role="group" aria-label="filtrar eventos">
           <button type="button" data-filter="all" class="active" aria-pressed="true">Tudo</button>
           <button type="button" data-filter="tracks" aria-pressed="false">Tracks</button>
-          <button type="button" data-filter="errors" aria-pressed="false">Erros e avisos</button>
+          <button type="button" data-filter="errors" aria-pressed="false">Erros e Avisos</button>
         </div>
       </header>
       <ol class="ev-list" id="events"></ol>
       <footer class="events-foot">
         <span id="events-count">—</span>
-        <span>Ordem decrescente · hora local</span>
+        <span>Ordem decrescente · Hora local</span>
       </footer>
     </section>
 
