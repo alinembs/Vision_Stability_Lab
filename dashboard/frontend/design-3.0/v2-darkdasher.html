@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>V2 · Dark Dasher — Vision Stability Lab</title>
+<meta name="color-scheme" content="dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="base.css">
+<link rel="stylesheet" href="v2-darkdasher.css">
+</head>
+<body data-version="v2-darkdasher" data-status="loading">
+
+<div class="load-bar" aria-hidden="true"></div>
+
+<div class="page">
+
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">VS</span>
+      <span class="brand-text">
+        <span class="brand-name">Vision Stability Lab</span>
+        <span class="brand-sub">monitoramento contínuo de ocupação · jetson orin · DeepStream 9.1</span>
+      </span>
+    </div>
+    <div class="top-meta">
+      <span class="conn"><b id="health-word">—</b><span id="conn-note">conectando…</span></span>
+      <span class="uptime"><span class="k">sessão</span><span class="num" id="uptime">--:--:--</span></span>
+    </div>
+  </header>
+
+  <section class="strip" aria-label="fontes de vídeo">
+    <div class="strip-head">
+      <h2>fonte de vídeo · uma ativa por vez</h2>
+      <p>catálogo com path somente leitura · troca não reconfigura o pipeline a quente</p>
+    </div>
+    <ul class="source-list" id="sources"></ul>
+  </section>
+
+  <main class="content">
+
+    <section class="stage" aria-label="vídeo anotado e estado da área">
+
+      <figure class="card video-card">
+        <figcaption class="video-head">
+          <span class="video-title">
+            <h1 id="active-source-name">—</h1>
+            <span id="active-source-meta">—</span>
+          </span>
+          <button class="btn-primary" id="btn-preview" type="button" aria-pressed="false">conectar preview</button>
+        </figcaption>
+
+        <div class="video-frame" id="video-frame" data-state="idle" data-tracks="0" data-area="UNKNOWN">
+          <svg class="scene" viewBox="0 0 960 540" preserveAspectRatio="none" aria-hidden="true">
+            <g class="scene-room">
+              <path d="M0 442h960"/>
+              <path d="M212 442V150"/>
+              <path d="M212 150h-92"/>
+            </g>
+            <g class="scene-person scene-person-1">
+              <circle cx="352" cy="286" r="24"/>
+              <path d="M352 312c-26 0-38 20-38 48v82h76v-82c0-28-12-48-38-48z"/>
+            </g>
+            <g class="scene-person scene-person-2">
+              <circle cx="656" cy="300" r="21"/>
+              <path d="M656 323c-23 0-33 18-33 43v76h66v-76c0-25-10-43-33-43z"/>
+            </g>
+          </svg>
+
+          <span class="det-box det-box-1"><b>person 0.94 · #118</b></span>
+          <span class="det-box det-box-2"><b>person 0.87 · #119</b></span>
+
+          <div class="osd">
+            <span><b id="osd-source">—</b><i id="osd-codec">—</i></span>
+            <span><b id="osd-area">—</b><i id="osd-tracks">—</i></span>
+            <span><b id="osd-fps">—</b><i id="osd-clock">--:--:--</i></span>
+          </div>
+
+          <div class="veil">
+            <p id="video-state-text">preview não conectado — o vídeo anotado vem por WebRTC (WHEP)</p>
+          </div>
+        </div>
+      </figure>
+
+      <div class="stage-side">
+
+        <aside class="card area area-block" id="area-block" aria-label="estado da área monitorada">
+          <p class="label">estado da área</p>
+          <p class="area-word" id="area-word">—</p>
+          <p class="area-enum" id="area-enum">sem amostra</p>
+          <p class="area-since" id="area-since">—</p>
+          <dl class="rows">
+            <div class="row"><dt>entradas</dt><dd id="area-entries">—</dd></div>
+            <div class="row"><dt>saídas</dt><dd id="area-exits">—</dd></div>
+            <div class="row"><dt>dwell médio</dt><dd id="area-dwell">—</dd></div>
+            <div class="row"><dt>pico simultâneo</dt><dd id="area-peak">—</dd></div>
+          </dl>
+        </aside>
+
+        <aside class="card session" aria-label="detalhes da sessão da fonte">
+          <p class="label">sessão da fonte</p>
+          <dl class="rows">
+            <div class="row"><dt>path</dt><dd id="session-path">—</dd></div>
+            <div class="row"><dt>codec / mux</dt><dd id="session-codec">—</dd></div>
+            <div class="row"><dt>amostras</dt><dd id="session-samples">—</dd></div>
+            <div class="row"><dt>epoch</dt><dd id="session-epoch">—</dd></div>
+            <div class="row"><dt>frames</dt><dd id="session-frames">—</dd></div>
+          </dl>
+        </aside>
+
+      </div>
+
+    </section>
+
+    <section class="kpis" aria-label="resumo da execução atual">
+      <article class="kpi">
+        <h3>fps processado</h3>
+        <p class="stat-value" id="stat-fps">—</p>
+        <p class="hint" id="stat-fps-hint">aguardando telemetria</p>
+      </article>
+      <article class="kpi">
+        <h3>rss do pipeline</h3>
+        <p class="stat-value" id="stat-rss">—</p>
+        <p class="hint" id="stat-rss-hint">aguardando telemetria</p>
+      </article>
+      <article class="kpi">
+        <h3>tracks ativos</h3>
+        <p class="stat-value" id="stat-tracks">—</p>
+        <p class="hint" id="stat-tracks-hint">aguardando telemetria</p>
+      </article>
+      <article class="kpi">
+        <h3>erros do pipeline</h3>
+        <p class="stat-value" id="stat-errors">—</p>
+        <p class="hint" id="stat-errors-hint">aguardando telemetria</p>
+      </article>
+    </section>
+
+    <section class="charts" aria-label="séries da sessão">
+      <article class="card chart">
+        <header class="chart-head">
+          <h3>fps processado · últimos 30 min</h3>
+          <span class="now" id="chart-fps-now"></span>
+        </header>
+        <div class="chart-box"><svg id="chart-fps" role="img" aria-label="Série de fps processado nos últimos 30 minutos"></svg></div>
+        <p class="chart-empty" id="chart-fps-empty" hidden>sem amostras nesta sessão — a série começa na primeira telemetria publicada pelo pipeline</p>
+        <p class="chart-foot" id="series-note">carregando séries…</p>
+      </article>
+
+      <article class="card chart">
+        <header class="chart-head">
+          <h3>rss do pipeline · últimos 30 min</h3>
+          <span class="now" id="chart-rss-now"></span>
+        </header>
+        <div class="chart-box"><svg id="chart-rss" role="img" aria-label="Série de memória RSS do pipeline nos últimos 30 minutos"></svg></div>
+        <p class="chart-empty" id="chart-rss-empty" hidden>sem amostras nesta sessão — a série começa na primeira telemetria publicada pelo pipeline</p>
+        <p class="chart-foot">platô medido em 6 h: 790 → 947 MB, sem OOM</p>
+      </article>
+    </section>
+
+    <section class="lower" aria-label="saúde do sistema e observador de fontes">
+      <article class="card health">
+        <h3 class="card-title">saúde do sistema</h3>
+        <dl class="rows">
+          <div class="row"><dt>status geral</dt><dd id="health-status">—</dd></div>
+          <div class="row"><dt>threads / fds</dt><dd id="health-proc">—</dd></div>
+          <div class="row"><dt>frames processados</dt><dd id="health-frames">—</dd></div>
+          <div class="row"><dt>última telemetria</dt><dd id="health-age">—</dd></div>
+          <div class="row"><dt>ram do sistema</dt><dd id="health-ram">—</dd></div>
+        </dl>
+      </article>
+
+      <article class="card observer">
+        <h3 class="card-title">observador de fontes</h3>
+        <dl class="rows">
+          <div class="row"><dt>modo</dt><dd id="observer-mode">—</dd></div>
+          <div class="row"><dt>motivo</dt><dd id="observer-reason">—</dd></div>
+          <div class="row"><dt>última ação</dt><dd id="observer-action">—</dd></div>
+        </dl>
+        <div class="probes" id="observer-probes" aria-live="polite"></div>
+      </article>
+    </section>
+
+    <section class="card events" aria-label="log de eventos da fonte vista">
+      <header class="events-head">
+        <h2>log de eventos · <span id="events-scope">fonte vista</span></h2>
+        <div class="filters" role="group" aria-label="filtrar eventos">
+          <button type="button" data-filter="all" class="active" aria-pressed="true">tudo</button>
+          <button type="button" data-filter="tracks" aria-pressed="false">tracks</button>
+          <button type="button" data-filter="errors" aria-pressed="false">erros e avisos</button>
+        </div>
+      </header>
+      <ol class="ev-list" id="events"></ol>
+      <footer class="events-foot">
+        <span id="events-count">—</span>
+        <span>ordem decrescente · hora local</span>
+      </footer>
+    </section>
+
+  </main>
+
+  <footer class="foot">
+    <span>sessão: <span id="foot-source">—</span></span>
+    <span>estudo de design · números de baselines medidas em 2026-08-23, 2026-10-30 e 2026-10-31</span>
+    <a href="index.html">← as quatro versões</a>
+  </footer>
+
+</div>
+
+<script src="data.js"></script>
+<script src="view.js"></script>
+</body>
+</html>

@@ -182,8 +182,12 @@ class TestDesignTokens(unittest.TestCase):
         """`.note` e `.link` moram em style.css; página que redefine volta a divergir."""
         for pagina in ("capture.html", "codec-gate-selftest.html"):
             texto = (FRONTEND / pagina).read_text(encoding="utf-8")
-            for seletor in (".note {", ".link {"):
-                self.assertNotIn(seletor, texto, f"{seletor} redefinido em {pagina}")
+            for seletor in (".note", ".link"):
+                # só redefinição no começo da linha conta: a regra escopada
+                # (`.video-panel .note {`) é o uso esperado do componente
+                redefine = re.search(rf"(?m)^\s*{re.escape(seletor)}\s*\{{", texto)
+                self.assertIsNone(
+                    redefine, f"{seletor} redefinido em {pagina}")
 
     def test_nenhum_hex_literal_nos_blocos_de_pagina(self):
         """Página satélite também declara cor em token — `capture` fazia o contrário."""

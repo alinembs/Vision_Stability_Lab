@@ -568,7 +568,7 @@
       // traseira por `facingMode` e deixa o aparelho decidir.
       var auto = document.createElement("option");
       auto.value = "";
-      auto.textContent = "automática (traseira/frontal)";
+      auto.textContent = "Automática (traseira/frontal)";
       el.device.appendChild(auto);
 
       deviceLabels = Object.create(null);
@@ -853,7 +853,7 @@
 
   function start() {
     clearError();
-    setStatus("abrindo a câmera…", "busy");
+    setStatus("Abrindo a câmera…", "busy");
     el.btnStart.disabled = true;
     // Trava antes do `getUserMedia`: trocar o seletor no meio do pedido abriria
     // uma câmera diferente da que o operador acha que escolheu.
@@ -948,7 +948,7 @@
     if (!window.CodecGate.h264IsFirstInOffer(sdp)) {
       throw new Error(window.CodecGate.OFFER_WITHOUT_H264_MESSAGE);
     }
-    setStatus("negociando com o MediaMTX…", "busy");
+    setStatus("Negociando com o MediaMTX…", "busy");
     var url = whipUrl();
     if (!url) {
       throw new Error("Path inválido: \"" + currentPath() + "\". Use apenas " +
@@ -1001,15 +1001,15 @@
       el.btnStop.disabled = false;
       pc.addEventListener("connectionstatechange", function () {
         var state = pc.connectionState;
-        if (state === "connected") setStatus("publicando", "ok");
-        else if (state === "disconnected") setStatus("conexão instável", "warn");
+        if (state === "connected") setStatus("Publicando", "ok");
+        else if (state === "disconnected") setStatus("Conexão instável", "warn");
         else if (state === "failed") {
-          setStatus("conexão perdida", "bad");
+          setStatus("Conexão perdida", "bad");
           showError("A conexão de vídeo caiu. O path já não recebe frames; " +
             "pare e comece de novo.");
         }
       });
-      setStatus("publicando", "ok");
+      setStatus("Publicando", "ok");
       startStats();
     }).catch(function (error) {
       fail(error.message || String(error));
@@ -1018,7 +1018,7 @@
 
   function fail(message) {
     showError(message);
-    setStatus("falhou", "bad");
+    setStatus("Falhou", "bad");
     el.btnStart.disabled = false;
     el.btnStop.disabled = true;
     // Falhou: não há captura para trocar, o seletor volta a valer.
@@ -1084,7 +1084,7 @@
       pc = null;
     }
     stopTracks();
-    if (!keepalive) setStatus("parado", "idle");
+    if (!keepalive) setStatus("Parado", "idle");
   }
 
   function stopTracks() {

@@ -23,6 +23,15 @@ const withAlpha = (hex, alpha) => {
 
 const THEME_KEY = "vsl-theme";
 
+/** Palavra de estado da área: o enum da telemetria vira termo do operador. */
+const AREA_WORDS = { OCCUPIED: "Ocupado", EMPTY: "Vazio" };
+
+/** Dado em caixa de frase: nome de fonte e detalhe — só a primeira letra sobe. */
+function sentence(text) {
+  const str = String(text ?? "");
+  return str ? str.charAt(0).toUpperCase() + str.slice(1) : str;
+}
+
 function currentTheme() {
   return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
 }
@@ -32,9 +41,9 @@ function syncThemeChrome() {
   const dark = currentTheme() === "dark";
   const btn = $("btn-theme");
   if (btn) {
-    btn.textContent = dark ? "tema claro" : "tema escuro";
+    btn.textContent = dark ? "Tema Claro" : "Tema Escuro";
     btn.setAttribute("aria-pressed", String(dark));
-    btn.title = dark ? "voltar ao tema claro" : "usar o tema escuro";
+    btn.title = dark ? "Voltar ao tema claro" : "Usar o tema escuro";
   }
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.content = token("--bg");
@@ -209,20 +218,20 @@ const player = {
       // Diagnóstico antes da mensagem: "sem stream" com o MediaMTX saudável é
       // o sintoma de CA não instalada neste navegador (o `fetch` da 8889 falha
       // na verificação do certificado, não por servidor fora).
-      setVideoStatus("verificando o certificado do mediamtx…");
+      setVideoStatus("Verificando o certificado do MediaMTX…");
       const diag = await diagnoseWhepFailure(location.hostname);
       if (diag === "tls") {
         setVideoStatus(
-          "certificado do MediaMTX não é confiável neste navegador — " +
+          "Certificado do MediaMTX não é confiável neste navegador — " +
           "baixe a CA em https://" + location.hostname + ":8444/ca.crt e " +
           "instale na máquina que abre o dashboard " +
           "(README, seção do dashboard)");
       } else if (diag === "reachable") {
         setVideoStatus(
-          "mediamtx respondeu, mas a sessão WHEP falhou — confira o path /live " +
+          "MediaMTX respondeu, mas a sessão WHEP falhou — confira o path /live " +
           "e o log do vision-mediamtx");
       } else {
-        setVideoStatus("sem stream do mediamtx — tentando de novo…");
+        setVideoStatus("Sem stream do MediaMTX — tentando de novo…");
       }
       setLamp("lamp-video", "off");
       this.scheduleReconnect();
@@ -247,7 +256,7 @@ const player = {
     $("video").srcObject = null;
     $("btn-play").textContent = "Conectar";
     if (!silent) {
-      setVideoStatus("stream desconectado");
+      setVideoStatus("Stream desconectado");
       setLamp("lamp-video", "");
     }
   },
@@ -435,7 +444,7 @@ function renderSources() {
   if (!state.sources.length) {
     const note = document.createElement("p");
     note.className = "sources-empty";
-    note.textContent = "catálogo de fontes indisponível — mostrando só o que a telemetria traz";
+    note.textContent = "Catálogo de fontes indisponível — mostrando só o que a telemetria traz";
     box.appendChild(note);
     return;
   }
@@ -470,12 +479,12 @@ function renderSources() {
     line.className = "source-line";
     const name = document.createElement("span");
     name.className = "source-name";
-    name.textContent = source.name;
+    name.textContent = sentence(source.name);
     line.appendChild(name);
     if (source.active) {
       const badge = document.createElement("span");
       badge.className = "source-badge";
-      badge.textContent = "ativa";
+      badge.textContent = "Ativa";
       line.appendChild(badge);
     }
 
@@ -526,9 +535,10 @@ function renderSources() {
 function updateChartTitles() {
   const source = sourceById(viewedSourceId());
   const label = source ? source.name : "fonte ativa";
-  $("chart-fps-title").textContent = `fps · ${label} · últimos 30 min`;
-  $("chart-rss-title").textContent = `rss mb · ${label} · últimos 30 min`;
-  $("top-source").textContent = label;
+  const nome = sentence(label);
+  $("chart-fps-title").textContent = `Fps · ${nome} · Últimos 30 min`;
+  $("chart-rss-title").textContent = `Rss (MB) · ${nome} · Últimos 30 min`;
+  $("top-source").textContent = nome;
 }
 
 async function refreshSources() {
@@ -576,10 +586,10 @@ const SWITCH_TOKEN_KEY = "vsl.switchToken";
 
 const SWITCH_DISABLED = {
   switch_token_ausente:
-    "troca pela tela desligada — defina SWITCH_TOKEN no overlay deploy/docker-compose.switch.yml",
+    "Troca pela tela desligada — defina SWITCH_TOKEN no overlay deploy/docker-compose.switch.yml",
   switch_sem_repo_montado:
-    "troca pela tela desligada — monte scripts/ e deepstream/ no dashboard (overlay)",
-  switch_enabled_off: "troca pela tela desligada (SWITCH_ENABLED=0)",
+    "Troca pela tela desligada — monte scripts/ e deepstream/ no dashboard (overlay)",
+  switch_enabled_off: "Troca pela tela desligada (SWITCH_ENABLED=0)",
 };
 
 function setBanner(kind, text) {
@@ -597,7 +607,7 @@ function setBanner(kind, text) {
 function renderSwitchStatus() {
   const status = state.sw.status;
   if (!state.sw.enabled) {
-    setBanner("info", SWITCH_DISABLED[state.sw.reason] || "troca pela tela desligada");
+    setBanner("info", SWITCH_DISABLED[state.sw.reason] || "Troca pela tela desligada");
     return;
   }
   // Troca em andamento por outro processo (`switch_source.sh`): o 409 vem do
@@ -607,7 +617,7 @@ function renderSwitchStatus() {
   if (foreign && (!status || status.state === "idle" || status.state === "done")) {
     const to = foreign.to ? ` para ${foreign.to}` : "";
     setBanner("running",
-      `outra troca em andamento (${foreign.origin}${to}) — aguarde terminar`);
+      `Outra troca em andamento (${foreign.origin}${to}) — aguarde terminar`);
     return;
   }
   if (!status || status.state === "idle") {
@@ -617,15 +627,15 @@ function renderSwitchStatus() {
   if (status.state === "running") {
     const step = status.step ? `${status.step} · ` : "";
     setBanner("running",
-      `trocando para ${status.source_id} — ${step}${status.message || "aguardando"}`);
+      `Trocando para ${status.source_id} — ${step}${status.message || "aguardando"}`);
     return;
   }
   if (status.state === "done") {
-    setBanner("ok", status.message || `fonte ativa agora é ${status.source_id}`);
+    setBanner("ok", status.message || `Fonte ativa agora é ${status.source_id}`);
     return;
   }
   setBanner("error",
-    `troca não concluída (${status.reason || "falha"}) — ${status.message || ""}`
+    `Troca não concluída (${status.reason || "falha"}) — ${status.message || ""}`
       .trim());
 }
 
@@ -810,7 +820,7 @@ function wsConnect() {
 
   ws.onopen = () => {
     state.wsBackoff = 1000;
-    $("conn-note").textContent = "websocket conectado";
+    $("conn-note").textContent = "WebSocket conectado";
     $("conn-note").className = "ok";
     setLamp("lamp-ws", "on");
   };
@@ -831,7 +841,7 @@ function wsConnect() {
   };
 
   ws.onclose = () => {
-    $("conn-note").textContent = "backend offline — reconectando…";
+    $("conn-note").textContent = "Backend offline — reconectando…";
     $("conn-note").className = "bad";
     setLamp("lamp-ws", "off blink");
     state.wsBackoff = Math.min((state.wsBackoff ?? 1000) * 2, 30000);
@@ -925,7 +935,9 @@ function applyMetrics(m) {
 
   const area = m.area_state ?? "—";
   const word = $("area-word");
-  word.textContent = area.toUpperCase();
+  word.textContent = AREA_WORDS[area] || area;
+  const areaEnum = $("area-enum");
+  if (areaEnum) areaEnum.textContent = m.area_state ?? "sem amostra";
   document.querySelector(".area-state")
     .classList.toggle("occupied", area === "OCCUPIED");
   if (m.area_state !== undefined && state.lastAreaState !== area) {
@@ -989,9 +1001,9 @@ function updateDerived(snap) {
  */
 
 const OBSERVER_MODE_LABELS = {
-  watching: "vigiando",
-  standby_no_sources: "standby — sem fonte ativa",
-  switching: "troca em andamento",
+  watching: "Vigiando",
+  standby_no_sources: "Standby — sem fonte ativa",
+  switching: "Troca em andamento",
 };
 
 /** Modo desconhecido cai no literal cru (nunca vira "—" quando há valor). */
@@ -1002,7 +1014,7 @@ function observerModeLabel(mode) {
 
 function observerActionText(observer) {
   const action = observer.last_action;
-  if (!action || action === "none") return "— nenhuma";
+  if (!action || action === "none") return "— Nenhuma";
   const ts = observer.last_action_ts;
   const when = ts ? new Date(ts) : null;
   return when && !Number.isNaN(when.getTime())
@@ -1031,11 +1043,11 @@ function observerProbeChip(sourceId, probe) {
 
   const name = document.createElement("span");
   name.className = "observer-probe-name";
-  name.textContent = sourceById(sourceId)?.name || sourceId;
+  name.textContent = sentence(sourceById(sourceId)?.name || sourceId);
   const state = document.createElement("span");
   state.className = "observer-probe-state";
-  state.textContent = alive === true ? "vivo" :
-    alive === false ? "morto" : "não sondada";
+  state.textContent = alive === true ? "Vivo" :
+    alive === false ? "Morto" : "Não sondada";
   el.append(name, state);
 
   const detail = [];
@@ -1082,9 +1094,9 @@ function renderObserver(observer) {
   // Sem observador confiável (arquivo ausente/velho): nenhum valor inventado,
   // nenhuma fonte pintada de morta — a ausência de medição não é morte.
   if (ob.available !== true) {
-    modeEl.textContent = "sem observador";
+    modeEl.textContent = "Sem observador";
     reasonEl.textContent = ob.reason || "—";
-    actionEl.textContent = "— nenhuma";
+    actionEl.textContent = "— Nenhuma";
     ageEl.textContent = observerAgeText(ob.age_s);
     if (lamp) {
       setLamp("lamp-observer", "warn");
@@ -1139,20 +1151,20 @@ function startUptimeTicker(startedAt) {
 /* ---------------- eventos ---------------- */
 
 const EVENT_LABELS = {
-  track_entered: "entrada",
-  track_exited: "saída",
-  area_transition: "área",
-  pipeline_error: "erro",
-  pipeline_warning: "aviso",
-  pipeline_playing: "pipeline ativo",
-  pipeline_stopped: "pipeline parado",
-  preview_branch_ready: "preview pronto",
-  preview_branch_error: "erro no preview",
-  rtsp_reconnect_error: "reconexão rtsp",
-  source_active: "fonte ativa",
-  test_duration_reached: "teste concluído",
-  interrupted_by_user: "interrompido",
-  eos: "fim de fluxo",
+  track_entered: "Entrada",
+  track_exited: "Saída",
+  area_transition: "Área",
+  pipeline_error: "Erro",
+  pipeline_warning: "Aviso",
+  pipeline_playing: "Pipeline Ativo",
+  pipeline_stopped: "Pipeline Parado",
+  preview_branch_ready: "Preview Pronto",
+  preview_branch_error: "Erro no Preview",
+  rtsp_reconnect_error: "Reconexão RTSP",
+  source_active: "Fonte Ativa",
+  test_duration_reached: "Teste Concluído",
+  interrupted_by_user: "Interrompido",
+  eos: "Fim de Fluxo",
 };
 
 function eventClass(event) {
@@ -1163,13 +1175,14 @@ function eventClass(event) {
   if (event === "track_entered") return "ev-entered";
   if (event === "track_exited") return "ev-exited";
   if (event === "area_transition") return "ev-transition";
+  if (event === "pipeline_warning") return "ev-warning";
   return "";
 }
 
 function eventDetail(r) {
   switch (r.event) {
-    case "track_entered": return `track ${r.track_id}`;
-    case "track_exited": return `track ${r.track_id} · dwell ${r.dwell_seconds}s`;
+    case "track_entered": return `Track ${r.track_id}`;
+    case "track_exited": return `Track ${r.track_id} · Dwell ${r.dwell_seconds} s`;
     case "area_transition": return `${r.transition} · ${r.active_tracks} track(s)`;
     case "pipeline_error": return r.error || "";
     case "pipeline_warning": return r.warning || "";
@@ -1321,9 +1334,9 @@ function drawLine(canvasId, values, color, fillColor, maxElId) {
 function drawCharts() {
   const rows = state.history || [];
   drawLine("chart-fps", rows.map((m) => m.fps_processed ?? 0),
-    token("--accent"), withAlpha(token("--accent"), 0.12), "fps-max");
+    token("--accent"), withAlpha(token("--accent"), 0.09), "fps-max");
   drawLine("chart-rss", rows.map((m) => m.rss_mb ?? 0),
-    token("--info"), withAlpha(token("--info"), 0.12), "rss-max");
+    token("--accent"), withAlpha(token("--accent"), 0.09), "rss-max");
   if (!rows.length) {
     $("fps-max").textContent = "";
     $("rss-max").textContent = "";

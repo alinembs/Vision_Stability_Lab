@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#f4f1ea">
+<meta name="theme-color" content="#000000">
 <title>Autoteste do gate de codec · Vision Stability Lab</title>
 <!--
   Prova executável do gate H.264 (E0-T4), sem framework de teste.
@@ -23,7 +23,7 @@
   (function () {
     try {
       document.documentElement.dataset.theme =
-        localStorage.getItem("vsl-theme") === "dark" ? "dark" : "light";
+        localStorage.getItem("vsl-theme") === "light" ? "light" : "dark";
     } catch (e) {
       document.documentElement.dataset.theme = "light";
     }
@@ -31,12 +31,12 @@
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/style.css">
 <style>
   .wrap { padding: 16px 22px 24px; display: flex; flex-direction: column; gap: 12px; flex: 1; }
   .summary {
-    font-family: var(--condensed);
+    font-family: var(--display);
     font-size: 21px;
     letter-spacing: .06em;
   }
@@ -51,8 +51,7 @@
   }
   #selftest th {
     font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: .12em;
+    letter-spacing: .04em;
     color: var(--dim);
     border-bottom-color: var(--line);
   }
@@ -69,32 +68,32 @@
   <div class="brand">
     <span class="brand-mark" aria-hidden="true"></span>
     <div>
-      <h1>AUTOTESTE · GATE DE CODEC</h1>
-      <span class="brand-sub">h.264 primeiro na m-line ou não publica</span>
+      <h1>Autoteste · Gate de Codec</h1>
+      <span class="brand-sub">H.264 primeiro na m-line ou não publica</span>
     </div>
   </div>
   <div class="clock">
-    <a class="link" href="/capture.html">página de captura</a>
+    <a class="link" href="/capture.html">Página de captura</a>
   </div>
 </header>
 
 <main class="wrap">
   <!-- `role="status"` para o leitor de tela anunciar o agregado. -->
-  <p id="summary" class="summary" role="status">rodando…</p>
+  <p id="summary" class="summary" role="status">Rodando…</p>
 
   <section class="panel">
     <div class="panel-head">
-      <span class="eyebrow">fixtures de SDP e de transceiver</span>
+      <span class="eyebrow">Fixtures de SDP e de transceiver</span>
       <button id="run" class="btn" type="button">Rodar de novo</button>
     </div>
     <table id="selftest">
       <thead>
         <tr>
-          <th scope="col">caso</th>
-          <th scope="col">esperado</th>
-          <th scope="col">obtido</th>
-          <th scope="col">resultado</th>
-          <th scope="col">detalhe</th>
+          <th scope="col">Caso</th>
+          <th scope="col">Esperado</th>
+          <th scope="col">Obtido</th>
+          <th scope="col">Resultado</th>
+          <th scope="col">Detalhe</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -116,7 +115,7 @@
 </main>
 
 <footer class="footbar">
-  <span>fase 0 · E0-T4 · fixtures em codec-gate.js</span>
+  <span>Fase 0 · E0-T4 · fixtures em codec-gate.js</span>
   <span id="count">—</span>
 </footer>
 
