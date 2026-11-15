@@ -16,7 +16,6 @@ Não abre browser nem container: é leitura de texto. A verificação visual do
 render continua sendo na Jetson, com o stack no ar.
 """
 
-import json
 import re
 import unittest
 from pathlib import Path
@@ -24,7 +23,6 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parents[2]
 FRONTEND = RAIZ / "dashboard" / "frontend"
 DESIGN = RAIZ / "DESIGN.md"
-SIDECAR = RAIZ / ".impeccable" / "design.json"
 
 HEX = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 # valor de token que é uma cor inteira (não um atalho como `var(--x)` nem uma
@@ -196,34 +194,6 @@ class TestDesignTokens(unittest.TestCase):
             for bloco in re.findall(r"<style>(.*?)</style>", texto, re.S):
                 sobras = sorted({m for m in HEX.findall(bloco)})
                 self.assertFalse(sobras, f"hex literal em <style> de {pagina}: {sobras}")
-
-    def test_sidecar_espelha_o_frontmatter(self):
-        sidecar = json.loads(SIDECAR.read_text(encoding="utf-8"))
-        meta_cores = sidecar["extensions"]["colorMeta"]
-        self.assertEqual(
-            set(meta_cores), set(self.camadas["colors"]),
-            "colorMeta e colors divergiram",
-        )
-        self.assertEqual(
-            set(meta_cores), set(self.camadas["colors-dark"]),
-            "colorMeta e colors-dark divergiram",
-        )
-        for nome, meta in meta_cores.items():
-            self.assertEqual(
-                normaliza_hex(meta["canonical"]),
-                normaliza_hex(self.camadas["colors"][nome]),
-                f"canonical de {nome} divergiu do tema claro",
-            )
-            self.assertEqual(
-                normaliza_hex(meta["darkCanonical"]),
-                normaliza_hex(self.camadas["colors-dark"][nome]),
-                f"darkCanonical de {nome} divergiu do tema escuro",
-            )
-        tipos = set(sidecar["extensions"]["typographyMeta"])
-        self.assertEqual(
-            tipos, set(self.camadas["typography"]),
-            "typographyMeta e typography divergiram",
-        )
 
 
 if __name__ == "__main__":

@@ -432,12 +432,8 @@ vision-stability-lab/
 │   ├── parser/
 │   └── logs/                     # live.jsonl (telemetria), switch.jsonl (auditoria)
 ├── docs/
-│   ├── architecture.md
 │   ├── adr/                      # ADR-0006 (multi-fonte)
-│   ├── plans/
-│   ├── baselines/
-│   ├── runbooks/                 # captura-celular, troca-de-fonte, drone-campo
-│   └── incident-log.md
+│   └── runbooks/                 # captura-celular, troca-de-fonte, drone-campo
 ├── Makefile                      # make up / doctor / status / sources / switch / test
 └── README.md
 ```
