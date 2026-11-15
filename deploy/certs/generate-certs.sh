@@ -7,7 +7,7 @@
 # **Por que CA própria (e não `mkcert`):** o onboarding do celular é "instale
 # este arquivo", não "rode uma ferramenta nesta máquina e copie o resultado". A
 # mesma CA assina o certificado do servidor que o MediaMTX (WHIP em 8889) e o
-# nginx da página de captura (8443) montam em `/certs` (read-only).
+# nginx da página de captura (8444) montam em `/certs` (read-only).
 #
 # **Por que o IP deixou de ser fixo (2026-11-02):** o roteador de campo entregou
 # outro endereço ao Jetson e o stack não subia (portas amarradas ao IP antigo).
@@ -37,7 +37,7 @@ Uso: generate-certs.sh [--ensure | --force] [--help]
 
 Garante a CA interna e o certificado de servidor (SAN com todos os IPv4 do
 host + nomes locais) usados pelo MediaMTX (WHIP em 8889) e pelo nginx da
-página de captura (8443).
+página de captura (8444).
 
 Modelos:
   --ensure  (padrão) garante material válido para os IPs/nomes ATUAIS.

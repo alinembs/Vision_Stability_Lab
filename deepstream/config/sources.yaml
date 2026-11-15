@@ -29,6 +29,12 @@ sources:
     # (baseline v1); em 2026-10-30 a mediana é 12,0 e o regime atual da fonte
     # é ~7,0 — é por isso que o gate de fps é por fonte (E5-T1), não global.
     target_fps: 20
+    # Resolução do mux, do OSD e do preview anotado. A nativa da câmera é
+    # 2560x1440 (caps do rtspsrc, 2026-11-15), mas o preview ficou mais estável
+    # em 1920x1080 nos testes no Orin NX (2026-11-15) — o mux reduz a fonte.
+    # Sem NVENC (Orin Nano) o pipeline reduz para caber em `MUX_SW_MAX`
+    # (1280x720). Override: MUX_WIDTH/MUX_HEIGHT.
+    mux: 1920x1080
     enabled: true
     # D3: a câmera entra no gate de latência p95 do E6 (alvo ≤ 300 ms).
     gate:
@@ -47,6 +53,11 @@ sources:
     transport: tcp
     latency_ms: 200
     target_fps: 25
+    # 4:3: o "1080p" do app do drone é 1440x1080 (baseline 2026-10-31). Num
+    # mux 16:9 a imagem saía esticada; o padding do mux mantém a proporção.
+    # Preview picotando em 1440x1080 (2026-11-15): reduzido para 960x720,
+    # mesma proporção 4:3.
+    mux: 960x720
     enabled: true
     # D3: latência do drone é REPORTADA, não gated (link de rádio).
     gate:
@@ -62,6 +73,9 @@ sources:
     transport: tcp
     latency_ms: 200
     target_fps: 25
+    # A página de captura pede 720p (`ideal`); o WebRTC pode baixar sozinho e
+    # o mux redimensiona — sem renegociar o pipeline.
+    mux: 1280x720
     enabled: true
     # Celular na LAN entra no gate, como a câmera (E6-T1).
     gate:

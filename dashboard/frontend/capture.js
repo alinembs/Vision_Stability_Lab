@@ -69,7 +69,7 @@
    * câmera traseira travou justamente nessa dúvida. Suba esta data a cada
    * mudança neste arquivo.
    */
-  var CAPTURE_VERSION = "2026-11-08c";
+  var CAPTURE_VERSION = "2026-11-15a";
 
   /**
    * Dispositivo físico escolhido pelo operador (`deviceId`).
@@ -242,7 +242,7 @@
    *
    * O MediaMTX 1.21.3 devolve `Location` **relativo** (`/<path>/whip/<uuid>`).
    * Mandar essa string direto no `DELETE` faz o `fetch` resolver contra a origem
-   * da **página** (8443, nginx) — volta `200`/`404` do nginx, o `pc` fecha, a
+   * da **página** (8444 no host, nginx) — volta `200`/`404` do nginx, o `pc` fecha, a
    * sessão WHIP continua viva no MediaMTX e o path segue publicado. Resolver
    * contra a URL do WHIP é o que fecha o recurso certo.
    */
@@ -788,7 +788,7 @@
     if (!window.isSecureContext) {
       return Promise.reject(new Error(
         "Esta página não está em contexto seguro (" + window.location.origin +
-        "). O Chrome não expõe a câmera em HTTP — abra o endereço HTTPS da porta 8443."));
+        "). O Chrome não expõe a câmera em HTTP — abra o endereço HTTPS da porta 8444."));
     }
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       return Promise.reject(new Error(
@@ -1151,7 +1151,8 @@
     // `vsl.local` (que está no SAN); IP fixo no HTML quebraria o segundo caso.
     var host = window.location.hostname;
     setText("rtsp-hint", "rtsp://" + host + ":8554/" + currentPath());
-    setText("origin-line", "https://" + host + ":8443 · whip em :8889");
+    // Porta derivada da origem (8444 no host desde 2026-11-15, `CAPTURE_PORT`).
+    setText("origin-line", window.location.origin + " · whip em :8889");
     var pathInput = $("path");
     if (pathInput) {
       pathInput.addEventListener("input", function () {
@@ -1164,7 +1165,7 @@
       : "NÃO (" + window.location.origin + ")");
     if (!window.isSecureContext) {
       showError("Esta página não está em contexto seguro. O Chrome não libera a câmera " +
-        "em HTTP: abra https://" + window.location.hostname + ":8443/capture.html " +
+        "em HTTP: abra https://" + window.location.hostname + ":8444/capture.html " +
         "com a CA instalada no aparelho.");
     }
     setText("r-req", formatRes(TARGET_WIDTH, TARGET_HEIGHT) + " · " +

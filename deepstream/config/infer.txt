@@ -35,6 +35,9 @@ parse-bbox-func-name=NvDsInferParseYolo
 # fino (classe a classe) pode ser feito com `[class-attrs-<id>]` depois deste
 # bloco — ele prevalece.
 [class-attrs-all]
-pre-cluster-threshold=0.5
+# 0.6 desde 2026-11-15 (era 0.5): menos caixa espúria no preview anotado. O
+# limiar vale para tudo que sai do nvinfer — OSD **e** análise (contagem de
+# pessoas, ocupação da área), não só o desenho.
+pre-cluster-threshold=0.6
 topk=20
 nms-iou-threshold=0.45

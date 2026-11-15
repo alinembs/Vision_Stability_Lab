@@ -41,7 +41,7 @@ pipeline_real.py ── JSONL stdout + data/logs/live.jsonl (TELEMETRY_FILE)
 navegador ──► http://192.168.59.102:8081        (dashboard: player WHEP + cards + gráficos canvas + log de eventos)
 navegador ──► https://192.168.59.102:8889/live/whep (WebRTC, sinalização WHEP do MediaMTX — TLS desde o E0-T4)
 navegador ──► http://192.168.59.102:8888/live/     (HLS fallback, latência maior)
-celular   ──► https://192.168.59.102:8443/capture.html (página de captura; WHIP em https://…:8889/phone/whip)
+celular   ──► https://192.168.59.102:8444/capture.html (página de captura; WHIP em https://…:8889/phone/whip)
 ```
 
 > **Acesse o dashboard pelo IP da LAN atual do host** (`make ip` mostra o
@@ -56,7 +56,7 @@ celular   ──► https://192.168.59.102:8443/capture.html (página de captura
 > Desde o E0-T4 a porta 8889 é **TLS** (`webrtcEncryption: yes`, certificado de
 > `deploy/certs/`): o navegador que abre o dashboard precisa confiar na CA
 > interna **daquele host**, senão o `fetch` do WHEP falha por certificado. A
-> página de captura do celular usa a 8443 pelo mesmo motivo.
+> página de captura do celular usa a 8444 pelo mesmo motivo.
 >
 > **Requisito de CA na máquina do dashboard (não é do servidor).** Cada Jetson
 > tem a sua CA — `deploy/certs/` é gitignored e o SAN lista os IPs/nomes do host

@@ -28,7 +28,7 @@ rtspTransports: [tcp]
 # HTTPS. O material vem de `deploy/certs/generate-certs.sh`, montado read-only
 # em `/certs` pelo compose; a CA gerada ali é a que se instala no celular.
 #
-# Isto **não** torna a página segura: a origem do documento é outra (8443,
+# Isto **não** torna a página segura: a origem do documento é outra (8444,
 # serviço `capture-web`). Ver `deploy/nginx/capture-web.conf`.
 webrtcEncryption: yes
 webrtcServerCert: /certs/server.crt

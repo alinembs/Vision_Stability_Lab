@@ -40,7 +40,7 @@ uma execução medida, não de estimativa ou demonstração sintética.
 - **Acesso:** navegador da LAN em `http://<ip-do-host>:8081` (`make ip` mostra o
   endereço atual — o IP não é fixo no repositório, vem do DHCP); WebRTC/WHEP em
   TLS na 8889 exige a CA interna instalada na máquina que abre o player; HLS na
-  8888 é fallback; o celular publica por `https://…:8443/capture.html` (WHIP).
+  8888 é fallback; o celular publica por `https://…:8444/capture.html` (WHIP).
 - **Rotina de teste:** baseline 30 min, longa duração 6 h (madrugada), viewer
   lento, RTSP interrompido, dashboard desligado, reinício controlado. Uma fonte
   ativa por vez, trocada pela tela (opt-in com `SWITCH_TOKEN`) ou por

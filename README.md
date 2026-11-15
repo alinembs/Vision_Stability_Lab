@@ -419,7 +419,7 @@ vision-stability-lab/
 │   ├── Dockerfile
 │   ├── docker-compose.yml
 │   ├── docker-compose.switch.yml # overlay opt-in da troca pela tela
-│   ├── nginx/capture-web.conf    # página de captura do celular (8443)
+│   ├── nginx/capture-web.conf    # página de captura do celular (8444)
 │   ├── certs/                    # gitignored: ca.crt/server.crt por host
 │   └── .env                      # por host: RTSP_URI, DASHBOARD_PORT (LAN_IP opcional: auto)
 ├── scripts/

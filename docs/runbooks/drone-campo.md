@@ -73,7 +73,7 @@ imagem DeepStream:
 |---|---|
 | `vision-stability-app` | pipeline (**o único** DeepStream) |
 | `vision-mediamtx` | ingestão RTMP / RTSP / WHIP |
-| `vision-capture-web` | página de captura (8443) |
+| `vision-capture-web` | página de captura (8444) |
 | `vision-dashboard` | dashboard (8081) |
 | `vision-watchdog` | watchdog de telemetria/memória |
 
