@@ -10,6 +10,10 @@ construída a partir de um dos sistemas de design da pasta `DESIGN_3.0`:
 | `v3-dashbrd.html` | `DESIGN-dashbrdtemplate-webflow-io.md` | faixa de KPIs antes do vídeo, azul |
 | `v4-task-dasher.html` | `DESIGN-task-dasher-webflow-io.md` | claro, generoso, laranja queimado |
 
+`v1-aplix-b.html` é a **variante B** da V1: os textos em caixa de frase (só a
+primeira letra maiúscula) e o monograma VSL com fio branco — o resto é
+idêntico à V1.
+
 Abra **`index.html`** para ver as quatro lado a lado, entrar em tamanho cheio e
 comparar tokens. Funciona direto do disco (`file://`) ou por HTTP estático.
 

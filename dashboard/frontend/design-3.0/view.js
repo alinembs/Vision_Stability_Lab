@@ -35,6 +35,23 @@
     if (el) el.classList.toggle(cls, !!on);
   }
 
+  /* Caixa de frase (V1-B): só a primeira letra de cada texto sobe, e o resto
+     do texto continua exatamente como está. Sem o atributo `data-case`, `t()`
+     é identidade — as outras quatro versões não mudam. */
+  var caixaFrase = document.body.dataset.case === "sentence";
+
+  function t(texto) {
+    if (!caixaFrase || typeof texto !== "string" || !texto) return texto;
+    return texto.charAt(0).toUpperCase() + texto.slice(1);
+  }
+
+  function txt(id, texto) { set(id, t(texto)); }
+
+  function rotuloArea(estado) {
+    if (caixaFrase) return estado === "OCCUPIED" ? "Ocupado" : "Vazio";
+    return estado === "OCCUPIED" ? "OCUPADO" : "VAZIO";
+  }
+
   var dois = function (n) { return String(n).padStart(2, "0"); };
 
   function hhmmss(data) {
@@ -84,8 +101,8 @@
         '<button class="source-btn" type="button" aria-pressed="' + (f.id === state.fonte) + '">' +
           '<span class="source-icon">' + (ICONES[f.icone] || "") + "</span>" +
           '<span class="source-body">' +
-            '<span class="source-name">' + f.nome +
-              (f.id === state.ativa ? '<span class="source-role">publicando</span>' : "") +
+            '<span class="source-name">' + t(f.nome) +
+              (f.id === state.ativa ? '<span class="source-role">' + t("publicando") + '</span>' : "") +
             "</span>" +
             '<span class="source-meta">' + f.id + " · " + f.codec + " · " + f.mux + "</span>" +
           "</span>" +
@@ -110,11 +127,11 @@
     if (frame) frame.dataset.state = "idle";
     var btn = $("btn-preview");
     if (btn) {
-      btn.textContent = "conectar preview";
+      btn.textContent = t("conectar preview");
       btn.setAttribute("aria-pressed", "false");
       btn.disabled = false;
     }
-    set("video-state-text", "preview não conectado — o vídeo anotado vem por WebRTC (WHEP)");
+    txt("video-state-text", "preview não conectado — o vídeo anotado vem por WebRTC (WHEP)");
   }
 
   var previewTimer = null;
@@ -132,23 +149,23 @@
     }
 
     if (!D.fonte(state.fonte).metricas) {
-      set("video-state-text", "sem amostra desta sessão — o preview abre quando o pipeline publicar frames");
+      txt("video-state-text", "sem amostra desta sessão — o preview abre quando o pipeline publicar frames");
       return;
     }
 
     state.preview = "connecting";
     frame.dataset.state = "connecting";
-    btn.textContent = "conectando…";
+    btn.textContent = t("conectando…");
     btn.setAttribute("aria-pressed", "true");
     btn.disabled = true;
-    set("video-state-text", "negociando WHEP com mediamtx:8889…");
+    txt("video-state-text", "negociando WHEP com mediamtx:8889…");
 
     clearTimeout(previewTimer);
     previewTimer = setTimeout(function () {
       state.preview = "live";
       frame.dataset.state = "live";
       btn.disabled = false;
-      btn.textContent = "desconectar";
+      btn.textContent = t("desconectar");
       btn.setAttribute("aria-pressed", "true");
     }, reduziuMovimento ? 150 : 1100);
   }
@@ -163,22 +180,22 @@
 
     document.documentElement.dataset.source = f.id;
 
-    set("active-source-name", f.nome);
+    txt("active-source-name", f.nome);
     set("active-source-meta", f.id + " · " + f.codec + " · " + f.mux + " · alvo " + f.alvo + " fps");
-    set("foot-source", f.nome + " · sessão " + duracao(f.sessao));
-    set("events-scope", f.nome);
+    txt("foot-source", f.nome + " · sessão " + duracao(f.sessao));
+    txt("events-scope", f.nome);
 
     // cabeçalho
     set("uptime", duracao(f.sessao));
     var saudavel = !!m && m.fpsProc > 0;
-    set("health-word", !m ? "sem amostra" : saudavel ? "saudável" : "sem frames");
+    txt("health-word", !m ? "sem amostra" : saudavel ? "saudável" : "sem frames");
     setClass("health-word", "warn", !saudavel);
-    set("conn-note", m ? "telemetria há " + m.telemetria + " s" : "sessão nova · nenhuma amostra no JSONL");
+    txt("conn-note", m ? "telemetria há " + m.telemetria + " s" : "sessão nova · nenhuma amostra no JSONL");
 
     // OSD do vídeo
-    set("osd-source", f.nome);
+    txt("osd-source", f.nome);
     set("osd-codec", f.codec + " · " + f.mux);
-    set("osd-area", m ? (f.estado.area === "OCCUPIED" ? "OCUPADO" : "VAZIO") : "—");
+    set("osd-area", m ? rotuloArea(f.estado.area) : "—");
     set("osd-fps", m ? m.fpsProc.toFixed(1) + " fps" : "—");
     set("osd-tracks", m ? m.tracks + " tracks" : "—");
 
@@ -186,12 +203,12 @@
     var btnPreview = $("btn-preview");
     if (btnPreview && state.preview !== "connecting") {
       btnPreview.disabled = !m;
-      btnPreview.textContent = m ? "conectar preview" : "aguardando amostra";
+      btnPreview.textContent = m ? t("conectar preview") : t("aguardando amostra");
       btnPreview.setAttribute("aria-pressed", "false");
     }
 
     if (state.preview !== "live") {
-      set("video-state-text", m
+      txt("video-state-text", m
         ? "preview não conectado — o vídeo anotado vem por WebRTC (WHEP)"
         : "sessão aberta há " + desde(f.sessao) + " — o preview abre quando o pipeline publicar o primeiro frame");
     }
@@ -203,23 +220,23 @@
 
     // KPIs
     set("stat-fps", m ? m.fpsProc.toFixed(1) : "—");
-    set("stat-fps-hint", m
+    txt("stat-fps-hint", m
       ? "fonte entrega " + m.fpsIn.toFixed(1) + " · alvo " + f.alvo + " · drop " + m.drop.toFixed(2)
       : "aguardando primeira amostra");
     set("stat-rss", m ? megabytes(m.rss) + " MB" : "—");
-    set("stat-rss-hint", m
+    txt("stat-rss-hint", m
       ? (m.rss - m.rssBase >= 0 ? "+" : "") + (m.rss - m.rssBase).toFixed(1) + " MB desde o warm-up"
       : "sem série nesta sessão");
     set("stat-tracks", m ? String(m.tracks) : "—");
-    set("stat-tracks-hint", m ? "pessoas na cena agora · pico " + f.estado.pico : "—");
+    txt("stat-tracks-hint", m ? "pessoas na cena agora · pico " + f.estado.pico : "—");
     set("stat-errors", m ? String(m.erros) : "—");
-    set("stat-errors-hint", m ? "nesta execução do pipeline" : "—");
+    txt("stat-errors-hint", m ? "nesta execução do pipeline" : "—");
 
     // estado da área
     var e = f.estado;
-    set("area-word", e ? (e.area === "OCCUPIED" ? "ocupado" : "vazio") : "—");
-    set("area-enum", e ? e.area : "sem amostra");
-    set("area-since", e ? "desde " + hhmmss(new Date(Date.now() - e.desde * 1000)) + " · " + desde(e.desde) : "—");
+    txt("area-word", e ? (e.area === "OCCUPIED" ? "ocupado" : "vazio") : "—");
+    txt("area-enum", e ? e.area : "sem amostra");
+    txt("area-since", e ? "desde " + hhmmss(new Date(Date.now() - e.desde * 1000)) + " · " + desde(e.desde) : "—");
     set("area-entries", e ? String(e.entradas) : "—");
     set("area-exits", e ? String(e.saidas) : "—");
     set("area-dwell", e ? e.dwell.toFixed(1) + " s" : "—");
@@ -227,7 +244,7 @@
     setClass("area-block", "occupied", !!(e && e.area === "OCCUPIED"));
 
     // saúde
-    set("health-status", !m ? "aguardando telemetria" : "saudável · frescor " + m.telemetria + " s");
+    txt("health-status", !m ? "aguardando telemetria" : "saudável · frescor " + m.telemetria + " s");
     set("health-proc", m ? m.threads : "—");
     set("health-frames", m ? milhar(m.frames) : "0");
     set("health-age", m ? m.telemetria + " s" : "—");
@@ -241,21 +258,21 @@
     set("session-frames", m ? milhar(m.frames) : "0");
 
     // observador
-    set("observer-mode", D.observador.modo);
-    set("observer-reason", D.observador.motivo);
-    set("observer-action", D.observador.acao);
+    txt("observer-mode", D.observador.modo);
+    txt("observer-reason", D.observador.motivo);
+    txt("observer-action", D.observador.acao);
     var probes = $("observer-probes");
     if (probes) {
       probes.innerHTML = D.observador.sondas.map(function (p) {
         var cls = p.estado === "viva" ? "alive" : p.estado === "morta" ? "dead" : "unknown";
-        return '<span class="probe ' + cls + '">' + p.nome + ' <b>' + p.estado + "</b></span>";
+        return '<span class="probe ' + cls + '">' + t(p.nome) + ' <b>' + t(p.estado) + "</b></span>";
       }).join("");
     }
 
     // gráficos
     desenharGrafico("fps", s.fps, animar);
     desenharGrafico("rss", s.rss, animar);
-    set("series-note", s.fps.length
+    txt("series-note", s.fps.length
       ? s.fps.length + " amostras · 1 a cada " + D.janela.passo_s + " s"
       : "sem amostras · a série começa na primeira telemetria da sessão");
 
@@ -326,7 +343,7 @@
     rotulos.forEach(function (r) {
       var anchor = r.i === 0 ? "start" : r.i === valores.length - 1 ? "end" : "middle";
       partes.push('<text class="chart-axis chart-x" x="' + x(r.i).toFixed(1) + '" y="' + (h - 5) +
-        '" text-anchor="' + anchor + '">' + r.txt + "</text>");
+        '" text-anchor="' + anchor + '">' + t(r.txt) + "</text>");
     });
 
     partes.push('<path class="chart-area" d="' + area + '"/>');
@@ -339,7 +356,7 @@
 
     if (agora) {
       var ultimo = valores[valores.length - 1];
-      agora.textContent = "agora " + (nome === "rss" ? megabytes(ultimo) : ultimo.toFixed(1));
+      agora.textContent = t("agora " + (nome === "rss" ? megabytes(ultimo) : ultimo.toFixed(1)));
     }
 
     if (animar && !reduziuMovimento) {
@@ -372,10 +389,10 @@
       return state.filtro === "all" || D.grupo(ev.evento) === state.filtro;
     });
 
-    set("events-count", visiveis.length + " de " + eventos.length + " eventos");
+    txt("events-count", visiveis.length + " de " + eventos.length + " eventos");
 
     if (!visiveis.length) {
-      lista.innerHTML = '<li class="ev-empty">nenhum evento nesta categoria nesta sessão</li>';
+      lista.innerHTML = '<li class="ev-empty">' + t("nenhum evento nesta categoria nesta sessão") + "</li>";
       return;
     }
 
@@ -411,8 +428,8 @@
       var cls = classes[ev.evento] || "ev-info";
       return '<li class="ev ' + cls + '">' +
         "<time>" + hora + "</time>" +
-        '<span class="ev-name">' + (rotulos[ev.evento] || ev.evento) + "</span>" +
-        '<span class="ev-detail">' + ev.detalhe + "</span>" +
+        '<span class="ev-name">' + t(rotulos[ev.evento] || ev.evento) + "</span>" +
+        '<span class="ev-detail">' + t(ev.detalhe) + "</span>" +
         "</li>";
     }).join("");
   }
